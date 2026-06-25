@@ -12885,7 +12885,7 @@ def anniversary_admin_data():
     try:
         award_records = at_get_all(
             ANNIVERSARY_AWARDS_TABLE_ID, read_token,
-            fields=["Name", "Points", "Category", "Product URL", "Image", "Active", "Qty Ordered 6/23", "Qty Ordered 6/24"],
+            fields=["Name", "Points", "Category", "Product URL", "Image", "Active", "Qty Ordered 6/23", "Qty Ordered 6/24", "Qty Ordered 6/25"],
             base_id=ANNIVERSARY_BASE_ID,
         )
         for rec in award_records:
