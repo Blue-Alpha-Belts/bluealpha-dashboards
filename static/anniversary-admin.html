@@ -366,15 +366,8 @@ function renderTotals() {
       <td><span class="pts-badge">${points}pt</span></td>
       <td style="${qtyStyle}">${qty_needed > 0 ? qty_needed : '—'}</td>
       <td style="text-align:center;color:#555;font-weight:600;">${ordered623}</td>
-      <td>${award.category === 'Gift Card'
-        ? `<input type="number" min="0" value="${ordered624}" placeholder="—"
-             style="width:70px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:0.9rem;text-align:center;"
-             oninput="onQtyInput('${safeId}', this.value.trim(), 'qty_ordered_624')">`
-        : `<span style="color:#aaa;font-size:0.9rem;">${ordered624 !== '' ? ordered624 : '—'}</span>`
-      }</td>
-      <td><input type="number" min="0" value="${ordered625}" placeholder="—"
-           style="width:70px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:0.9rem;text-align:center;"
-           oninput="onQtyInput('${safeId}', this.value.trim(), 'qty_ordered_625')"></td>
+      <td style="text-align:center;color:#555;font-weight:600;">${ordered624 !== '' ? ordered624 : '—'}</td>
+      <td style="text-align:center;color:#555;font-weight:600;">${ordered625 !== '' ? ordered625 : '—'}</td>
     </tr>`;
   }).join('');
 }
