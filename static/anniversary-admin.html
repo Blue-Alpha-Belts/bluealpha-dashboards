@@ -322,10 +322,15 @@ async function saveQtyOrdered(recordId, val, field) {
   }
 }
 
+// Track user edits across refreshes so auto-reload doesn't clobber them
+const _editedQtys = {};
+
 function onQtyInput(recordId, val, field) {
-  // Update catalog in memory immediately so re-renders don't clobber the input
+  const parsed = val === '' ? null : parseInt(val, 10);
+  _editedQtys[recordId + '|' + field] = parsed;
+  // Update catalog in memory too
   const award = _awardsCatalog.find(a => a.record_id === recordId);
-  if (award) award[field] = (val === '' ? null : parseInt(val, 10));
+  if (award) award[field] = parsed;
   // Debounce the Airtable write by 800ms
   const debounceKey = recordId + field;
   clearTimeout(_qtyDebounce[debounceKey]);
@@ -467,6 +472,13 @@ function loadData() {
       _participants = data.participants  || [];
       _awardTotals   = data.award_totals   || {};
       _awardsCatalog = data.awards_catalog || [];
+      // Re-apply any user edits so auto-refresh doesn't clobber unsaved values
+      _awardsCatalog.forEach(a => {
+        ['qty_ordered_624', 'qty_ordered_625'].forEach(f => {
+          const k = a.record_id + '|' + f;
+          if (_editedQtys[k] !== undefined) a[f] = _editedQtys[k];
+        });
+      });
       _shirtTotals   = data.shirt_totals   || {};
       _unmatched    = data.unmatched_form || [];
 
