@@ -12905,6 +12905,7 @@ def anniversary_admin_data():
                 "qty_needed":     award_totals.get(name, {}).get("qty", 0),
                 "qty_ordered":    f.get("Qty Ordered 6/23", None),
                 "qty_ordered_624": f.get("Qty Ordered 6/24", None),
+                "qty_ordered_625": f.get("Qty Ordered 6/25", None),
             })
     except Exception as e:
         print(f"[anniversary_admin] awards catalog error: {e}")
@@ -12938,6 +12939,7 @@ def anniversary_admin_set_qty_ordered():
     field_map = {
         "qty_ordered":     "Qty Ordered 6/23",
         "qty_ordered_624": "Qty Ordered 6/24",
+        "qty_ordered_625": "Qty Ordered 6/25",
     }
     at_field = field_map.get(field_key)
     if not at_field:

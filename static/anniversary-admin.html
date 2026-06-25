@@ -155,8 +155,8 @@
     </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th style="width:56px"></th><th>Award</th><th>Points</th><th>Total Awarded</th><th>Qty Ordered 6/23</th><th>Qty Ordered 6/24</th></tr></thead>
-        <tbody id="totals-body"><tr><td colspan="5" class="loading-msg">Loading…</td></tr></tbody>
+        <thead><tr><th style="width:56px"></th><th>Award</th><th>Points</th><th>Total Awarded</th><th>Qty Ordered 6/23</th><th>Qty Ordered 6/24</th><th>Qty Ordered 6/25</th></tr></thead>
+        <tbody id="totals-body"><tr><td colspan="6" class="loading-msg">Loading…</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -343,9 +343,10 @@ function renderTotals() {
     return (b.points - a.points) || a.name.localeCompare(b.name);
   });
   tbody.innerHTML = sorted.map(award => {
-    const { record_id, name, points, image_url, product_url, qty_needed, qty_ordered, qty_ordered_624 } = award;
+    const { record_id, name, points, image_url, product_url, qty_needed, qty_ordered, qty_ordered_624, qty_ordered_625 } = award;
     const ordered623 = qty_ordered !== null && qty_ordered !== undefined ? qty_ordered : '—';
     const ordered624 = qty_ordered_624 !== null && qty_ordered_624 !== undefined ? qty_ordered_624 : '';
+    const ordered625 = qty_ordered_625 !== null && qty_ordered_625 !== undefined ? qty_ordered_625 : '';
     const imgCell  = image_url
       ? `<img src="${image_url}" style="width:48px;height:48px;object-fit:contain;border-radius:4px;">`
       : `<div style="width:48px;height:48px;background:#f0f0f0;border-radius:4px;"></div>`;
@@ -366,6 +367,9 @@ function renderTotals() {
              oninput="onQtyInput('${safeId}', this.value.trim(), 'qty_ordered_624')">`
         : `<span style="color:#aaa;font-size:0.9rem;">${ordered624 !== '' ? ordered624 : '—'}</span>`
       }</td>
+      <td><input type="number" min="0" value="${ordered625}" placeholder="—"
+           style="width:70px;padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:0.9rem;text-align:center;"
+           oninput="onQtyInput('${safeId}', this.value.trim(), 'qty_ordered_625')"></td>
     </tr>`;
   }).join('');
 }
