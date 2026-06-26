@@ -11735,10 +11735,10 @@ def _send_warranty_approval_email(to_email, first_name, label_pdf_b64):
         <tr><td style="padding:32px 36px;">
           <p style="color:#1a2633;font-size:16px;margin:0 0 16px;">Hi {first_name},</p>
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
-            Great news — your warranty request has been approved! We'll be sending out a replacement <strong>{replacement_item}</strong> to you shortly.
+            Great news — your warranty request has been approved for repair! Attached is a prepaid return label.
           </p>
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
-            We do ask that you send your original item back to us so we can take a look at what happened. Attached is a prepaid return label — please print it, attach it to your package, and drop it off at any USPS location at your earliest convenience.
+            Please print the label, attach it to your package, and drop it off at any USPS location at your earliest convenience. Once we receive your item, we'll get it repaired and back to you as quickly as possible.
           </p>
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0;">
             Questions? Reply to this email and we'll be happy to help.
@@ -12565,6 +12565,695 @@ def _warranty_scan():
         _time.sleep(60)  # check every minute, run only at target hours
 
 threading.Thread(target=_warranty_scan, daemon=True).start()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEWNAN PD COUNTER TOOL + DEPARTMENT PORTAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PD_DISCOUNT_25_CATEGORIES = {"EDC", "Rig"}
+
+
+# ── Page routes ───────────────────────────────────────────────────────────────
+
+@app.route("/pd", methods=["GET"])
+def pd_counter_page():
+    if not check_admin_session(request):
+        return redirect("/quote-builder")
+    return app.send_static_file("pd-counter.html")
+
+
+@app.route("/pd/portal", methods=["GET"])
+def pd_portal_page():
+    user = get_portal_user(request)
+    if not user:
+        return redirect("/quote")
+    return app.send_static_file("pd-portal.html")
+
+
+# ── Admin API ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/pd/catalog", methods=["GET", "OPTIONS"])
+def pd_catalog():
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    if not _CATALOG_CACHE["data"]:
+        return Response(json.dumps({"error": "Catalog not loaded yet"}), status=503, headers=c, mimetype="application/json")
+    import copy
+    data = copy.deepcopy(_CATALOG_CACHE["data"])
+    for sku in data.get("skus", []):
+        cat = sku.get("category", "")
+        price = sku.get("price", 0) or 0
+        if cat in _PD_DISCOUNT_25_CATEGORIES:
+            sku["price"] = round(price * 0.75, 2)
+            sku["pdDiscount"] = 25
+        else:
+            sku["price"] = round(price * 0.90, 2)
+            sku["pdDiscount"] = 10
+    for sku in data.get("addonSkus", {}).values():
+        for variant in sku.values():
+            price = variant.get("price", 0) or 0
+            variant["price"] = round(price * 0.90, 2)
+            variant["pdDiscount"] = 10
+    return Response(json.dumps({**data, "ts": _CATALOG_CACHE["ts"]}), headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/departments", methods=["GET", "OPTIONS"])
+def pd_departments():
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    try:
+        records = at_get_all(
+            CUSTOMERS_TABLE_ID, read_token,
+            fields=["Organization Name", "Portal Role"],
+            formula="{Portal Role}='Invoices'",
+        )
+        depts = []
+        for r in records:
+            f = r.get("fields", {})
+            name = f.get("Organization Name", "").strip()
+            if not name:
+                continue
+            depts.append({"record_id": r["id"], "name": name})
+        depts.sort(key=lambda x: x["name"].lower())
+        return Response(json.dumps(depts), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/order/create", methods=["POST", "OPTIONS"])
+def pd_order_create():
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    data = request.get_json(force=True) or {}
+    department_id          = data.get("department_id", "").strip()
+    officer_name           = data.get("officer_name", "").strip()
+    badge_num              = data.get("badge_num", "").strip()
+    line_items             = data.get("line_items", [])
+    officer_portion        = float(data.get("officer_portion", 0))
+    department_portion     = float(data.get("department_portion", 0))
+    officer_payment_method = data.get("officer_payment_method", "Cash").strip()
+
+    if not department_id or not officer_name or not line_items:
+        return Response(json.dumps({"error": "Missing required fields"}), status=400, headers=c, mimetype="application/json")
+
+    import datetime as _dt
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+
+    # 1. Auto-generate Order ID
+    try:
+        existing = at_get_all(
+            MANUAL_ORDERS_TABLE_ID, read_token,
+            fields=["Order ID"],
+            formula="{Order Type}='PD Order'",
+        )
+        max_num = 0
+        for r in existing:
+            oid = (r.get("fields", {}).get("Order ID") or "").strip()
+            if oid.upper().startswith("PD-"):
+                try:
+                    n = int(oid[3:])
+                    if n > max_num:
+                        max_num = n
+                except ValueError:
+                    pass
+        order_id = f"PD-{max_num + 1:03d}"
+    except Exception as e:
+        return Response(json.dumps({"error": f"Order ID generation failed: {e}"}), status=500, headers=c, mimetype="application/json")
+
+    # 2. Create Manual Order record
+    today = _dt.date.today().isoformat()
+    try:
+        mo_resp = req_lib.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {
+                "Order Type":              "PD Order",
+                "Order ID":                order_id,
+                "Date":                    today,
+                "Officer Name":            officer_name,
+                "Badge #":                 badge_num,
+                "Officer Portion $":       officer_portion,
+                "Department Portion $":    department_portion,
+                "Officer Payment Method":  officer_payment_method,
+                "Customer":                [department_id],
+                "Sales Order Status":      "Approved",
+                "Production Status":       "Not Started",
+            }},
+            timeout=15,
+        )
+        if not mo_resp.ok:
+            return Response(json.dumps({"error": f"Airtable MO create error: {mo_resp.status_code} {mo_resp.text}"}),
+                            status=500, headers=c, mimetype="application/json")
+        mo_record = mo_resp.json()
+        mo_record_id = mo_record["id"]
+    except Exception as e:
+        return Response(json.dumps({"error": f"MO create failed: {e}"}), status=500, headers=c, mimetype="application/json")
+
+    # 3. Create MO Line Items
+    for li in line_items:
+        try:
+            req_lib.post(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {
+                    "Manual Order":            [mo_record_id],
+                    "Product SKU":             [li["sku_record_id"]],
+                    "Qty.":                    int(li["qty"]),
+                    "Confirmed Unit Price":    float(li["unit_price"]),
+                    "Confirmed Adj. Unit Price": float(li["unit_price"]),
+                }},
+                timeout=15,
+            )
+        except Exception as e:
+            print(f"[pd_order_create] line item create warning: {e}")
+
+    return Response(json.dumps({"ok": True, "record_id": mo_record_id, "order_id": order_id}),
+                    headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/order/<record_id>/stripe/officer", methods=["POST", "OPTIONS"])
+def pd_stripe_officer(record_id):
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    data  = request.get_json(force=True) or {}
+    email = data.get("email", "").strip()
+    name  = data.get("name", "").strip()
+    if not email:
+        return Response(json.dumps({"error": "email required"}), status=400, headers=c, mimetype="application/json")
+
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+
+    try:
+        mo_r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if not mo_r.ok:
+            return Response(json.dumps({"error": "Order not found"}), status=404, headers=c, mimetype="application/json")
+        mo_fields = mo_r.json().get("fields", {})
+        order_id       = mo_fields.get("Order ID", record_id)
+        officer_portion = float(mo_fields.get("Officer Portion $") or 0)
+        amount_cents    = int(round(officer_portion * 100))
+    except Exception as e:
+        return Response(json.dumps({"error": f"Fetch order failed: {e}"}), status=500, headers=c, mimetype="application/json")
+
+    stripe_auth = (STRIPE_SECRET_KEY, "")
+    try:
+        # Find or create customer
+        cust_r = req_lib.get(
+            "https://api.stripe.com/v1/customers",
+            auth=stripe_auth,
+            params={"email": email, "limit": 1},
+            timeout=10,
+        )
+        custs = cust_r.json().get("data", [])
+        if custs:
+            cust_id = custs[0]["id"]
+        else:
+            cr = req_lib.post(
+                "https://api.stripe.com/v1/customers",
+                auth=stripe_auth,
+                data={"email": email, "name": name},
+                timeout=10,
+            )
+            cust_id = cr.json()["id"]
+
+        # Create invoice
+        inv_r = req_lib.post(
+            "https://api.stripe.com/v1/invoices",
+            auth=stripe_auth,
+            data={
+                "customer":            cust_id,
+                "collection_method":   "send_invoice",
+                "days_until_due":      "1",
+                "payment_settings[payment_method_types][]": "card",
+            },
+            timeout=10,
+        )
+        inv_data = inv_r.json()
+        if "error" in inv_data:
+            return Response(json.dumps({"error": inv_data["error"].get("message", "Stripe error")}),
+                            status=500, headers=c, mimetype="application/json")
+        inv_id  = inv_data["id"]
+
+        # Add invoice item
+        req_lib.post(
+            "https://api.stripe.com/v1/invoiceitems",
+            auth=stripe_auth,
+            data={
+                "customer":             cust_id,
+                "invoice":              inv_id,
+                "description":          f"Order {order_id} \u2014 Officer Balance",
+                "unit_amount_decimal":  str(amount_cents),
+                "currency":             "usd",
+                "quantity":             "1",
+            },
+            timeout=10,
+        )
+
+        # Finalize invoice
+        fin_r = req_lib.post(
+            f"https://api.stripe.com/v1/invoices/{inv_id}/finalize",
+            auth=stripe_auth, timeout=10,
+        )
+        fin_data = fin_r.json()
+        inv_url  = fin_data.get("hosted_invoice_url", "")
+
+        # Patch Airtable
+        req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {
+                "Officer Stripe Invoice ID":     inv_id,
+                "Officer Stripe Invoice URL":    inv_url,
+                "Officer Stripe Invoice Status": "Open",
+            }},
+            timeout=10,
+        )
+        return Response(json.dumps({"ok": True, "url": inv_url}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/order/<record_id>/stripe/department", methods=["POST", "OPTIONS"])
+def pd_stripe_department(record_id):
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+
+    try:
+        mo_r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if not mo_r.ok:
+            return Response(json.dumps({"error": "Order not found"}), status=404, headers=c, mimetype="application/json")
+        mo_fields = mo_r.json().get("fields", {})
+        order_id           = mo_fields.get("Order ID", record_id)
+        department_portion = float(mo_fields.get("Department Portion $") or 0)
+        amount_cents       = int(round(department_portion * 100))
+        customer_ids       = mo_fields.get("Customer", [])
+    except Exception as e:
+        return Response(json.dumps({"error": f"Fetch order failed: {e}"}), status=500, headers=c, mimetype="application/json")
+
+    # Fetch department email
+    dept_email = ""
+    if customer_ids:
+        try:
+            cr = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{customer_ids[0]}",
+                headers=at_headers(read_token),
+                params={"fields[]": ["Main Contact Email", "Bill-To Contact Email", "Organization Name"]},
+                timeout=10,
+            )
+            cf = cr.json().get("fields", {})
+            dept_email = cf.get("Bill-To Contact Email") or cf.get("Main Contact Email", "")
+        except Exception:
+            pass
+
+    if not dept_email:
+        return Response(json.dumps({"error": "No billing email on file for this department"}),
+                        status=400, headers=c, mimetype="application/json")
+
+    stripe_auth = (STRIPE_SECRET_KEY, "")
+    try:
+        # Find or create Stripe customer for department
+        cust_r = req_lib.get(
+            "https://api.stripe.com/v1/customers",
+            auth=stripe_auth,
+            params={"email": dept_email, "limit": 1},
+            timeout=10,
+        )
+        custs = cust_r.json().get("data", [])
+        if custs:
+            cust_id = custs[0]["id"]
+        else:
+            cr2 = req_lib.post(
+                "https://api.stripe.com/v1/customers",
+                auth=stripe_auth,
+                data={"email": dept_email},
+                timeout=10,
+            )
+            cust_id = cr2.json()["id"]
+
+        item_desc = f"Order {order_id} \u2014 Department Balance"
+
+        def _make_invoice(payment_method_type, days_due):
+            inv_r = req_lib.post(
+                "https://api.stripe.com/v1/invoices",
+                auth=stripe_auth,
+                data={
+                    "customer":            cust_id,
+                    "collection_method":   "send_invoice",
+                    "days_until_due":      str(days_due),
+                    "payment_settings[payment_method_types][]": payment_method_type,
+                },
+                timeout=10,
+            )
+            inv_data = inv_r.json()
+            if "error" in inv_data:
+                raise Exception(inv_data["error"].get("message", "Stripe error"))
+            inv_id = inv_data["id"]
+            req_lib.post(
+                "https://api.stripe.com/v1/invoiceitems",
+                auth=stripe_auth,
+                data={
+                    "customer":            cust_id,
+                    "invoice":             inv_id,
+                    "description":         item_desc,
+                    "unit_amount_decimal": str(amount_cents),
+                    "currency":            "usd",
+                    "quantity":            "1",
+                },
+                timeout=10,
+            )
+            fin_r = req_lib.post(
+                f"https://api.stripe.com/v1/invoices/{inv_id}/finalize",
+                auth=stripe_auth, timeout=10,
+            )
+            fin_data = fin_r.json()
+            return inv_id, fin_data.get("hosted_invoice_url", "")
+
+        cc_id,  cc_url  = _make_invoice("card", 30)
+        ach_id, ach_url = _make_invoice("us_bank_account", 30)
+
+        # Patch Airtable with CC invoice (primary)
+        req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {
+                "Department Stripe Invoice ID":     cc_id,
+                "Department Stripe Invoice URL":    cc_url,
+                "Department Stripe Invoice Status": "Open",
+            }},
+            timeout=10,
+        )
+        return Response(json.dumps({"ok": True, "cc_url": cc_url, "ach_url": ach_url}),
+                        headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/order/<record_id>/cash", methods=["PATCH", "OPTIONS"])
+def pd_order_cash(record_id):
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "PATCH"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    import datetime as _dt
+    write_token = RETURNS_WRITE_TOKEN
+    today = _dt.date.today().isoformat()
+    try:
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {
+                "Officer Cash Collected": True,
+                "Officer Payment Date":   today,
+            }},
+            timeout=10,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": f"Airtable error: {r.status_code}"}),
+                            status=500, headers=c, mimetype="application/json")
+        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/orders", methods=["GET", "OPTIONS"])
+def pd_orders_list():
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    try:
+        records = at_get_all(
+            MANUAL_ORDERS_TABLE_ID, read_token,
+            fields=["Order ID", "Date", "Officer Name", "Badge #",
+                    "Officer Portion $", "Department Portion $", "Officer Payment Method",
+                    "Officer Cash Collected", "Officer Payment Date",
+                    "Officer Stripe Invoice URL", "Officer Stripe Invoice Status",
+                    "Department Stripe Invoice URL", "Department Stripe Invoice Status",
+                    "Customer", "Sales Order Status", "MO Line Items"],
+            formula="{Order Type}='PD Order'",
+        )
+        orders = []
+        for r in records:
+            f = r.get("fields", {})
+            orders.append({
+                "record_id":                      r["id"],
+                "order_id":                       f.get("Order ID", ""),
+                "date":                           f.get("Date", ""),
+                "officer_name":                   f.get("Officer Name", ""),
+                "badge_num":                      f.get("Badge #", ""),
+                "officer_portion":                f.get("Officer Portion $", 0),
+                "department_portion":             f.get("Department Portion $", 0),
+                "officer_payment_method":         f.get("Officer Payment Method", ""),
+                "officer_cash_collected":         f.get("Officer Cash Collected", False),
+                "officer_payment_date":           f.get("Officer Payment Date", ""),
+                "officer_stripe_invoice_url":     f.get("Officer Stripe Invoice URL", ""),
+                "officer_stripe_invoice_status":  f.get("Officer Stripe Invoice Status", ""),
+                "department_stripe_invoice_url":  f.get("Department Stripe Invoice URL", ""),
+                "department_stripe_invoice_status": f.get("Department Stripe Invoice Status", ""),
+                "customer":                       f.get("Customer", []),
+                "sales_order_status":             f.get("Sales Order Status", ""),
+                "mo_line_items":                  f.get("MO Line Items", []),
+            })
+        orders.sort(key=lambda x: x["date"] or "", reverse=True)
+        return Response(json.dumps(orders), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/order/<record_id>", methods=["GET", "OPTIONS"])
+def pd_order_detail(record_id):
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    try:
+        mo_r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if not mo_r.ok:
+            return Response(json.dumps({"error": "Order not found"}), status=404, headers=c, mimetype="application/json")
+        mo = mo_r.json()
+        f  = mo.get("fields", {})
+        order = {
+            "record_id":                      mo["id"],
+            "order_id":                       f.get("Order ID", ""),
+            "date":                           f.get("Date", ""),
+            "officer_name":                   f.get("Officer Name", ""),
+            "badge_num":                      f.get("Badge #", ""),
+            "officer_portion":                f.get("Officer Portion $", 0),
+            "department_portion":             f.get("Department Portion $", 0),
+            "officer_payment_method":         f.get("Officer Payment Method", ""),
+            "officer_cash_collected":         f.get("Officer Cash Collected", False),
+            "officer_payment_date":           f.get("Officer Payment Date", ""),
+            "officer_stripe_invoice_url":     f.get("Officer Stripe Invoice URL", ""),
+            "officer_stripe_invoice_status":  f.get("Officer Stripe Invoice Status", ""),
+            "department_stripe_invoice_url":  f.get("Department Stripe Invoice URL", ""),
+            "department_stripe_invoice_status": f.get("Department Stripe Invoice Status", ""),
+            "customer":                       f.get("Customer", []),
+            "sales_order_status":             f.get("Sales Order Status", ""),
+        }
+        li_ids = f.get("MO Line Items", [])
+        line_items = []
+        for li_id in li_ids:
+            try:
+                li_r = req_lib.get(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+                    headers=at_headers(read_token),
+                    params={"fields[]": ["Name + Variations (from Product SKU)", "Qty.",
+                                         "Confirmed Unit Price", "Picked Up"]},
+                    timeout=10,
+                )
+                if li_r.ok:
+                    lf = li_r.json().get("fields", {})
+                    name_list = lf.get("Name + Variations (from Product SKU)", [])
+                    name = name_list[0] if isinstance(name_list, list) and name_list else (name_list or "")
+                    line_items.append({
+                        "record_id":  li_id,
+                        "name":       name,
+                        "qty":        lf.get("Qty.", 1),
+                        "unit_price": lf.get("Confirmed Unit Price", 0),
+                        "picked_up":  lf.get("Picked Up", False),
+                    })
+            except Exception:
+                pass
+        order["line_items"] = line_items
+        return Response(json.dumps(order), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/order/<record_id>/pickup", methods=["PATCH", "OPTIONS"])
+def pd_order_pickup(record_id):
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "PATCH"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    data         = request.get_json(force=True) or {}
+    line_item_id = data.get("line_item_id", "").strip()
+    picked_up    = bool(data.get("picked_up", False))
+    if not line_item_id:
+        return Response(json.dumps({"error": "line_item_id required"}), status=400, headers=c, mimetype="application/json")
+    write_token = RETURNS_WRITE_TOKEN
+    try:
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{line_item_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {"Picked Up": picked_up}},
+            timeout=10,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": f"Airtable error: {r.status_code}"}),
+                            status=500, headers=c, mimetype="application/json")
+        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+# ── Department Portal API ─────────────────────────────────────────────────────
+
+@app.route("/api/pd/portal/orders", methods=["GET", "OPTIONS"])
+def pd_portal_orders():
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
+    c = cors()
+    user = get_portal_user(request)
+    if not user:
+        return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
+    if not portal_can(user, "view_invoices"):
+        return Response(json.dumps({"error": "Forbidden"}), status=403, headers=c, mimetype="application/json")
+    customer_id = user.get("customer_id") or user.get("customerId", "")
+    if not customer_id:
+        return Response(json.dumps({"error": "No customer context"}), status=403, headers=c, mimetype="application/json")
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    try:
+        records = at_get_all(
+            MANUAL_ORDERS_TABLE_ID, read_token,
+            fields=["Order ID", "Date", "Officer Name", "Badge #",
+                    "Department Portion $", "Department Stripe Invoice URL",
+                    "Department Stripe Invoice Status", "Customer"],
+            formula=f"AND({{Order Type}}='PD Order',FIND('{customer_id}',ARRAYJOIN({{Customer}},','))>0)",
+        )
+        orders = []
+        for r in records:
+            f = r.get("fields", {})
+            orders.append({
+                "record_id":                        r["id"],
+                "order_id":                         f.get("Order ID", ""),
+                "date":                             f.get("Date", ""),
+                "officer_name":                     f.get("Officer Name", ""),
+                "badge_num":                        f.get("Badge #", ""),
+                "department_portion":               f.get("Department Portion $", 0),
+                "department_stripe_invoice_url":    f.get("Department Stripe Invoice URL", ""),
+                "department_stripe_invoice_status": f.get("Department Stripe Invoice Status", ""),
+            })
+        orders.sort(key=lambda x: x["date"] or "", reverse=True)
+        return Response(json.dumps(orders), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/pd/portal/order/<record_id>", methods=["GET", "OPTIONS"])
+def pd_portal_order_detail(record_id):
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
+    c = cors()
+    user = get_portal_user(request)
+    if not user:
+        return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
+    if not portal_can(user, "view_invoices"):
+        return Response(json.dumps({"error": "Forbidden"}), status=403, headers=c, mimetype="application/json")
+    customer_id = user.get("customer_id") or user.get("customerId", "")
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    try:
+        mo_r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if not mo_r.ok:
+            return Response(json.dumps({"error": "Order not found"}), status=404, headers=c, mimetype="application/json")
+        mo = mo_r.json()
+        f  = mo.get("fields", {})
+        # Verify customer owns this order
+        if customer_id and customer_id not in (f.get("Customer") or []):
+            return Response(json.dumps({"error": "Forbidden"}), status=403, headers=c, mimetype="application/json")
+        order = {
+            "record_id":                        mo["id"],
+            "order_id":                         f.get("Order ID", ""),
+            "date":                             f.get("Date", ""),
+            "officer_name":                     f.get("Officer Name", ""),
+            "badge_num":                        f.get("Badge #", ""),
+            "department_portion":               f.get("Department Portion $", 0),
+            "department_stripe_invoice_url":    f.get("Department Stripe Invoice URL", ""),
+            "department_stripe_invoice_status": f.get("Department Stripe Invoice Status", ""),
+            "sales_order_status":               f.get("Sales Order Status", ""),
+        }
+        li_ids = f.get("MO Line Items", [])
+        line_items = []
+        for li_id in li_ids:
+            try:
+                li_r = req_lib.get(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+                    headers=at_headers(read_token),
+                    params={"fields[]": ["Name + Variations (from Product SKU)", "Qty.",
+                                         "Confirmed Unit Price", "Picked Up"]},
+                    timeout=10,
+                )
+                if li_r.ok:
+                    lf = li_r.json().get("fields", {})
+                    name_list = lf.get("Name + Variations (from Product SKU)", [])
+                    name = name_list[0] if isinstance(name_list, list) and name_list else (name_list or "")
+                    line_items.append({
+                        "record_id":  li_id,
+                        "name":       name,
+                        "qty":        lf.get("Qty.", 1),
+                        "unit_price": lf.get("Confirmed Unit Price", 0),
+                        "picked_up":  lf.get("Picked Up", False),
+                    })
+            except Exception:
+                pass
+        order["line_items"] = line_items
+        return Response(json.dumps(order), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
 if __name__ == "__main__":

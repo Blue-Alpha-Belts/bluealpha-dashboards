@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Newnan PD Counter Tool — Blue Alpha</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --navy:  #1B2438;
+    --red:   #BD3333;
+    --cream: #DDD8C4;
+    --bg:    #F2F3F5;
+    --card:  #FFFFFF;
+    --border:#D0D5DD;
+    --text:  #1A1A2E;
+    --muted: #6B7280;
+    --green: #15803D;
+    --green-bg: #DCFCE7;
+    --blue:  #1D4ED8;
+    --blue-bg: #DBEAFE;
+    --orange:#C05621;
+    --orange-bg: #FEECDC;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Header */
+  .header { background: var(--navy); color: white; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: 0.02em; }
+  .header-meta { font-size: 0.8rem; color: rgba(255,255,255,0.6); }
+
+  /* Layout */
+  .layout { display: grid; grid-template-columns: 1fr 420px; gap: 0; height: calc(100vh - 52px); overflow: hidden; }
+
+  /* Left panel */
+  .catalog-panel { background: var(--bg); overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .search-box { position: sticky; top: 0; z-index: 10; background: var(--bg); padding-bottom: 8px; }
+  .search-box input { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+                       font-size: 0.9rem; background: white; outline: none; }
+  .search-box input:focus { border-color: var(--navy); }
+
+  .section-header { background: var(--navy); color: white; padding: 10px 14px; border-radius: 8px;
+                    cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+                    font-weight: 600; font-size: 0.9rem; user-select: none; }
+  .section-header:hover { background: #253352; }
+  .section-header .chevron { transition: transform 0.2s; }
+  .section-header.collapsed .chevron { transform: rotate(-90deg); }
+  .section-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 4px 0 8px; }
+  .section-body.hidden { display: none; }
+
+  .product-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+                  display: flex; flex-direction: column; gap: 8px; }
+  .product-name { font-weight: 600; font-size: 0.85rem; color: var(--text); line-height: 1.3; }
+  .product-price { font-size: 1rem; font-weight: 700; color: var(--navy); }
+  .discount-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+  .discount-25 { background: var(--green-bg); color: var(--green); }
+  .discount-10 { background: var(--blue-bg); color: var(--blue); }
+
+  .product-selectors { display: flex; flex-direction: column; gap: 6px; }
+  .product-selectors select { width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+                               font-size: 0.8rem; background: white; cursor: pointer; }
+  .qty-row { display: flex; align-items: center; gap: 8px; }
+  .qty-row label { font-size: 0.78rem; color: var(--muted); }
+  .qty-row input[type=number] { width: 64px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+                                  font-size: 0.85rem; text-align: center; }
+  .btn-add { background: var(--navy); color: white; border: none; border-radius: 6px; padding: 8px 14px;
+             font-size: 0.82rem; font-weight: 600; cursor: pointer; width: 100%; transition: background 0.15s; }
+  .btn-add:hover { background: #253352; }
+
+  /* Right panel */
+  .order-panel { background: var(--card); border-left: 1px solid var(--border); overflow-y: auto; display: flex; flex-direction: column; }
+  .order-header { background: var(--navy); color: white; padding: 14px 20px; font-weight: 700; font-size: 0.95rem; }
+
+  .order-body { padding: 16px 20px; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+
+  .field-group { display: flex; flex-direction: column; gap: 4px; }
+  .field-group label { font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .field-group select,
+  .field-group input[type=text],
+  .field-group input[type=email],
+  .field-group input[type=number] {
+    padding: 9px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.88rem;
+    background: white; width: 100%; outline: none;
+  }
+  .field-group select:focus,
+  .field-group input:focus { border-color: var(--navy); }
+
+  /* Line items */
+  .line-items-section { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .line-items-header { background: var(--bg); padding: 8px 12px; font-size: 0.78rem; font-weight: 600; color: var(--muted);
+                       display: grid; grid-template-columns: 1fr 48px 72px 72px 28px; gap: 6px; }
+  .line-item-row { padding: 8px 12px; border-top: 1px solid var(--border); display: grid;
+                   grid-template-columns: 1fr 48px 72px 72px 28px; gap: 6px; align-items: center;
+                   font-size: 0.82rem; }
+  .line-item-name { font-weight: 500; line-height: 1.3; }
+  .line-item-qty,
+  .line-item-price,
+  .line-item-total { text-align: right; color: var(--muted); }
+  .line-item-total { color: var(--text); font-weight: 600; }
+  .btn-remove { background: none; border: none; cursor: pointer; color: var(--red); font-size: 1rem; padding: 2px; }
+  .empty-cart { padding: 20px; text-align: center; color: var(--muted); font-size: 0.85rem; }
+
+  .order-total-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0;
+                     border-top: 2px solid var(--navy); font-weight: 700; font-size: 1rem; }
+
+  .portion-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .portion-validation { font-size: 0.78rem; margin-top: 4px; }
+  .portion-ok { color: var(--green); }
+  .portion-err { color: var(--red); }
+
+  .payment-method { display: flex; gap: 14px; }
+  .radio-btn { display: flex; align-items: center; gap: 6px; font-size: 0.88rem; cursor: pointer; }
+  .radio-btn input { cursor: pointer; }
+
+  .btn-primary { background: var(--red); color: white; border: none; border-radius: 8px; padding: 12px 20px;
+                 font-size: 0.95rem; font-weight: 700; cursor: pointer; width: 100%; transition: background 0.15s; }
+  .btn-primary:hover:not(:disabled) { background: #a02b2b; }
+  .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+
+  /* Confirmation panel */
+  #confirmPanel { display: none; padding: 20px; flex-direction: column; gap: 16px; }
+  .confirm-order-id { font-size: 2rem; font-weight: 800; color: var(--navy); letter-spacing: 0.05em; text-align: center; }
+  .confirm-info { background: var(--bg); border-radius: 8px; padding: 14px 16px; font-size: 0.88rem; }
+  .confirm-info p { margin: 3px 0; }
+  .confirm-info strong { color: var(--navy); }
+  .confirm-actions { display: flex; flex-direction: column; gap: 10px; }
+  .btn-secondary { background: var(--navy); color: white; border: none; border-radius: 8px; padding: 10px 16px;
+                   font-size: 0.88rem; font-weight: 600; cursor: pointer; width: 100%; transition: background 0.15s; }
+  .btn-secondary:hover:not(:disabled) { background: #253352; }
+  .btn-secondary:disabled { background: #ccc; cursor: not-allowed; }
+  .btn-outline { background: white; color: var(--navy); border: 1.5px solid var(--navy); border-radius: 8px;
+                 padding: 10px 16px; font-size: 0.88rem; font-weight: 600; cursor: pointer; width: 100%; transition: all 0.15s; }
+  .btn-outline:hover { background: var(--navy); color: white; }
+
+  .success-msg { background: var(--green-bg); color: var(--green); border-radius: 6px; padding: 10px 14px;
+                 font-size: 0.85rem; font-weight: 600; }
+  .error-msg { background: #FEE2E2; color: var(--red); border-radius: 6px; padding: 10px 14px; font-size: 0.85rem; }
+
+  /* Pickup table */
+  .pickup-table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+  .pickup-table th { background: var(--bg); padding: 8px 10px; text-align: left; font-weight: 600;
+                     color: var(--muted); font-size: 0.75rem; text-transform: uppercase; }
+  .pickup-table td { padding: 8px 10px; border-top: 1px solid var(--border); }
+  .pickup-table td:last-child { text-align: center; }
+
+  /* URL display */
+  .url-link { font-size: 0.78rem; color: var(--blue); word-break: break-all; display: block; margin-top: 4px; }
+
+  .loading { text-align: center; padding: 40px; color: var(--muted); }
+  .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid var(--border);
+             border-top-color: var(--navy); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: 50vh 50vh; }
+    .order-panel { border-left: none; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🔵 Newnan PD Counter Tool</h1>
+  <span class="header-meta" id="adminName"></span>
+</div>
+
+<div class="layout">
+  <!-- Left: Catalog -->
+  <div class="catalog-panel">
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="Search products…" oninput="filterCatalog()" />
+    </div>
+    <div id="catalogContainer"><div class="loading"><div class="spinner"></div><p style="margin-top:12px">Loading catalog…</p></div></div>
+  </div>
+
+  <!-- Right: Order Panel -->
+  <div class="order-panel">
+    <div class="order-header">New Order</div>
+
+    <!-- Order Form -->
+    <div id="orderForm" class="order-body">
+      <div class="field-group">
+        <label>Department</label>
+        <select id="deptSelect"><option value="">Loading departments…</option></select>
+      </div>
+      <div class="field-group">
+        <label>Officer Name</label>
+        <input type="text" id="officerName" placeholder="Full name" oninput="validateOrder()" />
+      </div>
+      <div class="field-group">
+        <label>Badge #</label>
+        <input type="text" id="badgeNum" placeholder="e.g. 1042" />
+      </div>
+
+      <!-- Line Items -->
+      <div>
+        <div class="line-items-section">
+          <div class="line-items-header">
+            <span>Item</span><span style="text-align:right">Qty</span>
+            <span style="text-align:right">Price</span>
+            <span style="text-align:right">Total</span>
+            <span></span>
+          </div>
+          <div id="lineItemsList"><div class="empty-cart">No items yet</div></div>
+        </div>
+        <div class="order-total-row">
+          <span>Order Total</span>
+          <span id="orderTotal">$0.00</span>
+        </div>
+      </div>
+
+      <!-- Portions -->
+      <div class="portion-row">
+        <div class="field-group">
+          <label>Officer Portion $</label>
+          <input type="number" id="officerPortion" min="0" step="0.01" value="0" oninput="validatePortions()" />
+        </div>
+        <div class="field-group">
+          <label>Department Portion $</label>
+          <input type="number" id="deptPortion" min="0" step="0.01" value="0" oninput="validatePortions()" />
+        </div>
+      </div>
+      <div class="portion-validation" id="portionMsg"></div>
+
+      <!-- Payment Method -->
+      <div class="field-group">
+        <label>Officer Payment Method</label>
+        <div class="payment-method">
+          <label class="radio-btn"><input type="radio" name="payMethod" value="Cash" checked onchange="togglePayMethod()" /> Cash</label>
+          <label class="radio-btn"><input type="radio" name="payMethod" value="Stripe" onchange="togglePayMethod()" /> Stripe Invoice</label>
+        </div>
+      </div>
+      <div class="field-group" id="stripeEmailGroup" style="display:none">
+        <label>Officer Email (for Stripe)</label>
+        <input type="email" id="officerEmail" placeholder="officer@example.com" oninput="validateOrder()" />
+      </div>
+
+      <button class="btn-primary" id="createOrderBtn" onclick="createOrder()" disabled>Create Order</button>
+      <div id="createError" class="error-msg" style="display:none"></div>
+    </div>
+
+    <!-- Confirmation Panel -->
+    <div id="confirmPanel">
+      <div class="confirm-order-id" id="confirmOrderId"></div>
+      <div class="confirm-info" id="confirmInfo"></div>
+
+      <div class="confirm-actions">
+        <button class="btn-secondary" id="btnDeptInvoice" onclick="sendDeptInvoice()">📧 Send Department Invoice</button>
+        <div id="deptInvoiceResult"></div>
+
+        <div id="officerPaymentSection"></div>
+
+        <button class="btn-outline" onclick="resetToNew()">+ New Order</button>
+      </div>
+
+      <div>
+        <div style="font-weight:600; font-size:0.88rem; margin-bottom:8px; color:var(--muted)">LINE ITEMS / PICKUP</div>
+        <table class="pickup-table">
+          <thead><tr><th>Item</th><th>Qty</th><th>Price</th><th>Picked Up</th></tr></thead>
+          <tbody id="pickupTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let catalog     = null;
+let departments = [];
+let lineItems   = [];
+let currentOrder = null; // set after order is created
+
+// ── Init ────────────────────────────────────────────────────────────────────
+
+async function init() {
+  // Check admin name
+  try {
+    const r = await fetch('/api/admin/me', { credentials: 'include' });
+    if (r.ok) {
+      const d = await r.json();
+      if (d.username) document.getElementById('adminName').textContent = d.username;
+    }
+  } catch(e) {}
+
+  await Promise.all([loadCatalog(), loadDepartments()]);
+}
+
+async function loadCatalog() {
+  try {
+    const r = await fetch('/api/pd/catalog', { credentials: 'include' });
+    if (!r.ok) { document.getElementById('catalogContainer').innerHTML = `<div class="error-msg">Failed to load catalog (${r.status})</div>`; return; }
+    catalog = await r.json();
+    renderCatalog(catalog);
+  } catch(e) {
+    document.getElementById('catalogContainer').innerHTML = `<div class="error-msg">Network error: ${e.message}</div>`;
+  }
+}
+
+async function loadDepartments() {
+  const sel = document.getElementById('deptSelect');
+  try {
+    const r = await fetch('/api/pd/departments', { credentials: 'include' });
+    if (!r.ok) { sel.innerHTML = '<option value="">Failed to load departments</option>'; return; }
+    departments = await r.json();
+    sel.innerHTML = '<option value="">— Select department —</option>' +
+      departments.map(d => `<option value="${d.record_id}">${esc(d.name)}</option>`).join('');
+    sel.addEventListener('change', validateOrder);
+  } catch(e) {
+    sel.innerHTML = '<option value="">Error loading departments</option>';
+  }
+}
+
+// ── Catalog Rendering ───────────────────────────────────────────────────────
+
+function renderCatalog(data, filterText = '') {
+  const container = document.getElementById('catalogContainer');
+  if (!data || !data.skus) { container.innerHTML = '<div class="loading">No catalog data</div>'; return; }
+
+  const lowerFilter = filterText.toLowerCase().trim();
+
+  // Group SKUs by parentId
+  const parentMap = {};
+  for (const sku of data.skus) {
+    if (!parentMap[sku.parentId]) {
+      parentMap[sku.parentId] = { name: sku.parentName, skus: [], category: sku.category };
+    }
+    parentMap[sku.parentId].skus.push(sku);
+  }
+
+  // Build parent order from data.parents
+  const parentOrder = data.parents || [];
+  const orderedParentIds = parentOrder.map(p => p.id).filter(id => parentMap[id]);
+
+  let html = '';
+  for (const parentId of orderedParentIds) {
+    const group = parentMap[parentId];
+    // Filter by search
+    let visibleSkus = group.skus;
+    if (lowerFilter) {
+      visibleSkus = visibleSkus.filter(s =>
+        s.name.toLowerCase().includes(lowerFilter) ||
+        s.parentName.toLowerCase().includes(lowerFilter)
+      );
+    }
+    if (!visibleSkus.length) continue;
+
+    // Deduplicate for display — group by parentId+color+size+featureVar combos
+    // If a parent has color/size variants, show one card with dropdowns
+    const hasColor = visibleSkus.some(s => s.colorId);
+    const hasSize  = visibleSkus.some(s => s.sizeId);
+    const hasFvar  = visibleSkus.some(s => s.featureVarId);
+
+    // If all SKUs have same name → single variant selector card
+    // Otherwise show individual cards (e.g. base SKUs with no variants)
+    const uniqueBaseNames = [...new Set(visibleSkus.map(s => s.parentName))];
+
+    html += `<div class="catalog-section" data-parent-id="${parentId}">
+      <div class="section-header" onclick="toggleSection(this)">
+        <span>${esc(group.name)}</span>
+        <span class="chevron">▾</span>
+      </div>
+      <div class="section-body">`;
+
+    if (hasColor || hasSize || hasFvar) {
+      // Build one card per parent — with dropdowns
+      html += buildVariantCard(parentId, group.name, visibleSkus);
+    } else {
+      // Individual simple cards
+      for (const sku of visibleSkus) {
+        html += buildSimpleCard(sku);
+      }
+    }
+
+    html += `</div></div>`;
+  }
+
+  container.innerHTML = html || '<div class="loading">No products match your search.</div>';
+}
+
+function buildVariantCard(parentId, parentName, skus) {
+  const colors  = [...new Map(skus.filter(s=>s.colorId).map(s=>[s.colorId, s.colorName])).entries()];
+  const sizes   = [...new Map(skus.filter(s=>s.sizeId).map(s=>[s.sizeId, s.sizeName])).entries()];
+  const fvars   = [...new Map(skus.filter(s=>s.featureVarId).map(s=>[s.featureVarId, s.featureVarName])).entries()];
+
+  const firstSku = skus[0];
+  const discountClass = firstSku.pdDiscount === 25 ? 'discount-25' : 'discount-10';
+  const discountLabel = firstSku.pdDiscount === 25 ? '25% off' : '10% off';
+
+  const colorSel  = colors.length > 0 ? `<select onchange="updateVariantPrice('${parentId}')">${colors.map(([id,n])=>`<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
+  const sizeSel   = sizes.length > 0  ? `<select onchange="updateVariantPrice('${parentId}')">${sizes.map(([id,n])=>`<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
+  const fvarSel   = fvars.length > 0  ? `<select onchange="updateVariantPrice('${parentId}')">${fvars.map(([id,n])=>`<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
+
+  return `<div class="product-card" data-parent-id="${parentId}" data-skus='${JSON.stringify(skus).replace(/'/g,"&#39;")}'>
+    <div class="product-name">${esc(parentName)}</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="product-price" id="price-${parentId}">$${fmt(firstSku.price)}</div>
+      <span class="discount-badge ${discountClass}">${discountLabel}</span>
+    </div>
+    <div class="product-selectors">
+      ${colorSel}${sizeSel}${fvarSel}
+    </div>
+    <div class="qty-row">
+      <label>Qty:</label>
+      <input type="number" id="qty-${parentId}" value="1" min="1" max="99" />
+    </div>
+    <button class="btn-add" onclick="addVariantItem('${parentId}')">Add to Order</button>
+  </div>`;
+}
+
+function buildSimpleCard(sku) {
+  const discountClass = sku.pdDiscount === 25 ? 'discount-25' : 'discount-10';
+  const discountLabel = sku.pdDiscount === 25 ? '25% off' : '10% off';
+  return `<div class="product-card">
+    <div class="product-name">${esc(sku.name)}</div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div class="product-price">$${fmt(sku.price)}</div>
+      <span class="discount-badge ${discountClass}">${discountLabel}</span>
+    </div>
+    <div class="qty-row">
+      <label>Qty:</label>
+      <input type="number" id="qty-sku-${sku.recordId}" value="1" min="1" max="99" />
+    </div>
+    <button class="btn-add" onclick="addSimpleItem('${sku.recordId}', '${esc(sku.name)}', ${sku.price})">Add to Order</button>
+  </div>`;
+}
+
+function updateVariantPrice(parentId) {
+  const card = document.querySelector(`.product-card[data-parent-id="${parentId}"]`);
+  if (!card) return;
+  const skus = JSON.parse(card.dataset.skus);
+  const selects = card.querySelectorAll('select');
+  const colorVal = selects[0] ? selects[0].value : '';
+  const sizeVal  = selects[1] ? selects[1].value : '';
+  const fvarVal  = selects[2] ? selects[2].value : '';
+
+  const match = findSku(skus, colorVal, sizeVal, fvarVal);
+  if (match) document.getElementById(`price-${parentId}`).textContent = `$${fmt(match.price)}`;
+}
+
+function findSku(skus, colorId, sizeId, fvarId) {
+  // Try exact match first
+  let match = skus.find(s =>
+    (!colorId || s.colorId === colorId) &&
+    (!sizeId  || s.sizeId  === sizeId)  &&
+    (!fvarId  || s.featureVarId === fvarId)
+  );
+  if (!match) match = skus.find(s => (!colorId || s.colorId === colorId) && (!sizeId || s.sizeId === sizeId));
+  if (!match) match = skus.find(s => (!colorId || s.colorId === colorId));
+  if (!match) match = skus[0];
+  return match;
+}
+
+function addVariantItem(parentId) {
+  const card = document.querySelector(`.product-card[data-parent-id="${parentId}"]`);
+  const skus = JSON.parse(card.dataset.skus);
+  const selects = card.querySelectorAll('select');
+  const colorVal = selects[0] ? selects[0].value : '';
+  const sizeVal  = selects[1] ? selects[1].value : '';
+  const fvarVal  = selects[2] ? selects[2].value : '';
+
+  const sku = findSku(skus, colorVal, sizeVal, fvarVal);
+  if (!sku) return;
+
+  const qty = parseInt(document.getElementById(`qty-${parentId}`)?.value || '1', 10) || 1;
+  addToOrder(sku.recordId, sku.name, sku.price, qty);
+}
+
+function addSimpleItem(recordId, name, price) {
+  const qty = parseInt(document.getElementById(`qty-sku-${recordId}`)?.value || '1', 10) || 1;
+  addToOrder(recordId, name, price, qty);
+}
+
+function addToOrder(recordId, name, price, qty) {
+  // Check if already in order
+  const existing = lineItems.find(li => li.sku_record_id === recordId);
+  if (existing) {
+    existing.qty += qty;
+  } else {
+    lineItems.push({ sku_record_id: recordId, name, unit_price: price, qty });
+  }
+  renderLineItems();
+  validateOrder();
+}
+
+// ── Search ──────────────────────────────────────────────────────────────────
+
+function filterCatalog() {
+  const q = document.getElementById('searchInput').value;
+  if (catalog) renderCatalog(catalog, q);
+}
+
+function toggleSection(header) {
+  header.classList.toggle('collapsed');
+  const body = header.nextElementSibling;
+  body.classList.toggle('hidden');
+}
+
+// ── Line Items ───────────────────────────────────────────────────────────────
+
+function renderLineItems() {
+  const container = document.getElementById('lineItemsList');
+  if (!lineItems.length) {
+    container.innerHTML = '<div class="empty-cart">No items yet</div>';
+    document.getElementById('orderTotal').textContent = '$0.00';
+    return;
+  }
+  let total = 0;
+  let html = '';
+  for (let i = 0; i < lineItems.length; i++) {
+    const li = lineItems[i];
+    const lineTotal = li.qty * li.unit_price;
+    total += lineTotal;
+    html += `<div class="line-item-row">
+      <div class="line-item-name">${esc(li.name)}</div>
+      <div class="line-item-qty">${li.qty}</div>
+      <div class="line-item-price">$${fmt(li.unit_price)}</div>
+      <div class="line-item-total">$${fmt(lineTotal)}</div>
+      <button class="btn-remove" onclick="removeItem(${i})" title="Remove">✕</button>
+    </div>`;
+  }
+  container.innerHTML = html;
+  document.getElementById('orderTotal').textContent = `$${fmt(total)}`;
+
+  // Auto-fill portions if both are 0
+  const op = parseFloat(document.getElementById('officerPortion').value) || 0;
+  const dp = parseFloat(document.getElementById('deptPortion').value) || 0;
+  if (op === 0 && dp === 0) {
+    document.getElementById('deptPortion').value = total.toFixed(2);
+  }
+  validatePortions();
+}
+
+function removeItem(idx) {
+  lineItems.splice(idx, 1);
+  renderLineItems();
+  validateOrder();
+}
+
+// ── Validation ───────────────────────────────────────────────────────────────
+
+function getOrderTotal() {
+  return lineItems.reduce((s, li) => s + li.qty * li.unit_price, 0);
+}
+
+function validatePortions() {
+  const total = getOrderTotal();
+  const op = parseFloat(document.getElementById('officerPortion').value) || 0;
+  const dp = parseFloat(document.getElementById('deptPortion').value) || 0;
+  const sum = op + dp;
+  const diff = Math.abs(sum - total);
+  const msg = document.getElementById('portionMsg');
+  if (diff < 0.01) {
+    msg.innerHTML = `<span class="portion-ok">✓ Portions sum to $${fmt(total)}</span>`;
+  } else {
+    msg.innerHTML = `<span class="portion-err">⚠ Difference: $${fmt(diff)} (need $${fmt(total)} total)</span>`;
+  }
+  validateOrder();
+}
+
+function validateOrder() {
+  const btn = document.getElementById('createOrderBtn');
+  const dept    = document.getElementById('deptSelect').value;
+  const officer = document.getElementById('officerName').value.trim();
+  const payMethod = document.querySelector('input[name="payMethod"]:checked')?.value;
+  const stripeEmail = document.getElementById('officerEmail').value.trim();
+
+  const total = getOrderTotal();
+  const op = parseFloat(document.getElementById('officerPortion').value) || 0;
+  const dp = parseFloat(document.getElementById('deptPortion').value) || 0;
+  const portionsOk = Math.abs(op + dp - total) < 0.01;
+
+  const stripeOk = payMethod !== 'Stripe' || stripeEmail.includes('@');
+
+  btn.disabled = !(dept && officer && lineItems.length > 0 && portionsOk && stripeOk);
+}
+
+function togglePayMethod() {
+  const method = document.querySelector('input[name="payMethod"]:checked')?.value;
+  document.getElementById('stripeEmailGroup').style.display = method === 'Stripe' ? 'block' : 'none';
+  validateOrder();
+}
+
+// ── Create Order ─────────────────────────────────────────────────────────────
+
+async function createOrder() {
+  const btn = document.getElementById('createOrderBtn');
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  document.getElementById('createError').style.display = 'none';
+
+  const body = {
+    department_id:          document.getElementById('deptSelect').value,
+    officer_name:           document.getElementById('officerName').value.trim(),
+    badge_num:              document.getElementById('badgeNum').value.trim(),
+    line_items:             lineItems,
+    officer_portion:        parseFloat(document.getElementById('officerPortion').value) || 0,
+    department_portion:     parseFloat(document.getElementById('deptPortion').value) || 0,
+    officer_payment_method: document.querySelector('input[name="payMethod"]:checked')?.value || 'Cash',
+  };
+
+  try {
+    const r = await fetch('/api/pd/order/create', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      showCreateError(d.error || 'Unknown error');
+      btn.disabled = false;
+      btn.textContent = 'Create Order';
+      return;
+    }
+    currentOrder = { ...body, record_id: d.record_id, order_id: d.order_id };
+    showConfirmation(d);
+  } catch(e) {
+    showCreateError(e.message);
+    btn.disabled = false;
+    btn.textContent = 'Create Order';
+  }
+}
+
+function showCreateError(msg) {
+  const el = document.getElementById('createError');
+  el.textContent = '⚠ ' + msg;
+  el.style.display = 'block';
+}
+
+// ── Confirmation Panel ────────────────────────────────────────────────────────
+
+function showConfirmation(data) {
+  document.getElementById('orderForm').style.display = 'none';
+  const panel = document.getElementById('confirmPanel');
+  panel.style.display = 'flex';
+
+  document.getElementById('confirmOrderId').textContent = data.order_id;
+
+  const deptName = departments.find(d => d.record_id === currentOrder.department_id)?.name || '—';
+  document.getElementById('confirmInfo').innerHTML = `
+    <p><strong>Officer:</strong> ${esc(currentOrder.officer_name)} &nbsp;|&nbsp; <strong>Badge:</strong> ${esc(currentOrder.badge_num || '—')}</p>
+    <p><strong>Department:</strong> ${esc(deptName)}</p>
+    <p><strong>Department Amount:</strong> $${fmt(currentOrder.department_portion)}</p>
+    <p><strong>Officer Amount:</strong> $${fmt(currentOrder.officer_portion)}</p>
+    <p><strong>Payment Method:</strong> ${esc(currentOrder.officer_payment_method)}</p>
+  `;
+
+  // Officer payment section
+  const paySection = document.getElementById('officerPaymentSection');
+  if (currentOrder.officer_payment_method === 'Stripe') {
+    paySection.innerHTML = `
+      <div class="field-group">
+        <label>Officer Email</label>
+        <input type="email" id="confirmOfficerEmail" value="${esc(document.getElementById('officerEmail').value)}" placeholder="officer@example.com" />
+      </div>
+      <button class="btn-secondary" id="btnOfficerInvoice" onclick="sendOfficerInvoice()">📧 Send Officer Invoice</button>
+      <div id="officerInvoiceResult"></div>`;
+  } else {
+    paySection.innerHTML = `
+      <button class="btn-secondary" id="btnCashPaid" onclick="markCashPaid()">💵 Mark Cash Paid</button>
+      <div id="cashPaidResult"></div>`;
+  }
+
+  // Pickup table
+  buildPickupTable();
+}
+
+async function sendDeptInvoice() {
+  const btn = document.getElementById('btnDeptInvoice');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const result = document.getElementById('deptInvoiceResult');
+  try {
+    const r = await fetch(`/api/pd/order/${currentOrder.record_id}/stripe/department`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      result.innerHTML = `<div class="error-msg">⚠ ${esc(d.error || 'Error')}</div>`;
+      btn.disabled = false; btn.textContent = '📧 Send Department Invoice';
+    } else {
+      btn.textContent = '✓ Department Invoice Sent';
+      result.innerHTML = `
+        <div class="success-msg">
+          CC Invoice sent!<br>
+          <a class="url-link" href="${d.cc_url}" target="_blank">${d.cc_url}</a>
+          ACH Invoice:<br>
+          <a class="url-link" href="${d.ach_url}" target="_blank">${d.ach_url}</a>
+        </div>`;
+    }
+  } catch(e) {
+    result.innerHTML = `<div class="error-msg">⚠ ${e.message}</div>`;
+    btn.disabled = false; btn.textContent = '📧 Send Department Invoice';
+  }
+}
+
+async function sendOfficerInvoice() {
+  const btn = document.getElementById('btnOfficerInvoice');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const email = document.getElementById('confirmOfficerEmail').value.trim();
+  const result = document.getElementById('officerInvoiceResult');
+  if (!email) { result.innerHTML = '<div class="error-msg">Email required</div>'; btn.disabled = false; btn.textContent = '📧 Send Officer Invoice'; return; }
+  try {
+    const r = await fetch(`/api/pd/order/${currentOrder.record_id}/stripe/officer`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, name: currentOrder.officer_name }),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      result.innerHTML = `<div class="error-msg">⚠ ${esc(d.error || 'Error')}</div>`;
+      btn.disabled = false; btn.textContent = '📧 Send Officer Invoice';
+    } else {
+      btn.textContent = '✓ Officer Invoice Sent';
+      result.innerHTML = `<div class="success-msg">Invoice sent!<br><a class="url-link" href="${d.url}" target="_blank">${d.url}</a></div>`;
+    }
+  } catch(e) {
+    result.innerHTML = `<div class="error-msg">⚠ ${e.message}</div>`;
+    btn.disabled = false; btn.textContent = '📧 Send Officer Invoice';
+  }
+}
+
+async function markCashPaid() {
+  const btn = document.getElementById('btnCashPaid');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const result = document.getElementById('cashPaidResult');
+  try {
+    const r = await fetch(`/api/pd/order/${currentOrder.record_id}/cash`, {
+      method: 'PATCH', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      result.innerHTML = `<div class="error-msg">⚠ ${esc(d.error || 'Error')}</div>`;
+      btn.disabled = false; btn.textContent = '💵 Mark Cash Paid';
+    } else {
+      btn.textContent = '✓ Cash Paid';
+      result.innerHTML = `<div class="success-msg">✓ Cash payment recorded!</div>`;
+    }
+  } catch(e) {
+    result.innerHTML = `<div class="error-msg">⚠ ${e.message}</div>`;
+    btn.disabled = false; btn.textContent = '💵 Mark Cash Paid';
+  }
+}
+
+function buildPickupTable() {
+  const tbody = document.getElementById('pickupTableBody');
+  tbody.innerHTML = lineItems.map(li => `
+    <tr>
+      <td>${esc(li.name)}</td>
+      <td>${li.qty}</td>
+      <td>$${fmt(li.unit_price)}</td>
+      <td><input type="checkbox" data-sku="${li.sku_record_id}" title="Mark picked up" disabled /></td>
+    </tr>
+  `).join('');
+  // After order is created, we need the actual line item record IDs from Airtable
+  // Fetch order detail to get them
+  fetchPickupLineItems();
+}
+
+async function fetchPickupLineItems() {
+  try {
+    const r = await fetch(`/api/pd/order/${currentOrder.record_id}`, { credentials: 'include' });
+    const d = await r.json();
+    if (!d.line_items) return;
+    const tbody = document.getElementById('pickupTableBody');
+    tbody.innerHTML = d.line_items.map(li => `
+      <tr>
+        <td>${esc(li.name)}</td>
+        <td>${li.qty}</td>
+        <td>$${fmt(li.unit_price)}</td>
+        <td>
+          <input type="checkbox" ${li.picked_up ? 'checked' : ''}
+            onchange="togglePickup('${li.record_id}', this.checked, this)" />
+        </td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    console.error('Failed to fetch line item details:', e);
+  }
+}
+
+async function togglePickup(lineItemId, pickedUp, checkbox) {
+  checkbox.disabled = true;
+  try {
+    const r = await fetch(`/api/pd/order/${currentOrder.record_id}/pickup`, {
+      method: 'PATCH', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line_item_id: lineItemId, picked_up: pickedUp }),
+    });
+    if (!r.ok) { checkbox.checked = !pickedUp; }
+  } catch(e) {
+    checkbox.checked = !pickedUp;
+  }
+  checkbox.disabled = false;
+}
+
+function resetToNew() {
+  lineItems = [];
+  currentOrder = null;
+  document.getElementById('confirmPanel').style.display = 'none';
+  const form = document.getElementById('orderForm');
+  form.style.display = 'flex';
+  document.getElementById('officerName').value = '';
+  document.getElementById('badgeNum').value = '';
+  document.getElementById('deptSelect').value = '';
+  document.getElementById('officerPortion').value = '0';
+  document.getElementById('deptPortion').value = '0';
+  document.getElementById('portionMsg').innerHTML = '';
+  document.getElementById('createError').style.display = 'none';
+  document.getElementById('createOrderBtn').textContent = 'Create Order';
+  document.querySelector('input[name="payMethod"][value="Cash"]').checked = true;
+  document.getElementById('stripeEmailGroup').style.display = 'none';
+  renderLineItems();
+  validateOrder();
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+function fmt(n) { return parseFloat(n || 0).toFixed(2); }
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
