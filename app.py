@@ -12391,9 +12391,12 @@ def _warranty_webhook_inner(record_id, trigger, c):
 # WARRANTY CATCH-UP SCANNER  (runs every 12 hours)
 # Finds records that need processing but weren't caught by the real-time trigger
 # ─────────────────────────────────────────────────────────────────────────────
+_WARRANTY_SCAN_LOCK_FILE = "/tmp/warranty_scan.lock"
+
 def _warranty_scan():
     """Scan Warranty Requests at 10 AM and 2 PM ET daily and process any missed records."""
     import time as _time
+    import fcntl as _fcntl
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     import zoneinfo as _zi
 
@@ -12416,6 +12419,14 @@ def _warranty_scan():
                 and _last_run_hour != (now_et.date(), current_hour)
                 and secs_since_start >= _STARTUP_DELAY):
             _last_run_hour = (now_et.date(), current_hour)
+            # ── Inter-worker file lock: only ONE gunicorn worker runs the scan ──
+            try:
+                _lock_fh = open(_WARRANTY_SCAN_LOCK_FILE, "w")
+                _fcntl.flock(_lock_fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("[warranty-scan] another worker already running scan — skipping", flush=True)
+                _time.sleep(60)
+                continue
         else:
             _time.sleep(60)
             continue
@@ -12543,6 +12554,13 @@ def _warranty_scan():
 
         except Exception as e:
             print(f"[warranty-scan] unexpected error: {e}", flush=True)
+        finally:
+            # Release the inter-worker file lock
+            try:
+                _fcntl.flock(_lock_fh, _fcntl.LOCK_UN)
+                _lock_fh.close()
+            except Exception:
+                pass
 
         _time.sleep(60)  # check every minute, run only at target hours
 
