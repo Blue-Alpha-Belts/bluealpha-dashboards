@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Blue Alpha Invoice Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --navy:     #1B2438;
+    --red:      #BD3333;
+    --cream:    #DDD8C4;
+    --bg:       #F2F3F5;
+    --card:     #FFFFFF;
+    --border:   #D0D5DD;
+    --text:     #1A1A2E;
+    --muted:    #6B7280;
+    --green:    #15803D;
+    --green-bg: #DCFCE7;
+    --orange:   #C05621;
+    --orange-bg:#FEF3C7;
+    --blue:     #1D4ED8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Login */
+  .login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .login-card { background: var(--card); border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.10);
+                padding: 40px 36px; width: 100%; max-width: 380px; }
+  .login-logo { text-align: center; margin-bottom: 24px; }
+  .login-logo span { font-size: 1.5rem; font-weight: 800; color: var(--navy); letter-spacing: 0.03em; }
+  .login-logo small { display: block; color: var(--muted); font-size: 0.82rem; margin-top: 4px; }
+  .field-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+  .field-group label { font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .field-group input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+                       font-size: 0.9rem; background: white; outline: none; }
+  .field-group input:focus { border-color: var(--navy); }
+  .btn-primary { background: var(--navy); color: white; border: none; border-radius: 8px; padding: 12px 20px;
+                 font-size: 0.95rem; font-weight: 700; cursor: pointer; width: 100%; margin-top: 6px; }
+  .btn-primary:hover { background: #253352; }
+  .login-error { color: var(--red); font-size: 0.83rem; margin-top: 8px; text-align: center; }
+
+  /* Portal App */
+  #app { display: none; min-height: 100vh; flex-direction: column; }
+
+  .portal-header { background: var(--navy); color: white; padding: 14px 28px; display: flex;
+                   align-items: center; justify-content: space-between; }
+  .portal-header-left h1 { font-size: 1.1rem; font-weight: 700; }
+  .portal-header-left small { font-size: 0.78rem; color: rgba(255,255,255,0.6); }
+  .btn-logout { background: rgba(255,255,255,0.12); color: white; border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 6px; padding: 7px 16px; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+  .btn-logout:hover { background: rgba(255,255,255,0.22); }
+
+  .portal-body { flex: 1; padding: 28px 32px; max-width: 1100px; margin: 0 auto; width: 100%; }
+
+  .section-title { font-size: 1.1rem; font-weight: 700; color: var(--navy); margin-bottom: 16px; }
+
+  /* Table */
+  .invoice-table-wrap { background: var(--card); border-radius: 12px; overflow: hidden;
+                         box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: var(--navy); color: white; }
+  thead th { padding: 12px 16px; text-align: left; font-size: 0.78rem; font-weight: 600;
+             text-transform: uppercase; letter-spacing: 0.05em; }
+  tbody tr { border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+  tbody tr:hover { background: #F8F9FB; }
+  tbody tr.expanded { background: #F0F4FF; }
+  tbody td { padding: 12px 16px; font-size: 0.87rem; }
+  .col-amount { font-weight: 600; }
+  .col-pay { text-align: center; }
+
+  /* Status badge */
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+  .badge-open { background: var(--orange-bg); color: var(--orange); }
+  .badge-paid { background: var(--green-bg); color: var(--green); }
+  .badge-unknown { background: var(--bg); color: var(--muted); }
+
+  /* Pay Now button */
+  .btn-pay { background: var(--red); color: white; border: none; border-radius: 6px; padding: 6px 14px;
+             font-size: 0.8rem; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
+  .btn-pay:hover { background: #a02b2b; }
+  .btn-pay-disabled { background: #ccc; color: #888; cursor: not-allowed; border-radius: 6px;
+                      padding: 6px 14px; font-size: 0.8rem; font-weight: 600; display: inline-block; }
+
+  /* Expanded detail row */
+  .detail-row td { padding: 0 !important; }
+  .detail-inner { background: #F8F9FB; padding: 16px 24px 20px; border-bottom: 2px solid var(--navy); }
+  .detail-title { font-weight: 600; font-size: 0.82rem; color: var(--muted); text-transform: uppercase;
+                  letter-spacing: 0.04em; margin-bottom: 10px; }
+  .line-items-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  .line-items-table th { padding: 7px 12px; text-align: left; background: white; font-weight: 600;
+                          font-size: 0.75rem; color: var(--muted); text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  .line-items-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .li-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
+  .li-picked { background: var(--green-bg); color: var(--green); }
+  .li-not-picked { background: var(--orange-bg); color: var(--orange); }
+
+  .loading { text-align: center; padding: 50px; color: var(--muted); }
+  .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid var(--border);
+             border-top-color: var(--navy); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .empty-state { text-align: center; padding: 50px; color: var(--muted); }
+  .empty-state h3 { font-size: 1rem; color: var(--text); margin-bottom: 6px; }
+
+  @media (max-width: 700px) {
+    .portal-body { padding: 16px; }
+    thead th:nth-child(3), tbody td:nth-child(3),
+    thead th:nth-child(4), tbody td:nth-child(4) { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div class="login-wrap" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">
+      <span>🔵 Blue Alpha</span>
+      <small>Invoice Portal</small>
+    </div>
+    <form onsubmit="doLogin(event)">
+      <div class="field-group">
+        <label>Username</label>
+        <input type="text" id="loginUsername" autocomplete="username" required />
+      </div>
+      <div class="field-group">
+        <label>Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" required />
+      </div>
+      <button type="submit" class="btn-primary" id="loginBtn">Sign In</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+  </div>
+</div>
+
+<!-- Portal App -->
+<div id="app">
+  <div class="portal-header">
+    <div class="portal-header-left">
+      <h1>Blue Alpha Invoice Portal</h1>
+      <small id="orgName"></small>
+    </div>
+    <button class="btn-logout" onclick="doLogout()">Sign Out</button>
+  </div>
+  <div class="portal-body">
+    <div class="section-title">Police Department Orders</div>
+    <div id="ordersContainer">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let portalUser  = null;
+let ordersData  = [];
+let expandedRow = null;
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+async function init() {
+  try {
+    const r = await fetch('/api/portal/me', { credentials: 'include' });
+    if (r.ok) {
+      const d = await r.json();
+      if (d && (d.customer_id || d.customerId)) {
+        portalUser = d;
+        showApp();
+        return;
+      }
+    }
+  } catch(e) {}
+  showLogin();
+}
+
+function showLogin() {
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+
+  const org = portalUser.org || portalUser.organization || '';
+  if (org) document.getElementById('orgName').textContent = org;
+
+  loadOrders();
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+
+async function doLogin(e) {
+  e.preventDefault();
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  document.getElementById('loginError').textContent = '';
+
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+
+  try {
+    const r = await fetch('/api/portal/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok !== false) {
+      // Re-check session
+      const me = await fetch('/api/portal/me', { credentials: 'include' });
+      if (me.ok) {
+        portalUser = await me.json();
+        showApp();
+        return;
+      }
+      window.location.reload();
+    } else {
+      document.getElementById('loginError').textContent = d.error || 'Invalid username or password.';
+      btn.disabled = false; btn.textContent = 'Sign In';
+    }
+  } catch(err) {
+    document.getElementById('loginError').textContent = 'Network error. Please try again.';
+    btn.disabled = false; btn.textContent = 'Sign In';
+  }
+}
+
+async function doLogout() {
+  try {
+    await fetch('/api/portal/logout', { method: 'POST', credentials: 'include' });
+  } catch(e) {}
+  window.location.reload();
+}
+
+// ── Orders ────────────────────────────────────────────────────────────────────
+
+async function loadOrders() {
+  const container = document.getElementById('ordersContainer');
+  try {
+    const r = await fetch('/api/pd/portal/orders', { credentials: 'include' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      container.innerHTML = `<div class="empty-state"><h3>Unable to load orders</h3><p>${esc(d.error || `Status ${r.status}`)}</p></div>`;
+      return;
+    }
+    ordersData = await r.json();
+    renderOrders();
+  } catch(e) {
+    container.innerHTML = `<div class="empty-state"><h3>Network Error</h3><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+function renderOrders() {
+  const container = document.getElementById('ordersContainer');
+  if (!ordersData.length) {
+    container.innerHTML = `<div class="empty-state"><h3>No orders yet</h3><p>Police department orders will appear here once created.</p></div>`;
+    return;
+  }
+
+  const rows = ordersData.map((o, idx) => `
+    <tr onclick="toggleDetail(${idx})" id="row-${idx}">
+      <td><strong>${esc(o.order_id)}</strong></td>
+      <td>${fmtDate(o.date)}</td>
+      <td>${esc(o.officer_name || '—')}</td>
+      <td>${esc(o.badge_num || '—')}</td>
+      <td class="col-amount">$${fmt(o.department_portion)}</td>
+      <td>${statusBadge(o.department_stripe_invoice_status)}</td>
+      <td class="col-pay">${payBtn(o)}</td>
+    </tr>
+    <tr class="detail-row" id="detail-${idx}" style="display:none">
+      <td colspan="7">
+        <div class="detail-inner" id="detail-inner-${idx}">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="invoice-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Order #</th>
+            <th>Date</th>
+            <th>Officer</th>
+            <th>Badge #</th>
+            <th>Dept. Amount</th>
+            <th>Status</th>
+            <th>Pay</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+async function toggleDetail(idx) {
+  const detailRow = document.getElementById(`detail-${idx}`);
+  const headerRow = document.getElementById(`row-${idx}`);
+
+  if (expandedRow !== null && expandedRow !== idx) {
+    // Close previous
+    document.getElementById(`detail-${expandedRow}`).style.display = 'none';
+    document.getElementById(`row-${expandedRow}`).classList.remove('expanded');
+  }
+
+  if (expandedRow === idx) {
+    detailRow.style.display = 'none';
+    headerRow.classList.remove('expanded');
+    expandedRow = null;
+    return;
+  }
+
+  detailRow.style.display = 'table-row';
+  headerRow.classList.add('expanded');
+  expandedRow = idx;
+
+  // Fetch detail
+  const order = ordersData[idx];
+  const inner = document.getElementById(`detail-inner-${idx}`);
+  try {
+    const r = await fetch(`/api/pd/portal/order/${order.record_id}`, { credentials: 'include' });
+    const d = await r.json();
+    if (!r.ok) {
+      inner.innerHTML = `<p style="color:var(--red)">Error: ${esc(d.error || 'Unknown')}</p>`;
+      return;
+    }
+    const lineItems = d.line_items || [];
+    const liRows = lineItems.map(li => `
+      <tr>
+        <td>${esc(li.name)}</td>
+        <td>${li.qty}</td>
+        <td>$${fmt(li.unit_price)}</td>
+        <td>$${fmt((li.qty || 1) * (li.unit_price || 0))}</td>
+        <td><span class="li-badge ${li.picked_up ? 'li-picked' : 'li-not-picked'}">${li.picked_up ? '✓ Picked Up' : 'Pending'}</span></td>
+      </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted);text-align:center">No line items</td></tr>';
+
+    inner.innerHTML = `
+      <div class="detail-title">Order ${esc(d.order_id)} — Line Items</div>
+      <table class="line-items-table">
+        <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
+        <tbody>${liRows}</tbody>
+      </table>`;
+  } catch(e) {
+    inner.innerHTML = `<p style="color:var(--red)">Network error: ${esc(e.message)}</p>`;
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function statusBadge(status) {
+  if (!status) return `<span class="badge badge-unknown">—</span>`;
+  const s = status.toLowerCase();
+  if (s === 'paid')   return `<span class="badge badge-paid">Paid</span>`;
+  if (s === 'open')   return `<span class="badge badge-open">Open</span>`;
+  return `<span class="badge badge-unknown">${esc(status)}</span>`;
+}
+
+function payBtn(order) {
+  if (order.department_stripe_invoice_url && order.department_stripe_invoice_status !== 'paid') {
+    return `<a class="btn-pay" href="${esc(order.department_stripe_invoice_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Pay Now</a>`;
+  }
+  if (order.department_stripe_invoice_status === 'paid') {
+    return `<span class="li-badge li-picked" style="font-size:0.75rem">Paid</span>`;
+  }
+  return `<span class="btn-pay-disabled">Invoice Pending</span>`;
+}
+
+function fmtDate(d) {
+  if (!d) return '—';
+  try {
+    const [y,m,day] = d.split('-');
+    return `${m}/${day}/${y}`;
+  } catch(e) { return d; }
+}
+
+function fmt(n) { return parseFloat(n || 0).toFixed(2); }
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
