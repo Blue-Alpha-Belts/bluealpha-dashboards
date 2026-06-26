@@ -155,7 +155,7 @@
     </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th style="width:56px"></th><th>Award</th><th>Points</th><th>Total Awarded</th><th>Qty Ordered 6/23</th><th>Qty Ordered 6/24</th><th>Qty Ordered 6/25</th></tr></thead>
+        <thead><tr><th style="width:56px"></th><th>Award</th><th>Points</th><th>Total Awarded</th><th>Qty Ordered 6/23</th><th>Qty Ordered 6/24</th><th>Qty Ordered 6/25</th><th>Qty Ordered 6/26</th></tr></thead>
         <tbody id="totals-body"><tr><td colspan="6" class="loading-msg">Loading…</td></tr></tbody>
       </table>
     </div>
@@ -348,10 +348,11 @@ function renderTotals() {
     return (b.points - a.points) || a.name.localeCompare(b.name);
   });
   tbody.innerHTML = sorted.map(award => {
-    const { record_id, name, points, image_url, product_url, qty_needed, qty_ordered, qty_ordered_624, qty_ordered_625 } = award;
+    const { record_id, name, points, image_url, product_url, qty_needed, qty_ordered, qty_ordered_624, qty_ordered_625, qty_ordered_626 } = award;
     const ordered623 = qty_ordered !== null && qty_ordered !== undefined ? qty_ordered : '—';
     const ordered624 = qty_ordered_624 !== null && qty_ordered_624 !== undefined ? qty_ordered_624 : '';
     const ordered625 = qty_ordered_625 !== null && qty_ordered_625 !== undefined ? qty_ordered_625 : '';
+    const ordered626 = qty_ordered_626 !== null && qty_ordered_626 !== undefined ? qty_ordered_626 : '';
     const imgCell  = image_url
       ? `<img src="${image_url}" style="width:48px;height:48px;object-fit:contain;border-radius:4px;">`
       : `<div style="width:48px;height:48px;background:#f0f0f0;border-radius:4px;"></div>`;
@@ -368,6 +369,7 @@ function renderTotals() {
       <td style="text-align:center;color:#555;font-weight:600;">${ordered623}</td>
       <td style="text-align:center;color:#555;font-weight:600;">${ordered624 !== '' ? ordered624 : '—'}</td>
       <td style="text-align:center;color:#555;font-weight:600;">${ordered625 !== '' ? ordered625 : '—'}</td>
+      <td style="text-align:center;"><input type="number" min="0" value="${ordered626}" placeholder="—" oninput="onQtyInput('${safeId}', this.value, 'qty_ordered_626')" style="width:60px;text-align:center;border:1px solid #ddd;border-radius:4px;padding:3px 4px;font-size:13px;"></td>
     </tr>`;
   }).join('');
 }
@@ -467,7 +469,7 @@ function loadData() {
       _awardsCatalog = data.awards_catalog || [];
       // Re-apply any user edits so auto-refresh doesn't clobber unsaved values
       _awardsCatalog.forEach(a => {
-        ['qty_ordered_624', 'qty_ordered_625'].forEach(f => {
+        ['qty_ordered_624', 'qty_ordered_625', 'qty_ordered_626'].forEach(f => {
           const k = a.record_id + '|' + f;
           if (_editedQtys[k] !== undefined) a[f] = _editedQtys[k];
         });
