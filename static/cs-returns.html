@@ -2021,7 +2021,28 @@ async function csSubmitIntlExchange() {
       })
     });
     const respData = await res.json();
-    if (respData.checkoutUrl) {
+    if (respData.apo === true) {
+      // APO address — no Stripe, confirmation email sent directly
+      document.getElementById('screen-main').classList.add('hidden');
+      document.getElementById('intl-info-block').classList.add('hidden');
+      document.getElementById('screen-success').classList.remove('hidden');
+      showSuccessState('intl-exception-success');
+      // Show APO confirmation message instead of payment link
+      const linkResult = document.getElementById('intl-payment-link-result');
+      if (linkResult) {
+        linkResult.classList.remove('hidden');
+        const urlInput = document.getElementById('intl-payment-link-url');
+        if (urlInput) {
+          urlInput.value = '';
+          urlInput.placeholder = 'APO address — no payment required';
+          urlInput.readOnly = true;
+        }
+      }
+      const successMsg = document.getElementById('intl-exception-success');
+      if (successMsg) {
+        successMsg.innerHTML = '<strong>Exchange submitted — confirmation email sent to customer.</strong> No payment required for APO/military address.';
+      }
+    } else if (respData.checkoutUrl) {
       // Show inline result
       document.getElementById('intl-payment-link-url').value = respData.checkoutUrl;
       document.getElementById('intl-payment-link-result').classList.remove('hidden');

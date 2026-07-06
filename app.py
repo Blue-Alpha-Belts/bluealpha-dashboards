@@ -1718,6 +1718,66 @@ def cs_intl_exchange_submit():
     except Exception as at_err:
         print(f"[cs-intl-exchange-submit] Airtable write error: {at_err}")
 
+    # Detect APO: US address with military state code
+    delivery_addr_cs = data.get("deliveryAddress", {})
+    is_apo = (
+        delivery_addr_cs.get("country", "").upper() in ("US", "USA")
+        and delivery_addr_cs.get("state", "").upper() in ("AA", "AE", "AP")
+    )
+
+    if is_apo:
+        # APO: confirm payment immediately, send confirmation email, no Stripe
+        try:
+            write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
+            from datetime import datetime as _dt
+            today_str = _dt.utcnow().strftime("%Y-%m-%d")
+            apo_rec_id = _intl_pending[ref_id].get("airtableRecordId", "")
+            if apo_rec_id:
+                req_lib.patch(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{INT_EXCHANGE_TABLE_ID}/{apo_rec_id}",
+                    headers={**at_headers(write_token), "Content-Type": "application/json"},
+                    json={"fields": {"Payment Confirmed": True, "Date Submitted": today_str}},
+                    timeout=15,
+                )
+        except Exception as apo_patch_err:
+            print(f"[cs-intl-exchange-submit] APO patch error: {apo_patch_err}")
+
+        cs_customer_email = data.get("customerEmail", "")
+        cs_customer_name  = data.get("customerName", "")
+        cs_order_number   = data.get("orderNumber", "")
+        email_sent = False
+        if SENDGRID_API_KEY and cs_customer_email:
+            try:
+                first_name = cs_customer_name.split()[0] if cs_customer_name else "there"
+                email_body = (
+                    f"Hi {first_name},\n\n"
+                    f"Our customer service team has submitted a size exchange for your order #{cs_order_number}.\n\n"
+                    f"We'll begin preparing your new belt(s) once we see movement on your shipment.\n\n"
+                    f"Please allow 2-4 weeks for delivery.\n\n"
+                    f"Questions? Reply to this email.\n\n"
+                    f"— Blue Alpha"
+                )
+                send_resp = req_lib.post(
+                    "https://api.sendgrid.com/v3/mail/send",
+                    headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "personalizations": [{"to": [{"email": TEST_EMAIL_OVERRIDE or cs_customer_email}]}],
+                        "from":    {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                        "reply_to": {"email": CS_FROM_EMAIL},
+                        "subject": f"Your Blue Alpha Size Exchange — Order #{cs_order_number}",
+                        "content": [{"type": "text/plain", "value": email_body}],
+                    },
+                    timeout=15,
+                )
+                email_sent = send_resp.status_code in (200, 202)
+            except Exception as email_err:
+                print(f"[cs-intl-exchange-submit] APO email error: {email_err}")
+
+        _intl_pending.pop(ref_id, None)
+        return Response(json.dumps({"checkoutUrl": None, "emailSent": email_sent, "apo": True}),
+                        headers=c, mimetype="application/json")
+
+    # Non-APO: existing Stripe flow continues below
     success_url = f"https://exchange.bluealphabelts.com/exchange/international?success=1&ref={ref_id}"
     cancel_url  = "https://exchange.bluealphabelts.com/exchange/international?cancelled=1"
 
@@ -8924,6 +8984,7 @@ def verify_international_exchange():
             "customerName":  ship_to.get("name", ""),
             "customerEmail": order.get("customerEmail", ""),
             "eligibleUntil": eligible_until.strftime("%B %-d, %Y"),
+            "isApo":         (country in ("US", "USA") and state in MILITARY_STATES),
             "shipTo": {
                 "name":       ship_to.get("name", ""),
                 "street1":    ship_to.get("street1", ""),
@@ -9140,6 +9201,151 @@ def create_international_checkout():
         _intl_pending.pop(ref_id, None)
         return Response(json.dumps({"error": str(e)}),
                         status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/submit-apo-exchange", methods=["POST", "OPTIONS"])
+def submit_apo_exchange():
+    """APO/military exchange: same as international but no Stripe fee.
+    Payment Confirmed is set to True immediately."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    data = request.get_json() or {}
+
+    import uuid
+    ref_id = str(uuid.uuid4())
+
+    _intl_pending[ref_id] = {
+        "orderId":         data.get("orderId"),
+        "orderNumber":     data.get("orderNumber", ""),
+        "customerName":    data.get("customerName", ""),
+        "customerEmail":   data.get("customerEmail", ""),
+        "items":           data.get("items", []),
+        "deliveryAddress": data.get("deliveryAddress", {}),
+        "nextSuffix":      data.get("nextSuffix", "-E"),
+        "trackingNumber":  data.get("trackingNumber", ""),
+        "carrier":         data.get("carrier", ""),
+    }
+
+    # Clean up stale unpaid Airtable records for this order
+    try:
+        order_num_int = int(data.get("orderNumber", ""))
+        read_token  = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or RETURNS_WRITE_TOKEN
+        write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
+        search_resp = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{INT_EXCHANGE_TABLE_ID}",
+            params={
+                "filterByFormula": f"AND({{Order #}}={order_num_int}, NOT({{Payment Confirmed}}))",
+                "fields[]": ["Order #", "Payment Confirmed"],
+                "maxRecords": 10,
+            },
+            headers=at_headers(read_token),
+            timeout=10,
+        )
+        if search_resp.status_code == 200:
+            stale = search_resp.json().get("records", [])
+            for rec in stale:
+                req_lib.delete(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{INT_EXCHANGE_TABLE_ID}/{rec['id']}",
+                    headers=at_headers(write_token),
+                    timeout=10,
+                )
+    except Exception as cleanup_err:
+        print(f"[submit-apo-exchange] cleanup error (non-fatal): {cleanup_err}")
+
+    # Write Airtable record with Payment Confirmed = True immediately (no Stripe)
+    airtable_record_id = ""
+    try:
+        tracking_str = f"{data.get('trackingNumber', '')} ({data.get('carrier', '')})" if data.get('carrier') else data.get('trackingNumber', '')
+        items = data.get('items', [])
+        delivery_addr = data.get('deliveryAddress', {})
+        items_to_exchange = "\n".join(
+            f"{i.get('quantity', 1)}x {i.get('originalSku', '')} — {i.get('originalName', i.get('selectedName', ''))}"
+            for i in items
+        )
+        desired_items = "\n".join(
+            f"{i.get('quantity', 1)}x {i.get('selectedSku', '')} — {i.get('selectedName', '')}"
+            for i in items
+        )
+        delivery_str = (
+            f"{delivery_addr.get('name', '')}\n"
+            f"{delivery_addr.get('street1', '')}"
+            + (f"\n{delivery_addr['street2']}" if delivery_addr.get('street2') else "")
+            + f"\n{delivery_addr.get('city', '')}, {delivery_addr.get('state', '')} {delivery_addr.get('postalCode', '')}\n"
+            f"{delivery_addr.get('country', '')}"
+        )
+        from datetime import datetime as _dt
+        today_str = _dt.utcnow().strftime("%Y-%m-%d")
+        at_fields = {
+            "Customer Name":     data.get("customerName", ""),
+            "Customer Email":    data.get("customerEmail", ""),
+            "Items to Exchange": items_to_exchange,
+            "Desired Items":     desired_items,
+            "Delivery Address":  delivery_str,
+            "Return Tracking #": tracking_str,
+            "Stripe Payment ID": ref_id,
+            "Original Order ID": str(data.get("orderId", "")) if data.get("orderId") else "",
+            "Next Suffix":       data.get("nextSuffix", "-E"),
+            "Payment Confirmed": True,
+            "Date Submitted":    today_str,
+        }
+        try:
+            at_fields["Order #"] = int(data.get("orderNumber", ""))
+        except (ValueError, TypeError):
+            pass
+        write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
+        at_resp = req_lib.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{INT_EXCHANGE_TABLE_ID}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": at_fields},
+            timeout=15,
+        )
+        if at_resp.status_code in (200, 201):
+            airtable_record_id = at_resp.json().get("id", "")
+            _intl_pending[ref_id]["airtableRecordId"] = airtable_record_id
+            print(f"[submit-apo-exchange] Airtable record created: {airtable_record_id}")
+        else:
+            print(f"[submit-apo-exchange] Airtable write failed: {at_resp.status_code} {at_resp.text}")
+            return Response(json.dumps({"success": False, "error": "Failed to save exchange request"}),
+                            status=500, headers=c, mimetype="application/json")
+    except Exception as at_err:
+        import traceback
+        print(f"[submit-apo-exchange] Airtable error: {at_err}\n{traceback.format_exc()}")
+        return Response(json.dumps({"success": False, "error": str(at_err)}),
+                        status=500, headers=c, mimetype="application/json")
+
+    # Send confirmation email
+    try:
+        customer_email = data.get("customerEmail", "")
+        customer_name  = data.get("customerName", "")
+        order_number   = data.get("orderNumber", "")
+        if SENDGRID_API_KEY and customer_email:
+            first_name = customer_name.split()[0] if customer_name else "there"
+            email_body = (
+                f"Hi {first_name},\n\n"
+                f"We've received your size exchange request for order #{order_number}.\n\n"
+                f"We'll begin preparing your new belt(s) once we see movement on your shipment.\n\n"
+                f"Please allow 2-4 weeks for delivery.\n\n"
+                f"Questions? Reply to this email.\n\n"
+                f"— Blue Alpha"
+            )
+            req_lib.post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "personalizations": [{"to": [{"email": TEST_EMAIL_OVERRIDE or customer_email}]}],
+                    "from":    {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                    "reply_to": {"email": CS_FROM_EMAIL},
+                    "subject": f"Your Blue Alpha Size Exchange — Order #{order_number}",
+                    "content": [{"type": "text/plain", "value": email_body}],
+                },
+                timeout=15,
+            )
+    except Exception as email_err:
+        print(f"[submit-apo-exchange] Email error (non-fatal): {email_err}")
+
+    _intl_pending.pop(ref_id, None)
+    return Response(json.dumps({"success": True}), headers=c, mimetype="application/json")
 
 
 @app.route("/api/international-success", methods=["GET"])

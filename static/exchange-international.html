@@ -560,6 +560,7 @@ const API_BASE = '';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let verifyData    = null;   // response from verify-international-exchange
+let isApo         = false;  // true for US military APO/FPO addresses (AA/AE/AP)
 let selections    = [];     // [{originalSku, originalName, selectedSku, selectedName, quantity, parentProductId}]
 let deliveryAddr  = {};     // delivery address object
 let optionsCache  = {};     // parentProductId → options[]
@@ -696,6 +697,7 @@ async function verifyIntlExchange() {
 
     if (data.status === 'eligible') {
       verifyData = data;
+      isApo = data.isApo || false;
       buildStep3(data);  // pre-fetch options in background
       if (data.eligibleUntil) {
         document.getElementById('n-eligible-until').textContent = data.eligibleUntil;
@@ -911,14 +913,31 @@ function nGoStep5() {
     <p style="margin-top:12px;"><strong>New Belt(s):</strong></p>
     <ul style="margin:6px 0 12px 20px;">${beltLines}</ul>
     <p><strong>Ship To:</strong><br>${addrStr}</p>
-    <p style="margin-top:12px;"><strong>Fee:</strong> $10.00 USD (international shipping)</p>
+    ${!isApo ? '<p style="margin-top:12px;"><strong>Fee:</strong> $10.00 USD (international shipping)</p>' : ''}
   `;
+
+  // Update button and subtitle for APO
+  const payBtn = document.getElementById('n-btn-pay');
+  const step5Sub = document.querySelector('#new-step-5 .card-subtitle');
+  if (isApo) {
+    payBtn.textContent = 'Submit Exchange →';
+    payBtn.classList.remove('btn-stripe');
+    if (step5Sub) step5Sub.textContent = 'Confirm your exchange details below.';
+  } else {
+    payBtn.innerHTML = 'Pay $10 &amp; Submit →';
+    payBtn.classList.add('btn-stripe');
+    if (step5Sub) step5Sub.textContent = 'Confirm your exchange details and pay the $10 international shipping fee.';
+  }
 
   setNewStep(5);
 }
 
-// ── Stripe Checkout ───────────────────────────────────────────────────────────
+// ── Stripe Checkout / APO Submit ─────────────────────────────────────────────
 async function startCheckout() {
+  if (isApo) {
+    await submitApoExchange();
+    return;
+  }
   const btn = document.getElementById('n-btn-pay');
   hideMsg('n-msg-pay-error');
 
@@ -945,7 +964,7 @@ async function startCheckout() {
 
     if (data.url) {
       window.location.href = data.url;
-      return;  // navigation happening
+      return;
     } else {
       throw new Error(data.error || 'No checkout URL returned');
     }
@@ -955,6 +974,47 @@ async function startCheckout() {
 
   btn.disabled = false;
   btn.innerHTML = 'Pay $10 &amp; Submit →';
+}
+
+async function submitApoExchange() {
+  const btn = document.getElementById('n-btn-pay');
+  hideMsg('n-msg-pay-error');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Submitting…';
+
+  try {
+    const res = await fetch(API_BASE + '/api/submit-apo-exchange', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        orderId:         verifyData.orderId,
+        orderNumber:     verifyData.orderNumber,
+        customerName:    verifyData.customerName,
+        customerEmail:   verifyData.customerEmail,
+        nextSuffix:      verifyData.nextSuffix || '-E',
+        items:           selections,
+        deliveryAddress: deliveryAddr,
+        trackingNumber:  returnTracking.number,
+        carrier:         returnTracking.carrier,
+      }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById('screen-success').classList.remove('hidden');
+      document.getElementById('new-progress').classList.add('hidden');
+      [1,2,3,4,5].forEach(i => {
+        const el = document.getElementById('new-step-' + i);
+        if (el) el.classList.add('hidden');
+      });
+      window.scrollTo({top: 0, behavior: 'smooth'});
+    } else {
+      throw new Error(data.error || 'Submission failed');
+    }
+  } catch(e) {
+    showMsg('n-msg-pay-error');
+    btn.disabled = false;
+    btn.textContent = 'Submit Exchange →';
+  }
 }
 
 // ── Enter key support ─────────────────────────────────────────────────────────
