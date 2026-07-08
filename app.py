@@ -11385,7 +11385,7 @@ def admin_invoices():
                     "Stripe Invoice Status (CC)", "Stripe Invoice Status (ACH)",
                     "Stripe Invoice URL (CC)", "Stripe Invoice Due Date",
                     "Bill-To Contact Email (from Customer)", "Bill-To Contact Name (from Customer)",
-                    "Bill-To Org Name (from Customer)"],
+                    "Bill-To Org Name (from Customer)", "Overdue Notice Dates"],
             formula='{Order Type}="Invoice"',
         )
 
@@ -11462,8 +11462,9 @@ def admin_invoices():
                 "check_number":  check_number,
                 "check_date":    check_date,
                 "check_amount":  check_amount,
-                "has_stripe":    bool(f.get("Stripe Invoice URL (CC)", "")),
-                "billing_email": bill_email_raw[0] if isinstance(bill_email_raw, list) and bill_email_raw else (bill_email_raw or ""),
+                "has_stripe":           bool(f.get("Stripe Invoice URL (CC)", "")),
+                "billing_email":        bill_email_raw[0] if isinstance(bill_email_raw, list) and bill_email_raw else (bill_email_raw or ""),
+                "overdue_notice_dates": (f.get("Overdue Notice Dates") or "").strip(),
             })
 
         invoices.sort(key=lambda x: x.get("date", ""), reverse=True)
@@ -11683,6 +11684,201 @@ def admin_resend_invoice(record_id):
         return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/invoices/<record_id>/overdue-notice", methods=["POST", "OPTIONS"])
+def admin_send_overdue_notice(record_id):
+    """Send an overdue notice email and log the date to Airtable."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        write_token = RETURNS_WRITE_TOKEN
+
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": "Invoice not found"}), status=404, headers=c, mimetype="application/json")
+        fields = r.json().get("fields", {})
+        if fields.get("Order Type") != "Invoice":
+            return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
+
+        def _first(lst):
+            return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
+        order_id   = str(fields.get("Order ID", "")).strip()
+        inv_number = fields.get("Document ID", f"IN-{order_id}")
+        due_date_str = fields.get("Stripe Invoice Due Date", "") or ""
+        cc_url  = fields.get("Stripe Invoice URL (CC)", "")
+        ach_url = fields.get("Stripe Invoice URL (ACH)", "")
+        po_number = fields.get("Purchase Order #", "") or ""
+
+        # Calculate days overdue
+        days_overdue = 0
+        if due_date_str:
+            try:
+                from datetime import date as _date
+                due = _date.fromisoformat(due_date_str[:10])
+                days_overdue = (_today_utc() - due).days
+            except Exception:
+                pass
+
+        # Billing info
+        to_email  = _first(fields.get("Bill-To Contact Email (from Customer)", []))
+        to_name   = _first(fields.get("Bill-To Contact Name (from Customer)", []))
+        org_name  = _first(fields.get("Bill-To Org Name (from Customer)", [])) or \
+                    _first(fields.get("Snapshot Org", ""))
+
+        # Allow caller to override destination email
+        body = request.get_json(silent=True) or {}
+        override_email = (body.get("email") or "").strip()
+        if override_email:
+            to_email = override_email
+
+        if not to_email:
+            return Response(json.dumps({"error": "No billing email on record"}), status=400, headers=c, mimetype="application/json")
+
+        # Fetch line items for total
+        li_ids = fields.get("MO Line Items", [])
+        line_items = []
+        for li_id in li_ids:
+            lr = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+                headers=at_headers(read_token), timeout=10,
+            )
+            if lr.ok:
+                lf = lr.json().get("fields", {})
+                price = float(lf.get("Confirmed Unit Price") or 0)
+                qty   = lf.get("Qty.", 0)
+                pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
+                        _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
+                line_items.append({"name": pname, "qty": qty, "unit_price": price})
+        total = round(sum(li["qty"] * li["unit_price"] for li in line_items), 2)
+
+        # Send overdue notice email
+        _send_overdue_notice_email(
+            to_email=to_email, to_name=to_name, org_name=org_name,
+            inv_number=inv_number, po_number=po_number,
+            total=total, days_overdue=days_overdue, due_date_str=due_date_str,
+            cc_url=cc_url, ach_url=ach_url,
+        )
+
+        # Append today's date to Overdue Notice Dates field
+        today_iso = _today_utc().strftime("%Y-%m-%d")
+        existing_dates = (fields.get("Overdue Notice Dates") or "").strip()
+        new_dates = (existing_dates + "\n" + today_iso).strip() if existing_dates else today_iso
+        req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {"Overdue Notice Dates": new_dates}},
+            timeout=15,
+        )
+
+        _INVOICES_CACHE.clear()
+        return Response(json.dumps({"ok": True, "days_overdue": days_overdue}), headers=c, mimetype="application/json")
+    except Exception as e:
+        print(f"[overdue-notice] error for {record_id}: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_number,
+                                total, days_overdue, due_date_str, cc_url, ach_url):
+    """Send an overdue invoice notice email via SendGrid."""
+    if not SENDGRID_API_KEY:
+        return
+    if TEST_EMAIL_OVERRIDE:
+        to_list = [{"email": TEST_EMAIL_OVERRIDE, "name": to_name}]
+    else:
+        raw_emails = [e.strip() for e in to_email.replace(",", ";").split(";") if e.strip()]
+        to_list = [{"email": e, "name": to_name} for e in raw_emails] if raw_emails else []
+    if not to_list:
+        return
+
+    first_name = to_name.split()[0] if to_name else "there"
+    subject = f"OVERDUE: Blue Alpha Invoice {inv_number}"
+
+    # Format due date for display
+    due_display = ""
+    if due_date_str:
+        try:
+            from datetime import date as _date
+            due_display = _date.fromisoformat(due_date_str[:10]).strftime("%B %d, %Y")
+        except Exception:
+            due_display = due_date_str
+
+    overdue_phrase = f"{days_overdue} day{'s' if days_overdue != 1 else ''} past due" if days_overdue > 0 else "past due"
+
+    po_row = f'<tr><td style="padding:6px 0;color:#555;font-size:13px;">PO Number</td><td style="padding:6px 0;color:#1a2633;font-size:13px;font-weight:600;">{po_number}</td></tr>' if po_number else ""
+    due_row = f'<tr><td style="padding:6px 0;color:#555;font-size:13px;">Due Date</td><td style="padding:6px 0;color:#c0392b;font-size:13px;font-weight:600;">{due_display}</td></tr>' if due_display else ""
+
+    payment_buttons = ""
+    if cc_url:
+        payment_buttons += f'<a href="{cc_url}" style="display:inline-block;margin:6px 8px 6px 0;padding:12px 28px;background:#1B2438;color:#ffffff;text-decoration:none;border-radius:5px;font-size:14px;font-weight:700;">Pay by Credit Card</a>'
+    if ach_url:
+        payment_buttons += f'<a href="{ach_url}" style="display:inline-block;margin:6px 0;padding:12px 28px;background:#5B7FA0;color:#ffffff;text-decoration:none;border-radius:5px;font-size:14px;font-weight:700;">Pay by ACH / Bank Transfer</a>'
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#7B2318;padding:28px 40px;">
+          <span style="font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:800;color:#ffffff;letter-spacing:2px;">BLUE ALPHA</span>
+          <span style="display:block;font-size:12px;color:#f0c0bb;margin-top:4px;letter-spacing:1px;">OVERDUE INVOICE NOTICE</span>
+        </td></tr>
+        <tr><td style="padding:32px 40px 16px;">
+          <p style="margin:0 0 16px;font-size:16px;color:#1a2633;">Hi {first_name},</p>
+          <p style="margin:0 0 20px;font-size:15px;color:#333;line-height:1.6;">
+            This is a reminder that the following invoice is <strong style="color:#c0392b;">{overdue_phrase}</strong>.
+            Please remit payment at your earliest convenience.
+          </p>
+          <table cellpadding="0" cellspacing="0" style="width:100%;margin-bottom:24px;">
+            <tr><td style="padding:6px 0;color:#555;font-size:13px;">Invoice</td><td style="padding:6px 0;color:#1a2633;font-size:13px;font-weight:600;">{inv_number}</td></tr>
+            {po_row}
+            {due_row}
+            <tr><td style="padding:6px 0;color:#555;font-size:13px;">Amount Due</td><td style="padding:6px 0;color:#c0392b;font-size:15px;font-weight:700;">${total:,.2f}</td></tr>
+          </table>
+          {'<p style="margin:0 0 16px;font-size:14px;color:#333;">Pay online using one of the links below:</p>' + '<div style="margin-bottom:24px;">' + payment_buttons + '</div>' if payment_buttons else ''}
+          <p style="margin:0 0 20px;font-size:14px;color:#555;line-height:1.6;">
+            If you have already submitted payment, please disregard this notice.
+            If you have any questions, reply to this email or contact us at
+            <a href="mailto:orders@bluealpha.us" style="color:#1B2438;">orders@bluealpha.us</a>.
+          </p>
+          <p style="margin:0;font-size:14px;color:#555;">Thank you,<br><strong style="color:#1a2633;">Blue Alpha</strong></p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;padding:16px 40px;text-align:center;">
+          <span style="font-size:11px;color:#999;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us</span>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+    plain = f"Hi {first_name},\n\nThis is a reminder that invoice {inv_number} is {overdue_phrase}.\n\nAmount Due: ${total:,.2f}\n" + (f"Due Date: {due_display}\n" if due_display else "") + (f"PO Number: {po_number}\n" if po_number else "") + ("\nPay by Credit Card: " + cc_url if cc_url else "") + ("\nPay by ACH: " + ach_url if ach_url else "") + "\n\nIf you have already submitted payment, please disregard this notice.\n\nThank you,\nBlue Alpha"
+
+    payload = {
+        "personalizations": [{"to": to_list}],
+        "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+        "subject": subject,
+        "content": [
+            {"type": "text/plain", "value": plain},
+            {"type": "text/html",  "value": html_body},
+        ],
+    }
+    req_lib.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+        json=payload, timeout=15,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

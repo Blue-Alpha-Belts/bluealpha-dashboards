@@ -499,6 +499,22 @@
     </div>
   </div>
 
+  <!-- Overdue Notice Modal -->
+  <div class="modal-overlay" id="overdueNoticeModal">
+    <div class="modal">
+      <h3>Send Overdue Notice</h3>
+      <p id="overdueNoticeLabel" style="margin:0 0 14px;color:var(--muted);font-size:0.9rem;"></p>
+      <label>Send To</label>
+      <input type="email" id="overdueEmailInput" placeholder="billing@example.com"
+             style="width:100%;box-sizing:border-box;" autocomplete="off">
+      <div id="overdueMsg"></div>
+      <div class="modal-btns" style="margin-top:14px;">
+        <button class="btn btn-outline" onclick="closeOverdueModal()">Cancel</button>
+        <button class="btn btn-primary" id="overdueSubmitBtn" onclick="submitOverdueNotice()" style="background:#7B2318;border-color:#7B2318;">Send Notice</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="markPaidModal">
     <div class="modal">
       <h3>Mark Paid by Check</h3>
@@ -1295,17 +1311,18 @@
         return;
       }
       let html = '<div class="card"><table style="width:100%;table-layout:fixed;"><colgroup>'
-        + '<col style="width:115px">'   // Invoice #
-        + '<col style="width:280px">'   // Customer
-        + '<col style="width:115px">'   // Date
-        + '<col style="width:110px">'   // Total
-        + '<col style="width:90px">'    // Status
-        + '<col style="width:90px">'    // PDF
-        + '<col style="width:155px">'   // Payment
-        + '<col style="width:135px">'   // Resend
-        + '<col style="width:140px">'   // Stripe
+        + '<col style="width:105px">'   // Invoice #
+        + '<col style="width:220px">'   // Customer
+        + '<col style="width:100px">'   // Date
+        + '<col style="width:95px">'    // Total
+        + '<col style="width:80px">'    // Status
+        + '<col style="width:75px">'    // PDF
+        + '<col style="width:140px">'   // Payment
+        + '<col style="width:120px">'   // Resend
+        + '<col style="width:130px">'   // Overdue
+        + '<col style="width:130px">'   // Stripe
         + '</colgroup><thead><tr>'
-        + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Payment</th><th>Resend</th><th>Stripe</th>'
+        + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Payment</th><th>Resend</th><th>Overdue Notices</th><th>Stripe</th>'
         + '</tr></thead><tbody>';
       invoices.forEach(inv => {
         const statusBadge = inv.is_paid
@@ -1318,6 +1335,14 @@
           : `<button class="btn btn-outline btn-sm" ${_btn} onclick="openMarkPaidModal('${esc(inv.record_id)}')">Mark Paid</button>`;
 
         const resendCell = `<button class="btn btn-outline btn-sm" ${_btn} onclick="openResendModal('${esc(inv.record_id)}','${esc(inv.inv_number)}','${esc(inv.billing_email||'')}')">📧 Resend</button>`;
+
+        // Overdue notices column: show past dates + send button (unpaid only)
+        const noticeDates = (inv.overdue_notice_dates || '').trim();
+        const noticeDateLines = noticeDates ? noticeDates.split('\n').filter(d => d.trim()).map(d => `<div style="font-size:0.78rem;color:var(--muted);white-space:nowrap;">${esc(d.trim())}</div>`).join('') : '';
+        const overdueBtn = !inv.is_paid
+          ? `<button class="btn btn-outline btn-sm" ${_btn} style="padding:5px 10px;font-size:0.78rem;white-space:nowrap;color:#7B2318;border-color:#7B2318;" onclick="openOverdueModal('${esc(inv.record_id)}','${esc(inv.inv_number)}','${esc(inv.billing_email||'')}')">⚠ Notice</button>`
+          : '';
+        const overdueCell = `<div>${noticeDateLines}${overdueBtn}</div>`;
 
         const stripeCell = inv.has_stripe
           ? '<span style="color:#155724;font-size:0.82rem;">✓ Created</span>'
@@ -1334,6 +1359,7 @@
           <td>${pdfCell}</td>
           <td>${paymentCell}</td>
           <td>${resendCell}</td>
+          <td>${overdueCell}</td>
           <td>${stripeCell}</td>
         </tr>`;
       });
@@ -1408,6 +1434,60 @@
         msgEl.innerHTML = '<div class="alert alert-error" style="margin-top:10px;">Network error. Please try again.</div>';
         btn.disabled = false;
         btn.textContent = 'Send';
+      }
+    }
+
+    // ── Overdue Notice Modal ──────────────────────────────────────────────────
+    let _overdueRecordId = null;
+
+    function openOverdueModal(recordId, invNumber, billingEmail) {
+      _overdueRecordId = recordId;
+      document.getElementById('overdueNoticeLabel').textContent = `Invoice: ${invNumber}`;
+      document.getElementById('overdueEmailInput').value = billingEmail || '';
+      document.getElementById('overdueMsg').innerHTML = '';
+      const btn = document.getElementById('overdueSubmitBtn');
+      btn.disabled = false;
+      btn.textContent = 'Send Notice';
+      document.getElementById('overdueNoticeModal').classList.add('show');
+    }
+
+    function closeOverdueModal() {
+      _overdueRecordId = null;
+      document.getElementById('overdueNoticeModal').classList.remove('show');
+    }
+
+    async function submitOverdueNotice() {
+      const email = document.getElementById('overdueEmailInput').value.trim();
+      const msgEl = document.getElementById('overdueMsg');
+      msgEl.innerHTML = '';
+      if (!email) {
+        msgEl.innerHTML = '<div class="alert alert-error" style="margin-top:10px;">Email address is required.</div>';
+        return;
+      }
+      const btn = document.getElementById('overdueSubmitBtn');
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        const resp = await fetch(`/api/admin/invoices/${_overdueRecordId}/overdue-notice`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await resp.json();
+        if (resp.ok && data.ok) {
+          const days = data.days_overdue > 0 ? ` (${data.days_overdue} days past due)` : '';
+          msgEl.innerHTML = `<div class="alert alert-success" style="margin-top:10px;">✓ Overdue notice sent${days}!</div>`;
+          btn.textContent = '✓ Sent';
+          setTimeout(() => { closeOverdueModal(); invoicesLoaded = false; loadInvoices(); }, 1800);
+        } else {
+          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${data.error || 'Failed to send.'}</div>`;
+          btn.disabled = false;
+          btn.textContent = 'Send Notice';
+        }
+      } catch (e) {
+        msgEl.innerHTML = '<div class="alert alert-error" style="margin-top:10px;">Network error. Please try again.</div>';
+        btn.disabled = false;
+        btn.textContent = 'Send Notice';
       }
     }
 
