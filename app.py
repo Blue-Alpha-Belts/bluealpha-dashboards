@@ -10442,10 +10442,15 @@ def portal_admin_convert_to_invoice(user, record_id):
             except Exception as email_err:
                 print(f"[convert-to-invoice] email failed: {email_err}")
 
-        # NOTE: Stripe invoice creation is handled exclusively by the Airtable
-        # automation "Stripe Dual Invoice Generator" (Script 1). Do NOT create
-        # Stripe invoices here — doing so creates duplicates that break the
-        # Airtable webhook status sync (Script 2).
+        # Create Stripe CC + ACH invoices inline (Airtable automation replaced by this)
+        if bill_email:
+            try:
+                _create_stripe_invoices_for_record(
+                    write_token, inv_record_id, bill_email, bill_name, org_name, li_items_for_email
+                )
+            except Exception as stripe_err:
+                print(f"[convert-to-invoice] Stripe invoice creation failed for {inv_number}: {stripe_err}")
+                # Non-fatal: invoice record exists, Stripe links can be created manually
 
         # Clear orders cache
         _ORDERS_CACHE.clear()
@@ -11010,10 +11015,15 @@ def admin_convert_to_invoice(record_id):
             except Exception as email_err:
                 print(f"[convert-to-invoice] email failed: {email_err}")
 
-        # NOTE: Stripe invoice creation is handled exclusively by the Airtable
-        # automation "Stripe Dual Invoice Generator" (Script 1). Do NOT create
-        # Stripe invoices here — doing so creates duplicates that break the
-        # Airtable webhook status sync (Script 2).
+        # Create Stripe CC + ACH invoices inline (Airtable automation replaced by this)
+        if bill_email:
+            try:
+                _create_stripe_invoices_for_record(
+                    write_token, inv_record_id, bill_email, bill_name, org_name, li_items_for_email
+                )
+            except Exception as stripe_err:
+                print(f"[convert-to-invoice] Stripe invoice creation failed for {inv_number}: {stripe_err}")
+                # Non-fatal: invoice record exists, Stripe links can be created manually
 
         _ORDERS_CACHE.clear()
         _INVOICES_CACHE.clear()
