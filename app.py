@@ -11446,6 +11446,9 @@ def admin_invoices():
             if not snapshot_org:
                 linked_custs = f.get("Customer", [])
                 snapshot_org = cust_name_map.get(linked_custs[0], "") if linked_custs else ""
+            if not snapshot_org:
+                bill_to_org_raw = f.get("Bill-To Org Name (from Customer)", [])
+                snapshot_org = (bill_to_org_raw[0] if isinstance(bill_to_org_raw, list) and bill_to_org_raw else bill_to_org_raw) or ""
             bill_email_raw = f.get("Bill-To Contact Email (from Customer)", [])
             invoices.append({
                 "record_id":     rec["id"],
