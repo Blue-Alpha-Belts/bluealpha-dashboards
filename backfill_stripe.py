@@ -37,20 +37,15 @@ def at_get_all(table, fields=None, formula=None):
         if not offset: break
     return records
 
-def get_or_create_stripe_customer(email, name, org):
-    # Search existing
-    r = requests.get("https://api.stripe.com/v1/customers",
-                     auth=SS_AUTH, params={"email": email, "limit": 1}, timeout=15)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("data"):
-        cust_id = data["data"][0]["id"]
-        print(f"  → Existing Stripe customer: {cust_id}")
-        return cust_id
-    # Create new
+def create_stripe_customer(email, name, org):
+    """Always create a fresh Stripe customer (matches Flask app behavior)."""
+    # Stripe only accepts a single email — take first if semicolon/comma-separated
+    stripe_email = email.replace(",", ";").split(";")[0].strip()
     r = requests.post("https://api.stripe.com/v1/customers",
                       auth=SS_AUTH,
-                      data={"email": email, "name": org or name or email},
+                      data={"email": stripe_email,
+                            "name": org or name or stripe_email,
+                            "description": name or ""},
                       timeout=15)
     r.raise_for_status()
     cust_id = r.json()["id"]
@@ -59,34 +54,37 @@ def get_or_create_stripe_customer(email, name, org):
 
 def create_stripe_invoice(cust_id, li_items, method):
     """Create and finalize a Stripe invoice for 'card' or 'us_bank_account'."""
-    # Add line items
     inv_r = requests.post("https://api.stripe.com/v1/invoices",
                           auth=SS_AUTH,
                           data={
                               "customer": cust_id,
                               "collection_method": "send_invoice",
-                              "days_until_due": 30,
-                              "payment_settings[payment_method_types][]": method,
+                              "days_until_due": "30",
+                              "payment_settings[payment_method_types][0]": method,
                           }, timeout=15)
-    inv_r.raise_for_status()
+    if not inv_r.ok:
+        raise Exception(f"Invoice create failed ({method}): {inv_r.status_code} {inv_r.text[:300]}")
     inv_id = inv_r.json()["id"]
 
     for item in li_items:
-        price_cents = int(round(item["unit_price"] * 100))
-        requests.post("https://api.stripe.com/v1/invoiceitems",
-                      auth=SS_AUTH,
-                      data={
-                          "customer": cust_id,
-                          "invoice": inv_id,
-                          "description": item["name"],
-                          "quantity": str(item["qty"]),
-                          "unit_amount": str(price_cents),
-                          "currency": "usd",
-                      }, timeout=15).raise_for_status()
+        unit_cents_decimal = str(round(float(item["unit_price"]) * 100, 4))
+        ii_r = requests.post("https://api.stripe.com/v1/invoiceitems",
+                             auth=SS_AUTH,
+                             data={
+                                 "customer": cust_id,
+                                 "invoice": inv_id,
+                                 "description": item["name"],
+                                 "quantity": str(int(item["qty"])),
+                                 "unit_amount_decimal": unit_cents_decimal,
+                                 "currency": "usd",
+                             }, timeout=15)
+        if not ii_r.ok:
+            print(f"  ⚠ Line item warn: {ii_r.status_code} {ii_r.text[:200]}")
 
     fin_r = requests.post(f"https://api.stripe.com/v1/invoices/{inv_id}/finalize",
                           auth=SS_AUTH, data={}, timeout=15)
-    fin_r.raise_for_status()
+    if not fin_r.ok:
+        raise Exception(f"Finalize failed ({method}): {fin_r.status_code} {fin_r.text[:300]}")
     url = fin_r.json().get("hosted_invoice_url", "")
     return inv_id, url
 
@@ -123,21 +121,18 @@ def main():
             print(f"  ⚠ No billing email, skipping.")
             continue
 
-        # Fetch line items
+        # Fetch line items (no fields filter — Airtable 422s on fields[] for single-record GETs)
         li_items = []
         for li_id in li_ids:
             lr = requests.get(f"https://api.airtable.com/v0/{BASE_ID}/{LI_TABLE}/{li_id}",
-                              headers=AT_HEADERS,
-                              params={"fields[]": ["Confirmed Unit Price", "Qty.",
-                                                   "Product Name (from Product SKU)"]},
-                              timeout=10)
+                              headers=AT_HEADERS, timeout=10)
             if not lr.ok:
-                print(f"  ⚠ Could not fetch line item {li_id}")
+                print(f"  ⚠ Could not fetch line item {li_id}: {lr.status_code}")
                 continue
             lf = lr.json().get("fields", {})
             price = float(lf.get("Confirmed Unit Price") or 0)
             qty   = int(lf.get("Qty.") or 0)
-            pname_raw = lf.get("Product Name (from Product SKU)", [])
+            pname_raw = lf.get("Name + Variations (from Product SKU)") or lf.get("Product Name (from Product SKU)", [])
             pname = pname_raw[0] if isinstance(pname_raw, list) and pname_raw else str(pname_raw or "Item")
             if price > 0 and qty > 0:
                 li_items.append({"name": pname, "qty": qty, "unit_price": price})
@@ -147,7 +142,7 @@ def main():
             continue
 
         try:
-            cust_id = get_or_create_stripe_customer(email, name, org)
+            cust_id = create_stripe_customer(email, name, org)
 
             cc_id,  cc_url  = create_stripe_invoice(cust_id, li_items, "card")
             ach_id, ach_url = create_stripe_invoice(cust_id, li_items, "us_bank_account")
