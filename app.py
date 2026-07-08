@@ -11846,7 +11846,7 @@ def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_numbe
             {due_row}
             <tr><td style="padding:6px 0;color:#555;font-size:13px;">Amount Due</td><td style="padding:6px 0;color:#c0392b;font-size:15px;font-weight:700;">${total:,.2f}</td></tr>
           </table>
-          {'<p style="margin:0 0 16px;font-size:14px;color:#333;">Pay online using one of the links below:</p>' + '<div style="margin-bottom:24px;">' + payment_buttons + '</div>' if payment_buttons else ''}
+          {'<p style="margin:0 0 16px;font-size:14px;color:#333;">View your invoice and pay online using one of the links below:</p>' + '<div style="margin-bottom:24px;">' + payment_buttons + '</div>' if payment_buttons else ''}
           <p style="margin:0 0 20px;font-size:14px;color:#555;line-height:1.6;">
             If you have already submitted payment, please disregard this notice.
             If you have any questions, reply to this email or contact us at
