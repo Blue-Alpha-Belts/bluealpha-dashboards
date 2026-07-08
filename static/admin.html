@@ -360,7 +360,7 @@
       <div class="tab-panel" id="tab-shipped">
         <div class="card" style="padding:24px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;">
-            <input id="shippedSearch" type="text" placeholder="Search SO #…" oninput="filterShippedOrders()" style="padding:6px 12px;border:1px solid #ccc;border-radius:6px;font-size:0.85rem;width:180px;outline:none;">
+            <input id="shippedSearch" type="text" placeholder="Search SO # or organization…" oninput="filterShippedOrders()" style="padding:6px 12px;border:1px solid #ccc;border-radius:6px;font-size:0.85rem;width:260px;outline:none;">
             <span style="font-size:0.85rem;color:#777;flex:1;">Shipping info syncs nightly at 6 PM ET.</span>
             <button id="syncTrackingBtn" onclick="triggerTrackingSync()" style="padding:6px 14px;border:1px solid #1B2438;border-radius:6px;background:#fff;color:#1B2438;font-size:0.82rem;font-weight:600;cursor:pointer;">🔄 Sync Now</button>
           </div>
@@ -1032,9 +1032,10 @@
       const q = (document.getElementById('shippedSearch').value || '').trim().toLowerCase();
       const rows = document.querySelectorAll('#shippedContent table tbody tr');
       rows.forEach(row => {
-        const soCell = row.querySelector('td:first-child');
-        const text = soCell ? soCell.textContent.trim().toLowerCase() : '';
-        row.style.display = (!q || text.includes(q)) ? '' : 'none';
+        const cells = row.querySelectorAll('td');
+        const soText  = cells[0] ? cells[0].textContent.trim().toLowerCase() : '';
+        const orgText = cells[2] ? cells[2].textContent.trim().toLowerCase() : '';
+        row.style.display = (!q || soText.includes(q) || orgText.includes(q)) ? '' : 'none';
       });
     }
 
