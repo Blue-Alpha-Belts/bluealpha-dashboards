@@ -373,11 +373,15 @@
         <div style="margin-bottom:10px;">
           <input type="text" id="invoiceSearch" placeholder="Search customer or invoice #…" oninput="applyInvoiceFilters()" style="max-width:320px;margin-bottom:0;">
         </div>
-        <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <button class="filter-btn active" onclick="filterInvoices(this,'all')">All</button>
           <button class="filter-btn" onclick="filterInvoices(this,'unpaid')">Unpaid</button>
           <button class="filter-btn" onclick="filterInvoices(this,'paid')">Paid</button>
           <button class="filter-btn" onclick="filterInvoices(this,'pastdue')">Past Due</button>
+          <div id="bulkOverdueBar" style="display:none;margin-left:12px;display:none;align-items:center;gap:8px;">
+            <span id="bulkOverdueCount" style="font-size:0.88rem;color:#555;"></span>
+            <button id="bulkOverdueBtn" class="btn btn-primary" style="padding:6px 16px;font-size:0.85rem;background:#7B2318;border-color:#7B2318;" onclick="openBulkOverdueModal()">⚠ Send Overdue Notices</button>
+          </div>
         </div>
         <div id="invoicesContent"><div class="loading">Loading…</div></div>
       </div>
@@ -495,6 +499,20 @@
       <div class="modal-btns" style="margin-top:14px;">
         <button class="btn btn-outline" onclick="closeResendModal()">Cancel</button>
         <button class="btn btn-primary" id="resendSubmitBtn" onclick="submitResend()">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bulk Overdue Notice Modal -->
+  <div class="modal-overlay" id="bulkOverdueModal">
+    <div class="modal" style="max-width:540px;">
+      <h3>Send Overdue Notices</h3>
+      <p style="margin:0 0 12px;font-size:0.9rem;color:var(--muted);">The following invoices will be notified using the billing email on file. Uncheck any you want to skip.</p>
+      <div id="bulkOverdueList" style="max-height:320px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:14px;"></div>
+      <div id="bulkOverdueMsg"></div>
+      <div class="modal-btns" style="margin-top:14px;">
+        <button class="btn btn-outline" onclick="closeBulkOverdueModal()">Cancel</button>
+        <button class="btn btn-primary" id="bulkOverdueSubmitBtn" style="background:#7B2318;border-color:#7B2318;" onclick="submitBulkOverdue()">Send All</button>
       </div>
     </div>
   </div>
@@ -1312,17 +1330,19 @@
         return;
       }
       let html = '<div class="card"><table style="width:100%;table-layout:fixed;"><colgroup>'
-        + '<col style="width:105px">'   // Invoice #
-        + '<col style="width:220px">'   // Customer
-        + '<col style="width:100px">'   // Date
-        + '<col style="width:95px">'    // Total
-        + '<col style="width:80px">'    // Status
-        + '<col style="width:75px">'    // PDF
-        + '<col style="width:140px">'   // Payment
-        + '<col style="width:120px">'   // Resend
-        + '<col style="width:130px">'   // Overdue
-        + '<col style="width:130px">'   // Stripe
+        + '<col style="width:36px">'    // Checkbox
+        + '<col style="width:100px">'   // Invoice #
+        + '<col style="width:200px">'   // Customer
+        + '<col style="width:95px">'    // Date
+        + '<col style="width:90px">'    // Total
+        + '<col style="width:75px">'    // Status
+        + '<col style="width:70px">'    // PDF
+        + '<col style="width:130px">'   // Payment
+        + '<col style="width:115px">'   // Resend
+        + '<col style="width:125px">'   // Overdue
+        + '<col style="width:120px">'   // Stripe
         + '</colgroup><thead><tr>'
+        + '<th><input type="checkbox" id="selectAllOverdue" title="Select all unpaid" onchange="toggleSelectAllOverdue(this)"></th>'
         + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Payment</th><th>Resend</th><th>Overdue Notices</th><th>Stripe</th>'
         + '</tr></thead><tbody>';
       invoices.forEach(inv => {
@@ -1351,7 +1371,12 @@
 
         const pdfCell = `<a href="/invoice-pdf/${esc(inv.record_id)}" target="_blank" class="btn btn-outline btn-sm" ${_btn}>📄 PDF</a>`;
 
+        const checkboxCell = !inv.is_paid
+          ? `<td style="text-align:center;"><input type="checkbox" class="overdue-select" data-id="${esc(inv.record_id)}" data-inv="${esc(inv.inv_number)}" data-email="${esc(inv.billing_email||'')}" data-customer="${esc(inv.customer_name||'')}" onchange="updateBulkBar()"></td>`
+          : `<td></td>`;
+
         html += `<tr>
+          ${checkboxCell}
           <td><strong>${esc(inv.inv_number)}</strong></td>
           <td>${esc(inv.customer_name)}</td>
           <td style="white-space:nowrap;">${fmt(inv.date)}</td>
@@ -1366,6 +1391,27 @@
       });
       html += '</tbody></table></div>';
       el.innerHTML = html;
+    }
+
+    function toggleSelectAllOverdue(master) {
+      document.querySelectorAll('.overdue-select').forEach(cb => cb.checked = master.checked);
+      updateBulkBar();
+    }
+
+    function updateBulkBar() {
+      const checked = document.querySelectorAll('.overdue-select:checked');
+      const bar = document.getElementById('bulkOverdueBar');
+      const count = document.getElementById('bulkOverdueCount');
+      if (checked.length > 0) {
+        bar.style.display = 'flex';
+        count.textContent = `${checked.length} selected`;
+      } else {
+        bar.style.display = 'none';
+      }
+      // Sync master checkbox state
+      const all = document.querySelectorAll('.overdue-select');
+      const master = document.getElementById('selectAllOverdue');
+      if (master) master.checked = all.length > 0 && checked.length === all.length;
     }
 
     function openMarkPaidModal(recordId) {
@@ -1435,6 +1481,93 @@
         msgEl.innerHTML = '<div class="alert alert-error" style="margin-top:10px;">Network error. Please try again.</div>';
         btn.disabled = false;
         btn.textContent = 'Send';
+      }
+    }
+
+    // ── Bulk Overdue Notices ──────────────────────────────────────────────────
+    let _bulkOverdueItems = [];
+
+    function openBulkOverdueModal() {
+      const checked = document.querySelectorAll('.overdue-select:checked');
+      _bulkOverdueItems = Array.from(checked).map(cb => ({
+        record_id: cb.dataset.id,
+        inv_number: cb.dataset.inv,
+        email: cb.dataset.email,
+        customer: cb.dataset.customer,
+      }));
+      if (!_bulkOverdueItems.length) return;
+
+      const listEl = document.getElementById('bulkOverdueList');
+      listEl.innerHTML = _bulkOverdueItems.map((item, i) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #eee;">
+          <input type="checkbox" id="bulk_cb_${i}" checked onchange="syncBulkList()">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:0.88rem;font-weight:600;color:#1a2633;">${esc(item.inv_number)} — ${esc(item.customer)}</div>
+            <input type="email" value="${esc(item.email)}" id="bulk_email_${i}"
+              style="width:100%;box-sizing:border-box;font-size:0.82rem;padding:3px 6px;margin-top:3px;border:1px solid #ccc;border-radius:4px;">
+          </div>
+        </div>`).join('');
+
+      document.getElementById('bulkOverdueMsg').innerHTML = '';
+      const btn = document.getElementById('bulkOverdueSubmitBtn');
+      btn.disabled = false;
+      btn.textContent = `Send All (${_bulkOverdueItems.length})`;
+      document.getElementById('bulkOverdueModal').classList.add('show');
+    }
+
+    function syncBulkList() {
+      const active = _bulkOverdueItems.filter((_, i) => {
+        const cb = document.getElementById(`bulk_cb_${i}`);
+        return cb && cb.checked;
+      });
+      const btn = document.getElementById('bulkOverdueSubmitBtn');
+      btn.textContent = `Send All (${active.length})`;
+      btn.disabled = active.length === 0;
+    }
+
+    function closeBulkOverdueModal() {
+      document.getElementById('bulkOverdueModal').classList.remove('show');
+      _bulkOverdueItems = [];
+    }
+
+    async function submitBulkOverdue() {
+      const btn = document.getElementById('bulkOverdueSubmitBtn');
+      const msgEl = document.getElementById('bulkOverdueMsg');
+
+      // Collect active items with their (possibly edited) emails
+      const toSend = _bulkOverdueItems
+        .map((item, i) => {
+          const cb = document.getElementById(`bulk_cb_${i}`);
+          const emailInput = document.getElementById(`bulk_email_${i}`);
+          return cb && cb.checked ? { ...item, email: (emailInput ? emailInput.value.trim() : item.email) } : null;
+        })
+        .filter(Boolean);
+
+      if (!toSend.length) return;
+      btn.disabled = true;
+
+      let sent = 0, failed = 0;
+      for (const item of toSend) {
+        btn.textContent = `Sending ${sent + 1} of ${toSend.length}…`;
+        try {
+          const resp = await fetch(`/api/admin/invoices/${item.record_id}/overdue-notice`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: item.email }),
+          });
+          const data = await resp.json();
+          if (resp.ok && data.ok) { sent++; } else { failed++; console.warn('Failed:', item.inv_number, data.error); }
+        } catch (e) { failed++; }
+      }
+
+      if (failed === 0) {
+        msgEl.innerHTML = `<div class="alert alert-success" style="margin-top:10px;">✓ Sent ${sent} notice${sent !== 1 ? 's' : ''}!</div>`;
+        btn.textContent = '✓ Done';
+        setTimeout(() => { closeBulkOverdueModal(); invoicesLoaded = false; loadInvoices(); }, 1800);
+      } else {
+        msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${sent} sent, ${failed} failed. Check console for details.</div>`;
+        btn.disabled = false;
+        btn.textContent = 'Retry';
       }
     }
 
