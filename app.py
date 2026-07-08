@@ -11761,6 +11761,32 @@ def admin_send_overdue_notice(record_id):
                 line_items.append({"name": pname, "qty": qty, "unit_price": price})
         total = round(sum(li["qty"] * li["unit_price"] for li in line_items), 2)
 
+        # Refresh Stripe invoices if due date is more than 45 days old (links go dead)
+        if days_overdue >= 45 and cc_url and line_items:
+            try:
+                old_cc_id  = fields.get("Stripe Invoice ID (CC)", "")
+                old_ach_id = fields.get("Stripe Invoice ID (ACH)", "")
+                # Void old invoices
+                for old_id in [old_cc_id, old_ach_id]:
+                    if old_id:
+                        req_lib.post(f"https://api.stripe.com/v1/invoices/{old_id}/void",
+                                     auth=(STRIPE_KEY, ""), data={}, timeout=15)
+                # Create fresh ones (new customer, fresh due date)
+                _create_stripe_invoices_for_record(write_token, record_id, to_email, to_name, org_name, line_items)
+                # Re-fetch updated URLs from Airtable
+                refreshed = req_lib.get(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                    headers=at_headers(read_token), timeout=10,
+                )
+                if refreshed.ok:
+                    rf = refreshed.json().get("fields", {})
+                    cc_url  = rf.get("Stripe Invoice URL (CC)", cc_url)
+                    ach_url = rf.get("Stripe Invoice URL (ACH)", ach_url)
+                print(f"[overdue-notice] refreshed Stripe links for {inv_number} ({days_overdue} days overdue)")
+            except Exception as refresh_err:
+                print(f"[overdue-notice] Stripe refresh failed for {inv_number}: {refresh_err}")
+                # Non-fatal — send notice with existing (possibly stale) links
+
         # Send overdue notice email
         _send_overdue_notice_email(
             to_email=to_email, to_name=to_name, org_name=org_name,
