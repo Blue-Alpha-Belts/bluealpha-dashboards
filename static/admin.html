@@ -1330,27 +1330,27 @@
         return;
       }
       let html = '<div class="card"><table style="width:100%;table-layout:fixed;"><colgroup>'
-        + '<col style="width:36px">'    // Checkbox
+        + '<col style="width:32px">'    // Checkbox
         + '<col style="width:100px">'   // Invoice #
-        + '<col style="width:200px">'   // Customer
-        + '<col style="width:95px">'    // Date
-        + '<col style="width:90px">'    // Total
-        + '<col style="width:75px">'    // Status
-        + '<col style="width:70px">'    // PDF
-        + '<col style="width:130px">'   // Payment
-        + '<col style="width:115px">'   // Resend
-        + '<col style="width:125px">'   // Overdue
-        + '<col style="width:120px">'   // Stripe
+        + '<col style="width:210px">'   // Customer
+        + '<col style="width:90px">'    // Date
+        + '<col style="width:85px">'    // Total
+        + '<col style="width:72px">'    // Status
+        + '<col style="width:62px">'    // PDF
+        + '<col style="width:110px">'   // Payment
+        + '<col style="width:100px">'   // Resend
+        + '<col style="width:110px">'   // Overdue
+        + '<col style="width:100px">'   // Stripe
         + '</colgroup><thead><tr>'
         + '<th><input type="checkbox" id="selectAllOverdue" title="Select all unpaid" onchange="toggleSelectAllOverdue(this)"></th>'
-        + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Payment</th><th>Resend</th><th>Overdue Notices</th><th>Stripe</th>'
+        + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Payment</th><th>Resend</th><th style="white-space:normal;line-height:1.3;">Overdue<br>Notices</th><th>Stripe</th>'
         + '</tr></thead><tbody>';
       invoices.forEach(inv => {
         const statusBadge = inv.is_paid
           ? '<span class="badge" style="background:#d4edda;color:#155724;">PAID</span>'
           : '<span class="badge" style="background:#f8d7da;color:#721c24;">UNPAID</span>';
 
-        const _btn = 'style="padding:6px 14px;font-size:0.82rem;white-space:nowrap;"';
+        const _btn = 'style="padding:5px 10px;font-size:0.8rem;white-space:nowrap;width:100%;box-sizing:border-box;"';
         const paymentCell = inv.is_paid
           ? (inv.check_number ? `<small style="color:var(--muted);">✓ Check #${esc(inv.check_number)}</small>` : '<small style="color:var(--muted);">—</small>')
           : `<button class="btn btn-outline btn-sm" ${_btn} onclick="openMarkPaidModal('${esc(inv.record_id)}')">Mark Paid</button>`;
@@ -1359,15 +1359,15 @@
 
         // Overdue notices column: show past dates + send button (unpaid only)
         const noticeDates = (inv.overdue_notice_dates || '').trim();
-        const noticeDateLines = noticeDates ? noticeDates.split('\n').filter(d => d.trim()).map(d => `<div style="font-size:0.78rem;color:var(--muted);white-space:nowrap;">${esc(d.trim())}</div>`).join('') : '';
+        const noticeDateLines = noticeDates ? noticeDates.split('\n').filter(d => d.trim()).map(d => `<div style="font-size:0.75rem;color:var(--muted);">${esc(d.trim())}</div>`).join('') : '';
         const overdueBtn = !inv.is_paid
-          ? `<button class="btn btn-outline btn-sm" ${_btn} style="padding:5px 10px;font-size:0.78rem;white-space:nowrap;color:#7B2318;border-color:#7B2318;" onclick="openOverdueModal('${esc(inv.record_id)}','${esc(inv.inv_number)}','${esc(inv.billing_email||'')}')">⚠ Notice</button>`
+          ? `<button class="btn btn-outline btn-sm" ${_btn} style="padding:5px 10px;font-size:0.8rem;color:#7B2318;border-color:#7B2318;" onclick="openOverdueModal('${esc(inv.record_id)}','${esc(inv.inv_number)}','${esc(inv.billing_email||'')}')">⚠ Notice</button>`
           : '';
         const overdueCell = `<div>${noticeDateLines}${overdueBtn}</div>`;
 
         const stripeCell = inv.has_stripe
-          ? '<span style="color:#155724;font-size:0.82rem;">✓ Created</span>'
-          : `<button class="btn btn-outline btn-sm" ${_btn} style="padding:6px 14px;font-size:0.82rem;white-space:nowrap;color:#6b4c00;border-color:#c9960c;" onclick="createStripeInvoices('${esc(inv.record_id)}','${esc(inv.inv_number)}',this)">⚡ Create</button>`;
+          ? '<span style="color:#155724;font-size:0.8rem;">✓ Created</span>'
+          : `<button class="btn btn-outline btn-sm" ${_btn} style="padding:5px 10px;font-size:0.8rem;color:#6b4c00;border-color:#c9960c;" onclick="createStripeInvoices('${esc(inv.record_id)}','${esc(inv.inv_number)}',this)">⚡ Create</button>`;
 
         const pdfCell = `<a href="/invoice-pdf/${esc(inv.record_id)}" target="_blank" class="btn btn-outline btn-sm" ${_btn}>📄 PDF</a>`;
 
