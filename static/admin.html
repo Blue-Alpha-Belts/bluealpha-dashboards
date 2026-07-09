@@ -1253,6 +1253,11 @@
           _invoiceModalBtn.parentElement.innerHTML = invLink;
         }
         closeInvoiceModal();
+        // Refresh invoices list so the new invoice appears without a full page reload
+        invoicesLoaded = false;
+        if (document.getElementById('tab-invoices').classList.contains('active')) {
+          loadInvoices();
+        }
       } catch (e) {
         alert('Error: ' + e.message);
         submitEl.disabled = false;
