@@ -1369,6 +1369,13 @@
       if (frame) frame.style.height = (e.data.height + 32) + 'px';
     }
     if (e.data && e.data.type === 'closeViewInvoice') { closeViewInvoice(); }
+    if (e.data && e.data.type === 'scrollToQuoteTop') {
+      const frame = document.getElementById('viewQuoteFrame');
+      if (frame) {
+        const top = frame.getBoundingClientRect().top + window.scrollY;
+        window.scrollTo({ top: Math.max(0, top - 16), behavior: 'smooth' });
+      }
+    }
     if (e.data && e.data.type === 'quoteAccepted') {
       _quotesCache = null; _ordersCache = null;
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));

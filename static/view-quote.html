@@ -1734,6 +1734,11 @@ function openModal() {
     alert('You have unsaved changes. Please click "Save Changes" before accepting the quote.');
     return;
   }
+  // If embedded in the portal iframe, ask the parent to scroll to the top so the
+  // modal (position:fixed within the iframe) is visible and not above the viewport.
+  if (window.self !== window.top) {
+    window.parent.postMessage({ type: 'scrollToQuoteTop' }, '*');
+  }
   const q = quoteData;
   const items = q.lineItems || [];
   const totalQty = items.reduce((s, i) => s + (parseInt(i.qty) || 0), 0);
