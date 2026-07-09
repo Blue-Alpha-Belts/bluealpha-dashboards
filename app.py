@@ -5603,6 +5603,18 @@ def accept_quote(record_id):
                             status=500, headers=c, mimetype="application/json")
         so_record_id = so_r.json()["id"]
 
+        # PATCH QU to Approved immediately after SO is confirmed created.
+        # Doing this early (before line items / email) ensures the quote is
+        # marked accepted if-and-only-if the SO exists. Line items and email
+        # are non-fatal and can recover, but a missing SO with an accepted QU
+        # is the worst failure mode.
+        req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(token), "Content-Type": "application/json"},
+            json={"fields": {"Quote Status": "Approved"}},
+            timeout=15,
+        )
+
         # Upload PO document to SO record if provided
         if pdf_b64:
             try:
@@ -5695,14 +5707,6 @@ def accept_quote(record_id):
             )
             if not new_li.ok:
                 print(f"[accept_quote] line item copy failed {new_li.status_code}: {new_li.text[:200]}")
-
-        # PATCH QU: set Quote Status = "Approved" (drives MO Is Approved formula)
-        req_lib.patch(
-            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
-            headers={**at_headers(token), "Content-Type": "application/json"},
-            json={"fields": {"Quote Status": "Approved"}},
-            timeout=15,
-        )
 
         # Send confirmation email
         to_email = ""

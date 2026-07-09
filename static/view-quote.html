@@ -1800,7 +1800,22 @@ async function confirmOrder() {
       body: JSON.stringify(payload),
     });
     const data = await r.json();
-    if (!r.ok || !data.success) throw new Error(data.error || 'Failed to accept');
+    if (!r.ok || !data.success) {
+      const msg = data.error || 'Failed to accept';
+      // "Already accepted" means a previous attempt went through — treat as success
+      if (r.status === 400 && msg.toLowerCase().includes('already accepted')) {
+        closeModal();
+        setTimeout(() => {
+          if (window.self !== window.top) {
+            window.parent.postMessage({ type: 'quoteAccepted' }, '*');
+          } else {
+            window.location.href = '/portal?tab=our-orders';
+          }
+        }, 800);
+        return;
+      }
+      throw new Error(msg);
+    }
     closeModal();
     setTimeout(() => {
       if (window.self !== window.top) {
