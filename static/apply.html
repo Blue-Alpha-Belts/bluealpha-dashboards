@@ -166,25 +166,59 @@
               <input type="text" name="ein" placeholder="XX-XXXXXXX" required>
             </div>
           </div>
-          <div class="form-row">
+
+          <!-- Tax exempt toggle -->
+          <div class="form-row full" style="margin-bottom:8px;">
             <div class="form-group">
-              <label>State Tax Exemption Number <span class="req">*</span></label>
-              <input type="text" name="taxExemptionNumber" placeholder="e.g. TX-98-00123" required>
-            </div>
-            <div class="form-group">
-              <label>Website</label>
-              <input type="url" name="website" placeholder="https://">
+              <label>Tax Status <span class="req">*</span></label>
+              <div style="display:flex; gap:12px; margin-top:4px;">
+                <label style="display:flex; align-items:center; gap:6px; font-weight:400; cursor:pointer;">
+                  <input type="radio" name="taxExempt" value="true" id="taxExemptYes" checked style="accent-color:var(--navy);">
+                  Tax Exempt
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-weight:400; cursor:pointer;">
+                  <input type="radio" name="taxExempt" value="false" id="taxExemptNo" style="accent-color:var(--navy);">
+                  Not Tax Exempt
+                </label>
+              </div>
             </div>
           </div>
-          <div class="form-row full">
-            <div class="form-group">
-              <label>Tax Exemption Certificate <span style="color:var(--error)">*</span> <span style="font-weight:400;color:var(--muted)">(PDF recommended)</span></label>
-              <div class="upload-area" id="uploadArea" onclick="document.getElementById('exemptionCert').click()">
-                <div class="upload-icon">📄</div>
-                <div class="upload-text" id="uploadText">Click to upload your exemption certificate</div>
-                <div class="upload-hint">PDF, JPG, or PNG · Max 10 MB</div>
+
+          <!-- Shown only when tax exempt -->
+          <div id="exemptFields">
+            <div class="form-row">
+              <div class="form-group">
+                <label>State Tax Exemption Number <span class="req">*</span></label>
+                <input type="text" name="taxExemptionNumber" placeholder="e.g. TX-98-00123">
               </div>
-              <input type="file" id="exemptionCert" name="exemptionCert" accept=".pdf,.jpg,.jpeg,.png" style="display:none" onchange="onFileSelected(this)">
+              <div class="form-group">
+                <label>Website</label>
+                <input type="url" name="website" placeholder="https://">
+              </div>
+            </div>
+            <div class="form-row full">
+              <div class="form-group">
+                <label>Tax Exemption Certificate <span style="color:var(--error)">*</span> <span style="font-weight:400;color:var(--muted)">(PDF recommended)</span></label>
+                <div class="upload-area" id="uploadArea" onclick="document.getElementById('exemptionCert').click()">
+                  <div class="upload-icon">📄</div>
+                  <div class="upload-text" id="uploadText">Click to upload your exemption certificate</div>
+                  <div class="upload-hint">PDF, JPG, or PNG · Max 10 MB</div>
+                </div>
+                <input type="file" id="exemptionCert" name="exemptionCert" accept=".pdf,.jpg,.jpeg,.png" style="display:none" onchange="onFileSelected(this)">
+              </div>
+            </div>
+          </div>
+
+          <!-- Shown only when NOT tax exempt -->
+          <div id="nonExemptNote" style="display:none;">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Website</label>
+                <input type="url" name="websiteNonExempt" placeholder="https://">
+              </div>
+            </div>
+            <div style="background:#fdf8ee; border:1px solid #e8d9a0; border-radius:6px; padding:12px 14px; font-size:0.85rem; color:#6b5c20; margin-bottom:16px;">
+              ⚠️ Sales tax will be applied to your orders based on your shipping address.
             </div>
           </div>
         </div>
@@ -319,6 +353,25 @@
       billingFields.style.display = sameAsShippingCb.checked ? 'none' : 'block';
     });
 
+    // Tax exempt toggle
+    function isTaxExempt() {
+      return document.getElementById('taxExemptYes').checked;
+    }
+    document.querySelectorAll('[name="taxExempt"]').forEach(r => {
+      r.addEventListener('change', () => {
+        const exempt = isTaxExempt();
+        document.getElementById('exemptFields').style.display   = exempt ? '' : 'none';
+        document.getElementById('nonExemptNote').style.display  = exempt ? 'none' : '';
+        // Clear exemption fields when switching to not-exempt so they don't block submit
+        if (!exempt) {
+          document.querySelector('[name="taxExemptionNumber"]').value = '';
+          document.getElementById('exemptionCert').value = '';
+          document.getElementById('uploadArea').classList.remove('has-file');
+          document.getElementById('uploadText').textContent = 'Click to upload your exemption certificate';
+        }
+      });
+    });
+
     document.getElementById('applyForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = document.getElementById('submitBtn');
@@ -340,7 +393,7 @@
 
       // Always-required fields
       const alwaysRequired = [
-        'companyName','ein','taxExemptionNumber',
+        'companyName','ein',
         'shippingContactName','shippingContactEmail','shippingContactPhone',
         'shippingAddr1','shippingCity','shippingState','shippingZip'
       ];
@@ -359,14 +412,20 @@
         }
       }
 
-      // Certificate upload required
+      // Exemption fields required only when tax exempt
       const certFile = document.getElementById('exemptionCert');
       const uploadArea = document.getElementById('uploadArea');
-      if (!certFile.files || certFile.files.length === 0) {
-        uploadArea.style.outline = '2px solid var(--error)';
-        uploadArea.style.background = '#fff0ee';
-        if (!firstErrorEl) firstErrorEl = uploadArea;
-        valid = false;
+      if (isTaxExempt()) {
+        if (!checkField(form.querySelector('[name="taxExemptionNumber"]'))) valid = false;
+        if (!certFile.files || certFile.files.length === 0) {
+          uploadArea.style.outline = '2px solid var(--error)';
+          uploadArea.style.background = '#fff0ee';
+          if (!firstErrorEl) firstErrorEl = uploadArea;
+          valid = false;
+        } else {
+          uploadArea.style.outline = '';
+          uploadArea.style.background = '';
+        }
       } else {
         uploadArea.style.outline = '';
         uploadArea.style.background = '';
@@ -389,12 +448,19 @@
         const scrollTarget = firstErrorEl || certifyRow;
         scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
         if (firstErrorEl) firstErrorEl.focus({ preventScroll: true });
-        alertArea.innerHTML = '<div class="alert alert-error">Please fill in all highlighted fields, upload your tax exemption certificate, and check the confirmation box before submitting.</div>';
+        const certMsg = isTaxExempt() ? ', upload your tax exemption certificate,' : '';
+        alertArea.innerHTML = `<div class="alert alert-error">Please fill in all highlighted fields${certMsg} and check the confirmation box before submitting.</div>`;
         return;
       }
 
       const fd = new FormData(form);
       fd.set('billingSameAsShipping', sameAsShippingCb.checked ? 'true' : 'false');
+      fd.set('taxExempt', isTaxExempt() ? 'true' : 'false');
+      // Merge website from whichever field is visible
+      if (!isTaxExempt()) {
+        const nonExemptWebsite = (form.querySelector('[name="websiteNonExempt"]') || {}).value || '';
+        fd.set('website', nonExemptWebsite);
+      }
 
       btn.disabled = true;
       btn.textContent = 'Submitting…';
@@ -441,10 +507,11 @@
       }
     }
 
-    // Auto-populate tax exemption number prefix from shipping state
+    // Auto-populate tax exemption number prefix from shipping state (only when exempt)
     const shippingStateEl = document.querySelector('[name="shippingState"]');
     const taxExemptEl     = document.querySelector('[name="taxExemptionNumber"]');
     shippingStateEl.addEventListener('input', () => {
+      if (!isTaxExempt()) return;
       const raw = shippingStateEl.value.trim();
       const state = raw.length <= 2 ? raw.toUpperCase() : '';
       const current = taxExemptEl.value;

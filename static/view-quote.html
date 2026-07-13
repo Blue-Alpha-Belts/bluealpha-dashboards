@@ -798,6 +798,10 @@ if (window.self !== window.top) {
         <!-- Totals -->
         <div class="totals-wrap">
           <span id="vSubtotal" style="display:none;"></span>
+          <div id="vRowTax" class="totals-row hidden">
+            <span>Tax</span>
+            <span class="val" id="vTax">$0.00</span>
+          </div>
           <div id="vRowShipping" class="totals-row hidden">
             <span>Shipping</span>
             <span class="val" id="vShipping">$0.00</span>
@@ -1162,12 +1166,21 @@ function renderItemsTable() {
 }
 
 function updateTotals() {
-  const subtotal = editItems.reduce((s, i) => s + i.qty * i.unitPrice, 0);
-  const shipping = quoteData.shipping || 0;
-  const total    = subtotal + shipping;
+  const subtotal   = editItems.reduce((s, i) => s + i.qty * i.unitPrice, 0);
+  const shipping   = quoteData.shipping || 0;
+  const taxAmount  = quoteData.taxAmount || 0;
+  const total      = subtotal + shipping + taxAmount;
 
   document.getElementById('vSubtotal').textContent = '$' + subtotal.toFixed(2);
   document.getElementById('vTotal').textContent    = '$' + total.toFixed(2);
+
+  const taxRow = document.getElementById('vRowTax');
+  if (taxAmount > 0) {
+    document.getElementById('vTax').textContent = '$' + taxAmount.toFixed(2);
+    taxRow.classList.remove('hidden');
+  } else {
+    taxRow.classList.add('hidden');
+  }
 
   if (shipping > 0) {
     document.getElementById('vShipping').textContent = '$' + shipping.toFixed(2);

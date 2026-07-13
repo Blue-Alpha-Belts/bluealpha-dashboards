@@ -440,6 +440,10 @@ if (inPortal) {
 
         <!-- Totals -->
         <div class="totals-wrap">
+          <div id="vRowTax" class="totals-row hidden">
+            <span>Tax</span>
+            <span class="val" id="vTax">$0.00</span>
+          </div>
           <div class="totals-row totals-final">
             <span>Total Due</span>
             <span class="val" id="vTotal">$0.00</span>
@@ -583,8 +587,15 @@ function render(inv) {
     tbody.appendChild(tr);
   });
 
-  // Total Due
-  document.getElementById('vTotal').textContent = money(inv.subtotal);
+  // Tax row
+  const taxAmount = inv.taxAmount || 0;
+  if (taxAmount > 0) {
+    document.getElementById('vTax').textContent = money(taxAmount);
+    document.getElementById('vRowTax').classList.remove('hidden');
+  }
+
+  // Total Due (subtotal + tax)
+  document.getElementById('vTotal').textContent = money(inv.total || inv.subtotal);
 
   // Payment section
   if (inv.stripeCcUrl || inv.stripeAchUrl) {

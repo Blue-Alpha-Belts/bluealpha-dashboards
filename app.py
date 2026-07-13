@@ -4620,6 +4620,7 @@ def _fetch_quote_data(record_id):
                 "city":         cf.get("Customer City", ""),
                 "state":        cf.get("Customer State", ""),
                 "zip":          cf.get("Customer Zip Code", ""),
+                "_taxRate":     float(cf.get("Tax Rate") or 0),
                 # Bill-To always comes from Customer record — never snapshot (snapshot = shipping)
                 "billToName":   cf.get("Bill-To Contact Name", "") or cf.get("Main Contact Name", ""),
                 "billToEmail":  cf.get("Bill-To Contact Email", "") or cf.get("Main Contact Email", ""),
@@ -4658,7 +4659,9 @@ def _fetch_quote_data(record_id):
                 "unitPrice":   lf.get("Confirmed Unit Price", 0),
             })
 
-    subtotal = sum(i["qty"] * i["unitPrice"] for i in line_items)
+    subtotal   = sum(i["qty"] * i["unitPrice"] for i in line_items)
+    _tax_rate  = float(customer.get("_taxRate", 0))
+    tax_amount = round(subtotal * _tax_rate, 2) if _tax_rate else 0
 
     # For Sales Orders: check if an invoice exists for this order_id
     inv_record_id = ""
@@ -4693,8 +4696,9 @@ def _fetch_quote_data(record_id):
         "customer":      customer,
         "lineItems":     line_items,
         "subtotal":      round(subtotal, 2),
+        "taxAmount":     tax_amount,
         "shipping":      0,
-        "total":         round(subtotal, 2),
+        "total":         round(subtotal + tax_amount, 2),
         "invRecordId":   inv_record_id,
         "invNumber":     inv_number,
     }
@@ -6760,6 +6764,8 @@ def apply_page():
     company_name              = gf("companyName")
     ein                       = gf("ein")
     website                   = gf("website")
+    tax_exempt_raw            = gf("taxExempt")
+    tax_exempt                = tax_exempt_raw.lower() not in ("false", "0", "no")
     tax_exemption_number      = gf("taxExemptionNumber")
 
     # Shipping fields (always filled)
@@ -6784,9 +6790,11 @@ def apply_page():
     billing_state          = gf("billingState")        if not billing_same else shipping_state
     billing_zip            = gf("billingZip")          if not billing_same else shipping_zip
 
-    required_fields = [company_name, ein, tax_exemption_number,
+    required_fields = [company_name, ein,
                        shipping_contact_name, shipping_contact_email, shipping_contact_phone,
                        shipping_addr1, shipping_city, shipping_state, shipping_zip]
+    if tax_exempt:
+        required_fields.append(tax_exemption_number)
     if not billing_same:
         required_fields += [billing_contact_name, billing_contact_email,
                             billing_addr1, billing_city, billing_state, billing_zip]
@@ -6840,6 +6848,7 @@ def apply_page():
         "Bill-To Address (Line 1)":     billing_addr1,
         "Bill-To Address (Line 2)":     bill_addr2_full,
         "State Tax Exemption #":        tax_exemption_number,
+        "Tax Exempt":                   tax_exempt,
         "Application Status":           "Pending",
         "Applied Date":                 datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     }
@@ -6858,9 +6867,9 @@ def apply_page():
 
         record_id = r.json().get("id")
 
-        # Upload tax exemption certificate to Airtable if provided
+        # Upload tax exemption certificate to Airtable if provided (only for tax-exempt applicants)
         # Strategy: upload file to tmpfiles.org → get public URL → PATCH Airtable record
-        if cert_file and cert_file.filename and record_id:
+        if tax_exempt and cert_file and cert_file.filename and record_id:
             try:
                 file_bytes = cert_file.read()
                 filename   = cert_file.filename or "exemption-certificate"
@@ -8698,7 +8707,7 @@ def admin_applications():
                     "Customer Address (Line 1)", "Customer City", "Customer State", "Customer Zip Code",
                     "Bill-To Contact Name", "Bill-To Contact Email", "Bill-To Phone #",
                     "Bill-To Address (Line 1)", "Bill-To Address (Line 2)",
-                    "State Tax Exemption #", "Tax Exempt", "Tax Exemption Certificate",
+                    "State Tax Exemption #", "Tax Exempt", "Tax Exemption Certificate", "Tax Rate",
                     "Application Status", "Denial Reason", "Applied Date"],
             formula="NOT({Application Status}='')",
         )
@@ -8726,6 +8735,8 @@ def admin_applications():
                 "tax_exemption_number":  f.get("State Tax Exemption #", ""),
                 "tax_cert_url":          (f.get("Tax Exemption Certificate") or [{}])[0].get("url", ""),
                 "tax_cert_filename":     (f.get("Tax Exemption Certificate") or [{}])[0].get("filename", ""),
+                "tax_exempt":            bool(f.get("Tax Exempt", True)),
+                "tax_rate":              float(f.get("Tax Rate") or 0),
                 "status":                f.get("Application Status", "Pending"),
                 "denial_reason":         f.get("Denial Reason", ""),
                 "applied_date":          f.get("Applied Date", ""),
@@ -8742,6 +8753,9 @@ def admin_approve(app_id):
     c = cors()
     if not check_admin_session(request):
         return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+
+    req_data  = request.get_json() or {}
+    tax_rate_pct = req_data.get("taxRate")  # percent value e.g. 7.0 → stored as 0.07
 
     write_token = RETURNS_WRITE_TOKEN
     read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -8761,11 +8775,17 @@ def admin_approve(app_id):
         contact_name  = f.get("Main Contact Name", "")
         contact_email = f.get("Main Contact Email", "")
 
-        # Update Application Status to Approved on the same Customer record
+        # Update Application Status to Approved; save tax rate if provided
+        approve_fields = {"Application Status": "Approved"}
+        if tax_rate_pct is not None:
+            try:
+                approve_fields["Tax Rate"] = round(float(tax_rate_pct) / 100, 6)
+            except (TypeError, ValueError):
+                pass
         req_lib.patch(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{app_id}",
             headers={**at_headers(write_token), "Content-Type": "application/json"},
-            json={"fields": {"Application Status": "Approved"}},
+            json={"fields": approve_fields},
             timeout=10,
         )
 
@@ -10648,6 +10668,21 @@ def invoice_detail(record_id):
 
         subtotal = round(sum(li["total"] for li in line_items), 2)
 
+        # Fetch tax rate from linked customer record
+        tax_amount = 0.0
+        try:
+            cust_ids = fields.get("Customer", [])
+            if cust_ids:
+                cr = req_lib.get(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{cust_ids[0]}",
+                    headers=at_headers(read_token), timeout=10,
+                )
+                if cr.ok:
+                    tax_rate = float(cr.json().get("fields", {}).get("Tax Rate") or 0)
+                    tax_amount = round(subtotal * tax_rate, 2) if tax_rate else 0.0
+        except Exception:
+            pass
+
         stripe_cc_url  = fields.get("Stripe Invoice URL (CC)", "")
         stripe_ach_url = fields.get("Stripe Invoice URL (ACH)", "")
         stripe_cc_status  = fields.get("Stripe Invoice Status (CC)", "")
@@ -10671,6 +10706,8 @@ def invoice_detail(record_id):
             "shipDate":        ship_date,
             "lineItems":       line_items,
             "subtotal":        subtotal,
+            "taxAmount":       tax_amount,
+            "total":           round(subtotal + tax_amount, 2),
             "stripeCcUrl":     stripe_cc_url,
             "stripeAchUrl":    stripe_ach_url,
             "stripeCcStatus":  stripe_cc_status,

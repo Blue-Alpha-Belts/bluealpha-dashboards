@@ -707,8 +707,17 @@
               <div style="grid-column:1/-1; display:flex; flex-direction:column; gap:8px;">
                 <div class="kv"><span class="k">Company</span><span class="v">${esc(a.company_name)}</span></div>
                 <div class="kv"><span class="k">EIN</span><span class="v">${esc(a.ein || '—')}</span></div>
+                <div class="kv"><span class="k">Tax Status</span><span class="v">${a.tax_exempt ? '✅ Tax Exempt' : '💰 Not Tax Exempt (taxable)'}</span></div>
+                ${a.tax_exempt ? `
                 <div class="kv"><span class="k">Tax Exemption #</span><span class="v">${esc(a.tax_exemption_number || '—')}</span></div>
                 <div class="kv"><span class="k">Tax Exempt Certificate</span><span class="v">${a.tax_cert_url ? `<a href="${esc(a.tax_cert_url)}" target="_blank" style="color:#1a6fc4;">View Certificate</a>` : '—'}</span></div>
+                ` : `
+                <div class="kv"><span class="k">Tax Rate</span><span class="v" style="display:flex;align-items:center;gap:6px;">
+                  <input type="number" id="taxRateInput-${a.id}" value="${a.tax_rate ? (a.tax_rate * 100).toFixed(4).replace(/\.?0+$/, '') : ''}" placeholder="e.g. 7.5" step="0.001" min="0" max="99" style="width:80px;border:1px solid #ccc;border-radius:4px;padding:4px 6px;font-size:0.9rem;">
+                  %
+                  <span style="color:#6b7a8d;font-size:0.8rem;">(enter before approving)</span>
+                </span></div>
+                `}
                 <div class="kv"><span class="k">Website</span><span class="v">${esc(a.website || '—')}</span></div>
               </div>
               <div style="grid-column:1/-1; display:grid; grid-template-columns:1fr 1fr; gap:16px;">
@@ -753,8 +762,19 @@
       if (!confirm('Approve this application? A portal user will be created and an approval email sent.')) return;
       btn.disabled = true;
       btn.textContent = 'Processing…';
+      // Collect tax rate if the input exists (non-exempt applicants)
+      const taxRateInput = document.getElementById(`taxRateInput-${appId}`);
+      const body = {};
+      if (taxRateInput) {
+        const pct = parseFloat(taxRateInput.value);
+        if (!isNaN(pct)) body.taxRate = pct;
+      }
       try {
-        const resp = await fetch(`/api/admin/approve/${appId}`, { method: 'POST' });
+        const resp = await fetch(`/api/admin/approve/${appId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
         const data = await resp.json();
         if (data.success) {
           const appsResp = await fetch('/api/admin/applications');
