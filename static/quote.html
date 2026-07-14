@@ -1153,26 +1153,40 @@ function onSelFeature(parentId) {
 
 function _updatePrice(parentId) {
   const colorId      = document.getElementById('sc_' + parentId).value;
-  const sizeId       = document.getElementById('ss_' + parentId).value;
+  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
   const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
   const addonId      = document.getElementById('sadon_' + parentId)?.value || '';
+
+  const priceEl  = document.getElementById('sprice_' + parentId);
+  const priceRow = document.getElementById('spricerow_' + parentId);
+
+  // Check which selection rows are currently visible (visible = required)
+  const sizeRowHidden  = document.getElementById('szfield_' + parentId)?.classList.contains('hidden') ?? true;
+  const featRowHidden  = document.getElementById('sfrow_'   + parentId)?.classList.contains('hidden') ?? true;
+  const addonRowHidden = document.getElementById('sarow_'   + parentId)?.classList.contains('hidden') ?? true;
+
+  // Hide price until every visible dropdown has a selection
+  if (!colorId ||
+      (!sizeRowHidden  && !sizeId) ||
+      (!featRowHidden  && !featureVarId) ||
+      (!addonRowHidden && !addonId)) {
+    if (priceRow) priceRow.classList.add('hidden');
+    return;
+  }
 
   const sku = catalog.skus.find(s =>
     s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
     (featureVarId ? s.featureVarId === featureVarId : true) &&
     s.addonId === addonId
-  ) || catalog.skus.find(s =>
-    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
-    (featureVarId ? s.featureVarId === featureVarId : true)
-  ) || catalog.skus.find(s =>
-    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId
   );
 
-  const priceEl    = document.getElementById('sprice_' + parentId);
-  const priceRow   = document.getElementById('spricerow_' + parentId);
-  if (priceEl && priceRow && sku) {
-    priceEl.textContent = '$' + sku.price.toFixed(2);
-    priceRow.classList.remove('hidden');
+  if (priceEl && priceRow) {
+    if (sku) {
+      priceEl.textContent = '$' + sku.price.toFixed(2);
+      priceRow.classList.remove('hidden');
+    } else {
+      priceRow.classList.add('hidden');
+    }
   }
 }
 
