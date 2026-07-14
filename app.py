@@ -4943,6 +4943,7 @@ _EXCLUDED_PARENTS = {
     "adapter",
     # Specific exclusions
     "1.75\" standard belt - both buckles",
+    "1.75\" standard belt outer only",
     "misc.",
     "hat", "hoodie", "t-shirt",
     "sentry strap - ba",
