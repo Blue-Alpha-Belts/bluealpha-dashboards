@@ -701,7 +701,7 @@ function _productHtml(p) {
   const descHtml = _PRODUCT_DESCRIPTIONS[p.name.toLowerCase()]
     ? `<div class="product-desc hidden" id="pdesc_${p.id}">${_PRODUCT_DESCRIPTIONS[p.name.toLowerCase()]}</div>`
     : '';
-  const _ADDON_NOT_OPTIONAL = ['battle belt lite', 'mini medical pouch', 'non molle adapters', 'double enclosed handcuff pouch', 'cobra® buckle', 'duty belt lite - molle', 'duty belt lite - standard'];
+  const _ADDON_NOT_OPTIONAL = ['battle belt lite', 'mini medical pouch', 'non molle adapters', 'double enclosed handcuff pouch', 'cobra® buckle', 'duty belt lite - molle', 'duty belt lite - standard', 'molle duty belt'];
   const _addonOptional = !_ADDON_NOT_OPTIONAL.some(n => p.name.toLowerCase().includes(n));
   const addonHtml = `<div class="sel-row hidden" id="sarow_${p.id}">
       <div class="sel-field" style="flex:1 1 100%">
@@ -1213,7 +1213,7 @@ function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredA
   const _parentNameLower  = (_parentEntrySort?.name || '').toLowerCase();
   const _useCustomOrder   = _parentNameLower.includes('battle belt lite');
   const _useMiniMedOrder  = _parentNameLower.includes('mini medical pouch');
-  const _OUTER_FIRST_PARENTS = ['cobra® buckle', 'duty belt lite - molle', 'duty belt lite - standard'];
+  const _OUTER_FIRST_PARENTS = ['cobra® buckle', 'duty belt lite - molle', 'duty belt lite - standard', 'molle duty belt'];
   const _useOuterFirstOrder  = _OUTER_FIRST_PARENTS.some(n => _parentNameLower.includes(n));
   const addons = Object.entries(addonMap).sort((a,b) => {
     const an = a[1].toLowerCase(), bn = b[1].toLowerCase();
