@@ -1155,7 +1155,10 @@ function _updatePrice(parentId) {
   const colorId      = document.getElementById('sc_' + parentId).value;
   const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
   const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
-  const addonId      = document.getElementById('sadon_' + parentId)?.value || '';
+  const addonSel     = document.getElementById('sadon_' + parentId);
+  const addonRawVal  = addonSel?.value || '';
+  // '__none__' is a sentinel for "None / base SKU" (addonId = '' in the catalog)
+  const addonId      = addonRawVal === '__none__' ? '' : addonRawVal;
 
   const priceEl  = document.getElementById('sprice_' + parentId);
   const priceRow = document.getElementById('spricerow_' + parentId);
@@ -1165,11 +1168,15 @@ function _updatePrice(parentId) {
   const featRowHidden  = document.getElementById('sfrow_'   + parentId)?.classList.contains('hidden') ?? true;
   const addonRowHidden = document.getElementById('sarow_'   + parentId)?.classList.contains('hidden') ?? true;
 
+  // Add-on is unselected if the visible row's first (disabled placeholder) option is active
+  const addonOnPlaceholder = !addonRowHidden && !!addonSel &&
+    addonSel.selectedIndex === 0 && (addonSel.options[0]?.disabled ?? false);
+
   // Hide price until every visible dropdown has a selection
   if (!colorId ||
-      (!sizeRowHidden  && !sizeId) ||
-      (!featRowHidden  && !featureVarId) ||
-      (!addonRowHidden && !addonId)) {
+      (!sizeRowHidden && !sizeId) ||
+      (!featRowHidden && !featureVarId) ||
+      addonOnPlaceholder) {
     if (priceRow) priceRow.classList.add('hidden');
     return;
   }
@@ -1249,31 +1256,10 @@ function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredA
   });
   if (addons.length === 0) { addonRow.classList.add('hidden'); return; }
 
-  // Parents that require a selection (no "None" option, custom placeholder)
-  const _ADDON_PLACEHOLDERS = { 'non molle adapters': 'Select a pack\u2026' };
-  const _addonPlaceholder = Object.entries(_ADDON_PLACEHOLDERS)
-    .find(([k]) => _parentNameLower.includes(k))?.[1] || null;
-  if (_addonPlaceholder) {
-    addonSel.innerHTML = '';
-    const phOpt = document.createElement('option');
-    phOpt.value = ''; phOpt.textContent = _addonPlaceholder; phOpt.disabled = true;
-    addonSel.appendChild(phOpt);
-    for (const [id, name] of addons) {
-      if (name.toLowerCase() === 'none') continue;
-      const opt = document.createElement('option');
-      opt.value = id; opt.textContent = name;
-      addonSel.appendChild(opt);
-    }
-    addonSel.value = '';
-    addonRow.classList.remove('hidden');
-    _updatePrice(parentId);
-    return;
-  }
-
   // Find the "None" add-on id if present
   const noneAddonEntry = addons.find(([,name]) => name.toLowerCase() === 'none');
 
-  // If "None" is the only add-on (and no base SKU), hide the row — nothing meaningful to choose
+  // If "None" is the only add-on (and no base SKU), hide the row — nothing to choose
   if (!hasBase && addons.length === 1 && noneAddonEntry) {
     addonRow.classList.add('hidden');
     addonSel.innerHTML = `<option value="${noneAddonEntry[0]}">None</option>`;
@@ -1281,41 +1267,37 @@ function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredA
     _updatePrice(parentId);
     return;
   }
-  const noneAddonId = noneAddonEntry ? noneAddonEntry[0] : null;
 
+  // Build dropdown — always start with a disabled placeholder
   addonSel.innerHTML = '';
+  const phOpt = document.createElement('option');
+  phOpt.value = ''; phOpt.textContent = 'Select an add-on\u2026'; phOpt.disabled = true;
+  addonSel.appendChild(phOpt);
+
   if (hasBase) {
+    // '__none__' is a sentinel value; _updatePrice maps it to '' for base-SKU lookup
     const opt = document.createElement('option');
-    opt.value = ''; opt.textContent = 'None';
+    opt.value = '__none__'; opt.textContent = 'None';
     addonSel.appendChild(opt);
   }
   for (const [id, name] of addons) {
-    // Skip the "None" add-on record if a base SKU already provides a None option
     if (hasBase && name.toLowerCase() === 'none') continue;
     const opt = document.createElement('option');
     opt.value = id; opt.textContent = name;
     addonSel.appendChild(opt);
   }
-  // Default: preferred addon if restoring a selection, else always "None" / blank
-  let defaultVal;
+
+  // Restore a prior selection (size-change preservation); otherwise leave on placeholder
+  let defaultVal = '';
   if (preferredAddonId !== '' && addonMap[preferredAddonId]) {
     defaultVal = preferredAddonId;
-  } else if (hasBase) {
-    defaultVal = ''; // base "None" option (value="")
-  } else if (noneAddonId) {
-    defaultVal = noneAddonId; // "None" add-on record
-  } else {
-    // No "None" available — insert disabled placeholder so user must choose
-    const phOpt = document.createElement('option');
-    phOpt.value = ''; phOpt.textContent = 'Select add-on\u2026'; phOpt.disabled = true;
-    addonSel.insertBefore(phOpt, addonSel.firstChild);
-    defaultVal = '';
+  } else if (preferredAddonId === '__none__' && hasBase) {
+    defaultVal = '__none__';
   }
   addonSel.value = defaultVal;
   addonRow.classList.remove('hidden');
   const _descEl = document.getElementById('pdesc_' + parentId);
   if (_descEl) _descEl.classList.remove('hidden');
-  // Trigger price update now that add-on value is set
   _updatePrice(parentId);
 }
 
