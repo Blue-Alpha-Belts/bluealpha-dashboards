@@ -701,7 +701,7 @@ function _productHtml(p) {
   const descHtml = _PRODUCT_DESCRIPTIONS[p.name.toLowerCase()]
     ? `<div class="product-desc hidden" id="pdesc_${p.id}">${_PRODUCT_DESCRIPTIONS[p.name.toLowerCase()]}</div>`
     : '';
-  const _ADDON_NOT_OPTIONAL = ['battle belt lite', 'mini medical pouch', 'non molle adapters', 'double enclosed handcuff pouch'];
+  const _ADDON_NOT_OPTIONAL = ['battle belt lite', 'mini medical pouch', 'non molle adapters', 'double enclosed handcuff pouch', 'cobra® buckle'];
   const _addonOptional = !_ADDON_NOT_OPTIONAL.some(n => p.name.toLowerCase().includes(n));
   const addonHtml = `<div class="sel-row hidden" id="sarow_${p.id}">
       <div class="sel-field" style="flex:1 1 100%">
@@ -1198,6 +1198,10 @@ function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredA
     'combo':             2,
     'ultimate combo':    3,
   };
+  const _COBRA_ADDON_ORDER = {
+    'outer only':        0,
+    'low profile inner': 1,
+  };
   const _MINI_MED_ADDON_ORDER = {
     '(2) easy tape':                              0,
     '(2) #2 molle straps':                        1,
@@ -1208,12 +1212,17 @@ function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredA
   const _parentNameLower  = (_parentEntrySort?.name || '').toLowerCase();
   const _useCustomOrder   = _parentNameLower.includes('battle belt lite');
   const _useMiniMedOrder  = _parentNameLower.includes('mini medical pouch');
+  const _useCobraOrder    = _parentNameLower.includes('cobra® buckle');
   const addons = Object.entries(addonMap).sort((a,b) => {
     const an = a[1].toLowerCase(), bn = b[1].toLowerCase();
     if (an === 'none') return -1;
     if (bn === 'none') return 1;
     if (_useMiniMedOrder) {
       const ao = _MINI_MED_ADDON_ORDER[an] ?? 99, bo = _MINI_MED_ADDON_ORDER[bn] ?? 99;
+      if (ao !== bo) return ao - bo;
+    }
+    if (_useCobraOrder) {
+      const ao = _COBRA_ADDON_ORDER[an] ?? 99, bo = _COBRA_ADDON_ORDER[bn] ?? 99;
       if (ao !== bo) return ao - bo;
     }
     if (_useCustomOrder) {
