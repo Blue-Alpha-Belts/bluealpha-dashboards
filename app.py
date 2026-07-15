@@ -4434,7 +4434,7 @@ def send_invoice_email(to_email, to_name, org_name, so_number, inv_number, line_
         name       = li.get("name", "")
         qty        = li.get("qty", 0)
         unit_price = float(li.get("unit_price") or 0)
-        line_total = qty * unit_price
+        line_total = float(li.get("line_total") or li.get("total") or (qty * unit_price))
         li_rows += f"""
             <tr>
               <td style="padding:8px 12px;border-bottom:1px solid #eee;color:#1a2633;font-size:13px;">{name}</td>
@@ -6671,10 +6671,11 @@ def invoice_pdf(record_id):
                 lf = lr.json().get("fields", {})
                 pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
                         _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
-                price = lf.get("Confirmed Unit Price") or 0
-                qty   = lf.get("Qty.", 0)
-                line_items.append({"name": pname, "qty": qty, "unit_price": float(price),
-                                   "total": round(qty * float(price), 2)})
+                qty        = lf.get("Qty.", 0)
+                unit_price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+                li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
+                line_items.append({"name": pname, "qty": qty, "unit_price": unit_price,
+                                   "total": li_total})
 
         ship_city  = _first(fields.get("Customer City (from Customer)", []))
         ship_state = _first(fields.get("Customer State (from Customer)", []))
@@ -10412,10 +10413,13 @@ def portal_admin_convert_to_invoice(user, record_id):
             product_name = product_name_list[0] if product_name_list else ""
             # Use caller-specified qty if provided, else original
             qty = selected_items[li_id] if (selected_items is not None and li_id in selected_items) else lf.get("Qty.", 0)
+            adj_price       = lf.get("Confirmed Adj. Unit Price")
             confirmed_price = lf.get("Confirmed Unit Price")
-            adj_list = lf.get("Adj. Unit Price (from MO Line Items)", [])
-            price = confirmed_price if confirmed_price is not None else (float(adj_list[0]) if adj_list else 0)
-            email_line_items.append({"name": product_name, "qty": qty, "unit_price": price, "_li_fields": lf})
+            adj_list        = lf.get("Adj. Unit Price (from MO Line Items)", [])
+            unit_price      = float(adj_price if adj_price is not None else (confirmed_price if confirmed_price is not None else (float(adj_list[0]) if adj_list else 0)))
+            li_total        = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
+            email_line_items.append({"name": product_name, "qty": qty, "unit_price": unit_price,
+                                     "line_total": li_total, "_li_fields": lf})
 
         # Create Invoice record — carry snapshot billing/shipping fields from SO
         inv_fields = {
@@ -10493,7 +10497,7 @@ def portal_admin_convert_to_invoice(user, record_id):
         to_name    = name_list[0] if name_list else ""
         org_name   = org_list[0] if org_list else ""
 
-        total = round(sum(li["qty"] * float(li["unit_price"] or 0) for li in email_line_items), 2)
+        total = round(sum(li.get("line_total", li["qty"] * float(li.get("unit_price") or 0)) for li in email_line_items), 2)
 
         if to_email:
             try:
@@ -11051,8 +11055,12 @@ def admin_convert_to_invoice(record_id):
             if not li_r.ok:
                 continue
             lf = li_r.json().get("fields", {})
-            price = lf.get("Confirmed Unit Price") or (_first(lf.get("Adj. Unit Price (from MO Line Items)", [])) or 0)
-            qty   = selected_items[li_id] if (selected_items is not None and li_id in selected_items) else lf.get("Qty.", 0)
+            qty        = selected_items[li_id] if (selected_items is not None and li_id in selected_items) else lf.get("Qty.", 0)
+            adj_price  = lf.get("Confirmed Adj. Unit Price")
+            conf_price = lf.get("Confirmed Unit Price")
+            adj_list_v = lf.get("Adj. Unit Price (from MO Line Items)", [])
+            unit_price = float(adj_price if adj_price is not None else (conf_price if conf_price is not None else (float(adj_list_v[0]) if adj_list_v else 0)))
+            li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
             pname_list = lf.get("Product Name (from Product SKU)", [])
             pname = _first(pname_list) if pname_list else "Item"
             req_lib.post(
@@ -11062,11 +11070,12 @@ def admin_convert_to_invoice(record_id):
                     "Manual Order":              [inv_record_id],
                     "Product SKU":               lf.get("Product SKU", []),
                     "Qty.":                      qty,
-                    "Confirmed Unit Price":      float(price),
-                    "Confirmed Adj. Unit Price": float(price),
+                    "Confirmed Unit Price":      unit_price,
+                    "Confirmed Adj. Unit Price": unit_price,
                 }}, timeout=15,
             )
-            li_items_for_email.append({"name": pname, "qty": qty, "unit_price": float(price)})
+            li_items_for_email.append({"name": pname, "qty": qty, "unit_price": unit_price,
+                                       "line_total": li_total})
 
         # Add shipping line item if specified (links to "Shipping Fee" SKU record)
         _SHIPPING_SKU_RECORD_ID = "recvxAfBvDgM1HEpw"
@@ -11740,11 +11749,13 @@ def admin_resend_invoice(record_id):
                 lf = lr.json().get("fields", {})
                 pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
                         _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
-                price = float(lf.get("Confirmed Unit Price") or 0)
-                qty   = lf.get("Qty.", 0)
-                line_items.append({"name": pname, "qty": qty, "unit_price": price})
+                qty        = lf.get("Qty.", 0)
+                unit_price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+                li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
+                line_items.append({"name": pname, "qty": qty, "unit_price": unit_price,
+                                   "total": li_total})
 
-        total      = round(sum(li["qty"] * li["unit_price"] for li in line_items), 2)
+        total      = round(sum(li["total"] for li in line_items), 2)
         to_email   = _first(fields.get("Bill-To Contact Email (from Customer)", []))
         to_name    = _first(fields.get("Bill-To Contact Name (from Customer)", []))
         org_name   = _first(fields.get("Bill-To Org Name (from Customer)", []))
