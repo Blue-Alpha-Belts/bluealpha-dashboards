@@ -685,15 +685,32 @@
         document.getElementById(container).innerHTML = '<div class="empty-state">No applications found.</div>';
         return;
       }
+      const isApproved = !showActions; // approved tab has no approve/deny actions
       let html = '<table><thead><tr><th>Company</th><th>Applied</th><th>Status</th>' +
+        (isApproved ? '<th>Portal Account</th>' : '') +
         (showActions ? '<th>Actions</th>' : '') + '<th></th></tr></thead><tbody>';
 
       apps.forEach((a) => {
         const badge = a.status === 'Approved' ? 'badge-approved' : a.status === 'Denied' ? 'badge-denied' : 'badge-pending';
+        let portalCell = '';
+        if (isApproved) {
+          if (a.portal_setup) {
+            portalCell = `<td><span style="color:#155724;font-size:0.82rem;">✅ Active</span></td>`;
+          } else {
+            portalCell = `<td>
+              <span style="color:#856404;font-size:0.82rem;">⚠ Not set up</span>
+              <button class="btn btn-outline btn-sm" style="margin-left:8px;font-size:0.75rem;padding:2px 8px;"
+                onclick="sendPortalInvite('${a.id}','${esc(a.shipping_contact_email||a.billing_contact_email||'')}','${esc(a.company_name)}',this)">
+                📧 Send Invite
+              </button>
+            </td>`;
+          }
+        }
         html += `<tr class="app-row">
           <td><strong>${esc(a.company_name)}</strong></td>
           <td>${fmt(a.applied_date)}</td>
           <td><span class="badge ${badge}">${esc(a.status)}</span></td>
+          ${portalCell}
           ${showActions ? `<td class="action-btns">
             <button class="btn btn-success" onclick="approveApp('${a.id}', this)">Approve</button>
             <button class="btn btn-danger" onclick="openDenyModal('${a.id}')">Deny</button>
@@ -752,6 +769,32 @@
 
     function toggleDetail(id) {
       document.getElementById(id).classList.toggle('show');
+    }
+
+    async function sendPortalInvite(customerId, email, company, btn) {
+      if (!confirm(`Send a portal setup link to ${company} (${email})?`)) return;
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        const resp = await fetch(`${API}/api/admin/customers/${customerId}/send-invite`, {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok) {
+          btn.textContent = '✓ Sent';
+          btn.style.color = '#155724';
+        } else {
+          btn.disabled = false;
+          btn.textContent = '📧 Send Invite';
+          alert('Error: ' + (data.error || resp.status));
+        }
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = '📧 Send Invite';
+        alert('Request failed: ' + e.message);
+      }
     }
 
     function renderPending()  { renderTable(allApps.filter(a => a.status === 'Pending'),  'pendingContent',  true); }

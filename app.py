@@ -8735,7 +8735,8 @@ def admin_applications():
                     "Bill-To Contact Name", "Bill-To Contact Email", "Bill-To Phone #",
                     "Bill-To Address (Line 1)", "Bill-To Address (Line 2)",
                     "State Tax Exemption #", "Tax Exempt", "Tax Exemption Certificate", "Tax Rate",
-                    "Application Status", "Denial Reason", "Applied Date"],
+                    "Application Status", "Denial Reason", "Applied Date",
+                    "Portal Hash", "Portal Role"],
             formula="NOT({Application Status}='')",
         )
         apps = []
@@ -8767,6 +8768,8 @@ def admin_applications():
                 "status":                f.get("Application Status", "Pending"),
                 "denial_reason":         f.get("Denial Reason", ""),
                 "applied_date":          f.get("Applied Date", ""),
+                "portal_setup":          bool(f.get("Portal Hash", "")),
+                "portal_role":           f.get("Portal Role", ""),
             })
         # Sort most recent first
         apps.sort(key=lambda x: x.get("applied_date", ""), reverse=True)
@@ -8870,6 +8873,40 @@ def admin_deny(app_id):
             send_denial_email(contact_email, contact_name, company_name, reason)
 
         return Response(json.dumps({"success": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/customers/<record_id>/send-invite", methods=["POST"])
+def admin_send_portal_invite(record_id):
+    """Admin: generate & send a portal setup link to an approved customer who hasn't logged in yet."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = APPLY_WRITE_TOKEN or RETURNS_WRITE_TOKEN
+
+    try:
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": "Customer not found"}), status=404, headers=c, mimetype="application/json")
+        f = r.json().get("fields", {})
+
+        to_email     = f.get("Main Contact Email", "")
+        to_name      = f.get("Main Contact Name", "")
+        company_name = f.get("Organization Name", "Blue Alpha Customer")
+
+        if not to_email:
+            return Response(json.dumps({"error": "No email address on record"}), status=400, headers=c, mimetype="application/json")
+
+        setup_link = _generate_portal_invite(record_id, write_token)
+        _send_portal_invite_email(to_email, to_name, company_name, setup_link)
+
+        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
