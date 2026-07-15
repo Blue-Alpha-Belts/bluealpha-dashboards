@@ -776,7 +776,7 @@
       btn.disabled = true;
       btn.textContent = 'Sending…';
       try {
-        const resp = await fetch(`${API}/api/admin/customers/${customerId}/send-invite`, {
+        const resp = await fetch(`/api/admin/customers/${customerId}/send-invite`, {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
