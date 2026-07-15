@@ -10731,13 +10731,17 @@ def invoice_detail(record_id):
                 continue
             lf = li_data.get("fields", {})
             pname = _first(lf.get("Product Name (from Product SKU)", [])) or _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
-            price = lf.get("Confirmed Unit Price") or (_first(lf.get("Adj. Unit Price (from MO Line Items)", [])) or 0)
-            qty   = lf.get("Qty.", 0)
+            qty        = lf.get("Qty.", 0)
+            adj_price  = lf.get("Confirmed Adj. Unit Price")
+            conf_price = lf.get("Confirmed Unit Price")
+            adj_list   = lf.get("Adj. Unit Price (from MO Line Items)", [])
+            unit_price = float(adj_price if adj_price is not None else (conf_price if conf_price is not None else (_first(adj_list) or 0)))
+            li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
             line_items.append({
                 "name":       pname,
                 "qty":        qty,
-                "unit_price": float(price),
-                "total":      round(qty * float(price), 2),
+                "unit_price": unit_price,
+                "total":      li_total,
             })
 
         subtotal = round(sum(li["total"] for li in line_items), 2)
