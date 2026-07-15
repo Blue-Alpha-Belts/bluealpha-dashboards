@@ -4376,7 +4376,32 @@ def send_quote_accepted_email(to_email, to_name, org_name, qu_number, so_number)
         print(f"[send_quote_accepted_email] failed: {e}")
 
 
-def send_invoice_email(to_email, to_name, org_name, so_number, inv_number, line_items, total, tracking, ship_date=None, pdf_bytes=None):
+def _invoice_payment_buttons(cc_url, ach_url):
+    """Return HTML payment button block, or empty string if no URLs."""
+    if not cc_url and not ach_url:
+        return ""
+    buttons = ""
+    if cc_url:
+        buttons += (
+            f'<a href="{cc_url}" style="display:inline-block;margin-right:12px;margin-bottom:8px;'
+            f'padding:12px 24px;background:#1B2438;color:#ffffff;font-size:14px;font-weight:700;'
+            f'text-decoration:none;border-radius:6px;">Pay by Credit Card</a>'
+        )
+    if ach_url:
+        buttons += (
+            f'<a href="{ach_url}" style="display:inline-block;margin-bottom:8px;'
+            f'padding:12px 24px;background:#ffffff;color:#1B2438;font-size:14px;font-weight:700;'
+            f'text-decoration:none;border-radius:6px;border:2px solid #1B2438;">Pay by ACH / Bank Transfer</a>'
+        )
+    return (
+        f'<div style="margin:24px 0 20px;">'
+        f'<p style="color:#1a2633;font-size:14px;font-weight:700;margin:0 0 12px;">Pay this invoice:</p>'
+        f'{buttons}'
+        f'</div>'
+    )
+
+
+def send_invoice_email(to_email, to_name, org_name, so_number, inv_number, line_items, total, tracking, ship_date=None, pdf_bytes=None, stripe_cc_url=None, stripe_ach_url=None):
     """Send invoice email after SO is converted to invoice."""
     if not SENDGRID_API_KEY:
         return
@@ -4484,6 +4509,7 @@ def send_invoice_email(to_email, to_name, org_name, so_number, inv_number, line_
               </tr>
             </tbody>
           </table>
+          {_invoice_payment_buttons(stripe_cc_url, stripe_ach_url)}
           <p style="color:#BD3333;font-size:12px;margin:0 0 20px;line-height:1.6;">
             A 1.5% monthly late fee applies to balances unpaid after 30 days.
           </p>
@@ -11722,7 +11748,9 @@ def admin_resend_invoice(record_id):
         }
         pdf_bytes = _build_invoice_pdf_bytes(inv_dict)
         send_invoice_email(to_email, to_name, org_name, so_number, inv_number,
-                           line_items, total, tracking, ship_date=ship_date, pdf_bytes=pdf_bytes)
+                           line_items, total, tracking, ship_date=ship_date, pdf_bytes=pdf_bytes,
+                           stripe_cc_url=inv_dict.get("stripeCcUrl", ""),
+                           stripe_ach_url=inv_dict.get("stripeAchUrl", ""))
         return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
