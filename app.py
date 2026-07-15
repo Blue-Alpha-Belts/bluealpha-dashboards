@@ -4397,6 +4397,8 @@ def _invoice_payment_buttons(cc_url, ach_url):
         f'<div style="margin:24px 0 20px;">'
         f'<p style="color:#1a2633;font-size:14px;font-weight:700;margin:0 0 12px;">Pay this invoice:</p>'
         f'{buttons}'
+        f'<p style="color:#666666;font-size:12px;margin:8px 0 0;font-style:italic;">'
+        f'A 3% credit card processing fee is added to CC payments. Pay by ACH/bank transfer to avoid this fee.</p>'
         f'</div>'
     )
 
@@ -6593,7 +6595,11 @@ def _build_invoice_pdf_bytes(inv):
             pdf.set_font("Helvetica", "", 8.5)
             pdf.set_text_color(27, 100, 180)
             pdf.cell(0, 6, "Pay by ACH / Bank Transfer >>", border=0, link=stripe_ach_url, new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(4)
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(120, 120, 120)
+        pdf.cell(0, 5, "A 3% credit card processing fee is added to CC payments. Pay by ACH/bank transfer to avoid this fee.", border=0, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
 
     # ── Footer pinned to bottom of current page ───────────────────────
     PAGE_H     = 279.4   # letter height in mm
