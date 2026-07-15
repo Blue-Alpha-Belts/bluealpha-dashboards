@@ -11189,16 +11189,28 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
 
         # 3. Add line items directly to the draft invoice (avoids pending-item race condition)
         for item in li_items:
-            unit_cents_decimal = str(round(float(item["unit_price"]) * 100, 4))
-            ii_r = req_lib.post("https://api.stripe.com/v1/invoiceitems",
-                data={
+            # Prefer Confirmed Line Item Total (exact adjusted total); fall back to qty × unit_price
+            if item.get("line_total") is not None:
+                item_amount_cents = str(round(float(item["line_total"]) * 100))
+                ii_data = {
+                    "customer":    customer_id,
+                    "invoice":     stripe_inv_id,
+                    "amount":      item_amount_cents,
+                    "currency":    "usd",
+                    "description": item["name"],
+                }
+            else:
+                item_amount_cents = str(round(float(item["unit_price"]) * 100, 4))
+                ii_data = {
                     "customer":             customer_id,
                     "invoice":              stripe_inv_id,
-                    "unit_amount_decimal":  unit_cents_decimal,
+                    "unit_amount_decimal":  item_amount_cents,
                     "quantity":             str(int(item["qty"])),
                     "currency":             "usd",
                     "description":          item["name"],
-                },
+                }
+            ii_r = req_lib.post("https://api.stripe.com/v1/invoiceitems",
+                data=ii_data,
                 auth=ss_auth, timeout=15)
             if not ii_r.ok:
                 print(f"[stripe] invoice item warn ({method}): {ii_r.status_code} {ii_r.text[:200]}")
@@ -11611,13 +11623,18 @@ def admin_create_stripe_invoices(record_id):
         if fields.get("Order Type") != "Invoice":
             return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
 
-        # Guard: don't create if Stripe URLs already exist
-        if fields.get("Stripe Invoice URL (CC)"):
-            return Response(json.dumps({"error": "Stripe invoices already exist for this record"}),
-                            status=400, headers=c, mimetype="application/json")
+        body_json  = request.get_json(silent=True) or {}
+        force_recreate = body_json.get("force", False)
 
         def _first(lst):
             return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
+        # Guard: don't create if Stripe URLs already exist (unless force=true to void+recreate)
+        existing_cc_url  = fields.get("Stripe Invoice URL (CC)", "")
+        existing_ach_url = fields.get("Stripe Invoice URL (ACH)", "")
+        if existing_cc_url and not force_recreate:
+            return Response(json.dumps({"error": "Stripe invoices already exist for this record. Use force=true to void and recreate."}),
+                            status=400, headers=c, mimetype="application/json")
 
         billing_email = _first(fields.get("Bill-To Contact Email (from Customer)", []))
         billing_name  = _first(fields.get("Bill-To Contact Name (from Customer)", []))
@@ -11627,7 +11644,34 @@ def admin_create_stripe_invoices(record_id):
             return Response(json.dumps({"error": "No billing email on record"}),
                             status=400, headers=c, mimetype="application/json")
 
-        # Fetch line items
+        # If force=true, void the existing Stripe invoices first by looking them up via URL
+        if force_recreate and (existing_cc_url or existing_ach_url):
+            ss_auth = (STRIPE_SECRET_KEY, "")
+            # Fetch all open invoices for the billing email and void ones matching stored URLs
+            for _url in [existing_cc_url, existing_ach_url]:
+                if not _url:
+                    continue
+                # Try to find the invoice via Stripe list by hosted_invoice_url match
+                list_r = req_lib.get("https://api.stripe.com/v1/invoices",
+                    params={"limit": 100},
+                    auth=ss_auth, timeout=15)
+                if list_r.ok:
+                    for stripe_inv in list_r.json().get("data", []):
+                        if stripe_inv.get("hosted_invoice_url") == _url and stripe_inv.get("status") in ("open", "draft"):
+                            req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_inv['id']}/void",
+                                auth=ss_auth, timeout=15)
+                            print(f"[stripe] voided {stripe_inv['id']}")
+                            break
+            # Clear the Airtable URL fields
+            req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {"Stripe Invoice URL (CC)": "", "Stripe Invoice URL (ACH)": "",
+                                 "Stripe Due Date": ""}},
+                timeout=15,
+            )
+
+        # Fetch line items using Confirmed Adj. Unit Price + Confirmed Line Item Total
         li_ids = fields.get("MO Line Items", [])
         li_items = []
         for li_id in li_ids:
@@ -11639,9 +11683,11 @@ def admin_create_stripe_invoices(record_id):
                 lf = lr.json().get("fields", {})
                 pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
                         _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
-                price = float(lf.get("Confirmed Unit Price") or 0)
-                qty   = lf.get("Qty.", 0)
-                li_items.append({"name": pname, "qty": qty, "unit_price": price})
+                qty        = lf.get("Qty.", 0)
+                unit_price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+                li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
+                li_items.append({"name": pname, "qty": qty, "unit_price": unit_price,
+                                 "line_total": li_total})
 
         if not li_items:
             return Response(json.dumps({"error": "No line items found"}),
