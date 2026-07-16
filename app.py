@@ -7186,6 +7186,9 @@ def portal_logout():
 @app.route("/portal")
 @portal_login_required
 def portal_page(user):
+    # Department/law enforcement accounts go to their own portal
+    if user.get("role", "").lower() == "invoices":
+        return redirect("/department")
     # If this customer has contract SKUs, redirect them to the contract portal
     customer_id = user.get("customer_id", "")
     if customer_id:
@@ -7209,6 +7212,15 @@ def portal_page(user):
 @portal_login_required
 def contract_portal_page(user):
     resp = send_from_directory("static", "contract-portal.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
+
+
+@app.route("/department")
+@portal_login_required
+def department_portal_page(user):
+    """Dedicated portal for law enforcement / department accounts (Newnan PD etc.)."""
+    resp = send_from_directory("static", "pd-portal.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 
