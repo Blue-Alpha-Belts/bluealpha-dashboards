@@ -133,52 +133,71 @@
     }
     .catalog-search:focus { border-color: var(--navy); }
 
-    .cat-section { margin-bottom: 16px; }
-    .cat-section-header {
-      background: var(--navy); color: var(--white); padding: 10px 16px;
-      border-radius: 8px; cursor: pointer; display: flex;
-      justify-content: space-between; align-items: center;
-      font-family: 'Montserrat', sans-serif; font-size: 0.82rem;
-      font-weight: 700; letter-spacing: 0.5px; user-select: none;
-      transition: background 0.15s;
+    /* ── Category accordion ── */
+    .cat-section { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; overflow: hidden; transition: box-shadow 0.15s, margin 0.15s; }
+    .cat-section.expanded { margin-bottom: 16px; margin-top: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.10); border-color: #b0bec5; }
+    .cat-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; cursor: pointer; background: var(--light);
+      font-weight: 700; font-size: 0.9rem; color: var(--text);
+      user-select: none; transition: background 0.15s;
     }
-    .cat-section-header:hover { background: #253352; }
-    .cat-section-header .chevron { transition: transform 0.2s; }
-    .cat-section-header.collapsed .chevron { transform: rotate(-90deg); }
-    .cat-section-body {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-      gap: 10px; padding: 12px 0 4px;
-    }
-    .cat-section-body.hidden { display: none; }
+    .cat-header:hover { background: #eaecf0; }
+    .cat-header .cat-arrow { font-size: 0.75rem; color: var(--muted); transition: transform 0.2s; }
+    .cat-header.open .cat-arrow { transform: rotate(90deg); }
+    .cat-count { font-size: 0.8rem; color: var(--muted); font-weight: 400; margin-left: 6px; }
+    .cat-body { display: none; border-top: 1px solid var(--border); }
+    .cat-body.open { display: block; }
 
-    .product-card {
-      background: var(--white); border: 1px solid var(--border);
-      border-radius: 8px; padding: 14px; display: flex;
-      flex-direction: column; gap: 8px;
+    .product-item { border-bottom: 1px solid var(--border); }
+    .product-item:last-child { border-bottom: none; }
+    .product-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 11px 16px; cursor: pointer; transition: background 0.15s;
+      font-size: 0.9rem; color: var(--text);
     }
-    .product-name { font-weight: 700; font-size: 0.85rem; color: var(--text); line-height: 1.3; }
-    .product-price { font-size: 1.05rem; font-weight: 700; color: var(--navy); }
-    .product-selectors { display: flex; flex-direction: column; gap: 6px; }
-    .product-selectors select {
-      width: 100%; padding: 6px 10px; border: 1.5px solid var(--border);
-      border-radius: 6px; font-size: 0.8rem; font-family: 'Lato', sans-serif;
-      background: var(--white); cursor: pointer; outline: none;
+    .product-row:hover { background: #f0f4f8; }
+    .product-row.active {
+      background: #dce8f5; color: var(--navy); font-weight: 700;
+      border-left: 4px solid var(--navy); padding-left: 12px;
     }
-    .product-selectors select:focus { border-color: var(--navy); }
-    .qty-row { display: flex; align-items: center; gap: 8px; }
-    .qty-row label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
-    .qty-row input[type=number] {
-      width: 64px; padding: 6px 10px; border: 1.5px solid var(--border);
-      border-radius: 6px; font-size: 0.85rem; text-align: center; outline: none;
+    .product-row .p-arrow { font-size: 0.75rem; color: var(--muted); transition: transform 0.2s; }
+    .product-row.active .p-arrow { transform: rotate(90deg); color: var(--navy); }
+    .product-item.active { box-shadow: 0 0 0 2px var(--navy); border-radius: 4px; overflow: hidden; }
+
+    .product-selector {
+      display: none; padding: 18px 20px 20px; background: #f7f9fc;
+      border-top: 1px solid var(--border);
     }
-    .qty-row input:focus { border-color: var(--navy); }
-    .btn-add {
-      background: var(--navy); color: var(--white); border: none;
-      border-radius: 6px; padding: 8px 14px; font-size: 0.82rem;
-      font-weight: 700; font-family: 'Lato', sans-serif;
-      cursor: pointer; width: 100%; transition: background 0.15s;
+    .product-selector.open { display: block; }
+    .sel-row { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+    .sel-row:last-child { margin-bottom: 0; }
+    .sel-field { flex: 1; min-width: 120px; }
+    .sel-field label { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); display: block; margin-bottom: 6px; }
+    .sel-qty { flex: 0 0 70px; }
+    .btn-add-inline {
+      flex: 0 0 auto; padding: 10px 18px; background: var(--navy); color: #fff;
+      border: none; border-radius: 6px; font-family: 'Montserrat', sans-serif;
+      font-size: 0.85rem; font-weight: 700; cursor: pointer; white-space: nowrap;
+      transition: opacity 0.15s;
     }
-    .btn-add:hover { background: #253352; }
+    .btn-add-inline:hover { opacity: 0.85; }
+    .btn-add-inline:disabled { opacity: 0.4; cursor: not-allowed; }
+    .one-size-label {
+      padding: 11px 14px; font-size: 0.92rem; color: var(--muted);
+      font-style: italic; border: 1px solid var(--border);
+      border-radius: 6px; background: #f0f2f5;
+    }
+    .sku-price-row { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; font-size: 0.9rem; color: var(--muted); }
+    .sku-price-row .sku-price-val { font-size: 1.05rem; font-weight: 700; color: var(--navy); }
+    .catalog-loading { padding: 20px; text-align: center; color: var(--muted); font-size: 0.9rem; }
+    .catalog-section-wrap { margin-bottom: 4px; }
+    .sel-field select, .sel-field input[type=number] {
+      width: 100%; padding: 8px 10px; border: 1.5px solid var(--border);
+      border-radius: 6px; font-size: 0.88rem; font-family: 'Lato', sans-serif;
+      background: var(--white); outline: none; transition: border-color 0.15s;
+    }
+    .sel-field select:focus, .sel-field input[type=number]:focus { border-color: var(--navy); }
 
     /* ── Order form panel ── */
     .order-form-card { padding: 24px; position: sticky; top: 20px; }
@@ -394,10 +413,14 @@
         <div class="card catalog-card">
           <div class="card-title">Product Catalog</div>
           <div class="card-sub">Newnan PD pricing applied. Select items to add to the order.</div>
-          <input type="text" class="catalog-search" id="searchInput"
-                 placeholder="Search products…" oninput="filterCatalog()">
-          <div id="catalogContainer">
-            <div class="loading"><div class="spinner"></div><p style="margin-top:12px">Loading catalog…</p></div>
+          <div id="catalogSearchWrap" style="margin-bottom:12px;">
+            <input type="text" id="catalogSearch" placeholder="Search products…"
+              oninput="filterCatalog(this.value)"
+              style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:6px;font-size:0.9rem;outline:none;box-sizing:border-box;"
+              onfocus="this.style.borderColor='var(--navy)'" onblur="this.style.borderColor='var(--border)'">
+          </div>
+          <div class="catalog-section-wrap" id="catalogWrap">
+            <div class="catalog-loading">Loading products…</div>
           </div>
         </div>
 
@@ -470,10 +493,11 @@
 <script>
 'use strict';
 
-let portalUser  = null;
-let catalog     = null;
-let lineItems   = [];
-let expandedRow = null;
+let portalUser   = null;
+let catalog      = null;
+let lineItems    = [];
+let expandedRow  = null;
+let activeParent = null;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
@@ -576,151 +600,315 @@ function switchTab(name) {
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
 async function loadCatalog() {
-  const el = document.getElementById('catalogContainer');
+  const wrap = document.getElementById('catalogWrap');
   try {
     const r = await fetch('/api/department/catalog', { credentials: 'include' });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      el.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load catalog (${r.status}): ${esc(d.error || '')}</div>`;
+      wrap.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load catalog (${r.status}): ${esc(d.error || '')}</div>`;
       return;
     }
     catalog = await r.json();
-    renderCatalog(catalog, '');
+    buildCatalogUI();
   } catch(e) {
-    el.innerHTML = `<div style="color:var(--red);padding:16px">Network error: ${esc(e.message)}</div>`;
+    wrap.innerHTML = `<div style="color:var(--red);padding:16px">Network error: ${esc(e.message)}</div>`;
   }
 }
 
-function renderCatalog(data, filterText) {
-  const container = document.getElementById('catalogContainer');
-  if (!data || !data.skus) { container.innerHTML = '<div class="empty-state"><h3>No catalog data</h3></div>'; return; }
+const catOrder = ['EDC Belts','Battle Belts','Duty Belts','Mag Pouches','Handcuff Cases','Pouches','Medical Kits','Accessories','Support Accessories','Apparel'];
 
-  const lowerFilter = (filterText || '').toLowerCase().trim();
+function _productHtml(p) {
+  return `
+    <div class="product-item" id="pi_${p.id}">
+      <div class="product-row" onclick="toggleProduct('${p.id}', this)">
+        <span>${esc(p.name)}</span>
+        <span class="p-arrow">▶</span>
+      </div>
+      <div class="product-selector" id="ps_${p.id}">
+        <div class="sel-row">
+          <div class="sel-field">
+            <label>Color</label>
+            <select id="sc_${p.id}" onchange="onSelColor('${p.id}')">
+              <option value="">Select a color…</option>
+            </select>
+          </div>
+          <div class="sel-field hidden" id="szfield_${p.id}">
+            <label>Size</label>
+            <select id="ss_${p.id}" onchange="onSelSize('${p.id}')" autocomplete="off">
+              <option value="">Select a size…</option>
+            </select>
+          </div>
+        </div>
+        <div class="sel-row hidden" id="sfrow_${p.id}">
+          <div class="sel-field" style="flex:1 1 100%">
+            <label>Style / Version</label>
+            <select id="sfeat_${p.id}" onchange="onSelFeature('${p.id}')">
+              <option value="">Select a style…</option>
+            </select>
+          </div>
+        </div>
+        <div class="sku-price-row hidden" id="spricerow_${p.id}">
+          Unit price: <span class="sku-price-val" id="sprice_${p.id}"></span>
+        </div>
+        <div class="sel-row hidden" id="sqrow_${p.id}">
+          <div class="sel-field sel-qty">
+            <label>Qty</label>
+            <input type="number" id="sq_${p.id}" min="1" value="1" style="text-align:center">
+          </div>
+          <button class="btn-add-inline" id="sb_${p.id}" disabled
+                  onclick="addCatalogItem('${p.id}')">Add to Order</button>
+        </div>
+      </div>
+    </div>`;
+}
 
-  // Group SKUs by parentId
-  const parentMap = {};
-  for (const sku of data.skus) {
-    if (!parentMap[sku.parentId]) {
-      parentMap[sku.parentId] = { name: sku.parentName, skus: [], category: sku.category };
-    }
-    parentMap[sku.parentId].skus.push(sku);
+function buildCatalogUI() {
+  // Build catMap: category → Set of parentIds
+  const catMap = {};
+  for (const sku of catalog.skus) {
+    const cat = sku.category || 'Other';
+    if (!catMap[cat]) catMap[cat] = new Set();
+    catMap[cat].add(sku.parentId);
   }
 
-  // Ordered parent IDs from data.parents
-  const parentOrder = (data.parents || []).map(p => p.id).filter(id => parentMap[id]);
+  const cats = Object.keys(catMap).sort((a, b) => {
+    const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b);
+  });
 
-  let html = '';
-  for (const parentId of parentOrder) {
-    const group = parentMap[parentId];
-    let visibleSkus = group.skus;
-    if (lowerFilter) {
-      visibleSkus = visibleSkus.filter(s =>
-        s.name.toLowerCase().includes(lowerFilter) ||
-        s.parentName.toLowerCase().includes(lowerFilter)
-      );
-    }
-    if (!visibleSkus.length) continue;
+  const wrap = document.getElementById('catalogWrap');
+  wrap.innerHTML = '';
 
-    const hasColor = visibleSkus.some(s => s.colorId);
-    const hasSize  = visibleSkus.some(s => s.sizeId);
-    const hasFvar  = visibleSkus.some(s => s.featureVarId);
-
-    html += `<div class="cat-section">
-      <div class="cat-section-header" onclick="toggleSection(this)">
-        <span>${esc(group.name)}</span>
-        <span class="chevron">▾</span>
+  for (const cat of cats) {
+    // Preserve catalog.parents order within each category
+    const parentIds = catalog.parents.filter(p => catMap[cat].has(p.id));
+    const section = document.createElement('div');
+    section.className = 'cat-section';
+    section.innerHTML = `
+      <div class="cat-header" onclick="toggleCat(this)">
+        <span>${esc(cat)}<span class="cat-count">(${parentIds.length})</span></span>
+        <span class="cat-arrow">▶</span>
       </div>
-      <div class="cat-section-body">`;
+      <div class="cat-body">
+        ${parentIds.map(p => _productHtml(p)).join('')}
+      </div>
+    `;
+    wrap.appendChild(section);
+  }
+}
 
-    if (hasColor || hasSize || hasFvar) {
-      html += buildVariantCard(parentId, group.name, visibleSkus);
-    } else {
-      for (const sku of visibleSkus) {
-        html += buildSimpleCard(sku);
+function toggleCat(header) {
+  header.classList.toggle('open');
+  header.nextElementSibling.classList.toggle('open');
+  header.closest('.cat-section').classList.toggle('expanded');
+}
+
+function toggleProduct(parentId, rowEl) {
+  if (activeParent && activeParent !== parentId) {
+    const prev     = document.getElementById('ps_' + activeParent);
+    const prevRow  = prev && prev.previousElementSibling;
+    const prevItem = document.getElementById('pi_' + activeParent);
+    if (prev)     prev.classList.remove('open');
+    if (prevRow)  prevRow.classList.remove('active');
+    if (prevItem) prevItem.classList.remove('active');
+  }
+
+  const selector = document.getElementById('ps_' + parentId);
+  const item     = document.getElementById('pi_' + parentId);
+  const isOpen   = selector.classList.contains('open');
+
+  selector.classList.toggle('open', !isOpen);
+  rowEl.classList.toggle('active', !isOpen);
+  item.classList.toggle('active', !isOpen);
+  activeParent = isOpen ? null : parentId;
+
+  // Populate colors when opening for the first time
+  if (!isOpen) {
+    const colorSel = document.getElementById('sc_' + parentId);
+    if (colorSel.options.length <= 1) {
+      const colorMap = {};
+      for (const sku of catalog.skus) {
+        if (sku.parentId === parentId && sku.colorId && sku.colorName)
+          colorMap[sku.colorId] = sku.colorName;
+      }
+      const colors = Object.entries(colorMap).sort((a,b) => a[1].localeCompare(b[1]));
+      for (const [id, name] of colors) {
+        const opt = document.createElement('option');
+        opt.value = id; opt.textContent = name;
+        colorSel.appendChild(opt);
+      }
+      if (colors.length === 1) {
+        colorSel.value = colors[0][0];
+        onSelColor(parentId);
       }
     }
+  }
+}
 
-    html += `</div></div>`;
+function onSelColor(parentId) {
+  const colorId = document.getElementById('sc_' + parentId).value;
+  const sizeSel = document.getElementById('ss_' + parentId);
+  const szField = document.getElementById('szfield_' + parentId);
+
+  sizeSel.innerHTML = '<option value="">Select a size…</option>';
+  szField.classList.add('hidden');
+  _resetFeature(parentId);
+  document.getElementById('sqrow_' + parentId).classList.add('hidden');
+  document.getElementById('spricerow_' + parentId).classList.add('hidden');
+  document.getElementById('sb_' + parentId).disabled = true;
+
+  if (!colorId) return;
+
+  const sizeMap = {};
+  for (const sku of catalog.skus) {
+    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId && sku.sizeName)
+      sizeMap[sku.sizeId] = sku.sizeName;
+  }
+  const sizes = Object.entries(sizeMap).sort((a,b) => {
+    const na = parseFloat(a[1]), nb = parseFloat(b[1]);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a[1].localeCompare(b[1]);
+  });
+
+  if (sizes.length <= 1) {
+    szField.classList.add('hidden');
+    if (sizes.length === 1) {
+      const opt = document.createElement('option');
+      opt.value = sizes[0][0]; opt.textContent = sizes[0][1];
+      sizeSel.appendChild(opt);
+      sizeSel.value = sizes[0][0];
+    }
+    populateFeatures(parentId);
+    return;
   }
 
-  container.innerHTML = html || '<div class="empty-state"><h3>No products match your search.</h3></div>';
+  szField.classList.remove('hidden');
+  for (const [id, name] of sizes) {
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = name;
+    sizeSel.appendChild(opt);
+  }
 }
 
-function buildVariantCard(parentId, parentName, skus) {
-  const colors = [...new Map(skus.filter(s => s.colorId).map(s => [s.colorId, s.colorName])).entries()];
-  const sizes  = [...new Map(skus.filter(s => s.sizeId).map(s  => [s.sizeId,  s.sizeName])).entries()];
-  const fvars  = [...new Map(skus.filter(s => s.featureVarId).map(s => [s.featureVarId, s.featureVarName])).entries()];
-
-  const firstSku  = skus[0];
-  const colorSel  = colors.length ? `<select onchange="updateVariantPrice('${parentId}')">${colors.map(([id,n]) => `<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
-  const sizeSel   = sizes.length  ? `<select onchange="updateVariantPrice('${parentId}')">${sizes.map(([id,n])  => `<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
-  const fvarSel   = fvars.length  ? `<select onchange="updateVariantPrice('${parentId}')">${fvars.map(([id,n])  => `<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
-
-  return `<div class="product-card" data-parent-id="${parentId}" data-skus='${JSON.stringify(skus).replace(/'/g,"&#39;")}'>
-    <div class="product-name">${esc(parentName)}</div>
-    <div class="product-price" id="price-${parentId}">$${fmt(firstSku.price)}</div>
-    <div class="product-selectors">${colorSel}${sizeSel}${fvarSel}</div>
-    <div class="qty-row">
-      <label>Qty:</label>
-      <input type="number" id="qty-${parentId}" value="1" min="1" max="99">
-    </div>
-    <button class="btn-add" onclick="addVariantItem('${parentId}')">Add to Order</button>
-  </div>`;
+function onSelSize(parentId) {
+  const sizeId = document.getElementById('ss_' + parentId).value;
+  _resetFeature(parentId);
+  document.getElementById('sqrow_' + parentId).classList.add('hidden');
+  document.getElementById('spricerow_' + parentId).classList.add('hidden');
+  document.getElementById('sb_' + parentId).disabled = true;
+  if (sizeId) populateFeatures(parentId);
 }
 
-function buildSimpleCard(sku) {
-  return `<div class="product-card">
-    <div class="product-name">${esc(sku.name)}</div>
-    <div class="product-price">$${fmt(sku.price)}</div>
-    <div class="qty-row">
-      <label>Qty:</label>
-      <input type="number" id="qty-sku-${sku.recordId}" value="1" min="1" max="99">
-    </div>
-    <button class="btn-add" onclick="addSimpleItem('${sku.recordId}', ${JSON.stringify(sku.name)}, ${sku.price})">Add to Order</button>
-  </div>`;
+function _resetFeature(parentId) {
+  const featRow = document.getElementById('sfrow_' + parentId);
+  const featSel = document.getElementById('sfeat_' + parentId);
+  if (featRow) featRow.classList.add('hidden');
+  if (featSel) { featSel.innerHTML = '<option value="">Select a style…</option>'; featSel.value = ''; }
 }
 
-function updateVariantPrice(parentId) {
-  const card = document.querySelector(`.product-card[data-parent-id="${parentId}"]`);
-  if (!card) return;
-  const skus = JSON.parse(card.dataset.skus);
-  const selects = card.querySelectorAll('select');
-  const colorVal = selects[0] ? selects[0].value : '';
-  const sizeVal  = selects[1] ? selects[1].value : '';
-  const fvarVal  = selects[2] ? selects[2].value : '';
-  const match = findSku(skus, colorVal, sizeVal, fvarVal);
-  if (match) document.getElementById(`price-${parentId}`).textContent = `$${fmt(match.price)}`;
+function populateFeatures(parentId) {
+  const colorId = document.getElementById('sc_' + parentId).value;
+  const sizeId  = document.getElementById('ss_' + parentId).value;
+  const featRow = document.getElementById('sfrow_' + parentId);
+  const featSel = document.getElementById('sfeat_' + parentId);
+
+  const fvarMap = {};
+  for (const sku of catalog.skus) {
+    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId === sizeId
+        && sku.featureVarId && sku.featureVarName)
+      fvarMap[sku.featureVarId] = sku.featureVarName;
+  }
+  const fvars = Object.entries(fvarMap).sort((a,b) => a[1].localeCompare(b[1]));
+
+  if (!featRow || fvars.length <= 1) {
+    if (featRow) featRow.classList.add('hidden');
+    if (featSel && fvars.length === 1) featSel.value = fvars[0][0];
+    document.getElementById('sqrow_' + parentId).classList.remove('hidden');
+    document.getElementById('sb_' + parentId).disabled = false;
+    _updatePrice(parentId);
+    return;
+  }
+
+  featSel.innerHTML = '<option value="">Select a style…</option>';
+  for (const [id, name] of fvars) {
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = name;
+    featSel.appendChild(opt);
+  }
+  featRow.classList.remove('hidden');
+  document.getElementById('sqrow_' + parentId).classList.remove('hidden');
+  document.getElementById('sb_' + parentId).disabled = true;
 }
 
-function findSku(skus, colorId, sizeId, fvarId) {
-  let match = skus.find(s =>
-    (!colorId || s.colorId === colorId) &&
-    (!sizeId  || s.sizeId  === sizeId)  &&
-    (!fvarId  || s.featureVarId === fvarId)
+function onSelFeature(parentId) {
+  const featId = document.getElementById('sfeat_' + parentId)?.value || '';
+  document.getElementById('sb_' + parentId).disabled = !featId;
+  _updatePrice(parentId);
+}
+
+function _updatePrice(parentId) {
+  const colorId      = document.getElementById('sc_' + parentId).value;
+  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
+  const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
+  const priceEl      = document.getElementById('sprice_' + parentId);
+  const priceRow     = document.getElementById('spricerow_' + parentId);
+
+  const sizeRowHidden = document.getElementById('szfield_' + parentId)?.classList.contains('hidden') ?? true;
+  const featRowHidden = document.getElementById('sfrow_'   + parentId)?.classList.contains('hidden') ?? true;
+
+  if (!colorId || (!sizeRowHidden && !sizeId) || (!featRowHidden && !featureVarId)) {
+    if (priceRow) priceRow.classList.add('hidden');
+    return;
+  }
+
+  const sku = catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
+    (featureVarId ? s.featureVarId === featureVarId : true)
   );
-  if (!match) match = skus.find(s => (!colorId || s.colorId === colorId) && (!sizeId || s.sizeId === sizeId));
-  if (!match) match = skus.find(s => (!colorId || s.colorId === colorId));
-  if (!match) match = skus[0];
-  return match;
+
+  if (priceEl && priceRow) {
+    if (sku) {
+      priceEl.textContent = '$' + sku.price.toFixed(2);
+      priceRow.classList.remove('hidden');
+    } else {
+      priceRow.classList.add('hidden');
+    }
+  }
 }
 
-function addVariantItem(parentId) {
-  const card = document.querySelector(`.product-card[data-parent-id="${parentId}"]`);
-  if (!card) return;
-  const skus = JSON.parse(card.dataset.skus);
-  const selects = card.querySelectorAll('select');
-  const colorVal = selects[0] ? selects[0].value : '';
-  const sizeVal  = selects[1] ? selects[1].value : '';
-  const fvarVal  = selects[2] ? selects[2].value : '';
-  const sku = findSku(skus, colorVal, sizeVal, fvarVal);
+function addCatalogItem(parentId) {
+  const colorId      = document.getElementById('sc_' + parentId).value;
+  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
+  const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
+  const qty          = Math.max(1, parseInt(document.getElementById('sq_' + parentId).value) || 1);
+
+  if (!colorId) return;
+
+  const sku = catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
+    (featureVarId ? s.featureVarId === featureVarId : true)
+  ) || catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId
+  ) || catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId
+  );
   if (!sku) return;
-  const qty = parseInt(document.getElementById(`qty-${parentId}`)?.value || '1', 10) || 1;
-  addToOrder(sku.recordId, sku.name, sku.price, qty);
-}
 
-function addSimpleItem(recordId, name, price) {
-  const qty = parseInt(document.getElementById(`qty-sku-${recordId}`)?.value || '1', 10) || 1;
-  addToOrder(recordId, name, price, qty);
+  addToOrder(sku.recordId, sku.name, sku.price, qty);
+
+  // Reset size after add (keep color selected for quick multi-size orders)
+  const sizeSel = document.getElementById('ss_' + parentId);
+  if (sizeSel) { sizeSel.value = ''; sizeSel.innerHTML = '<option value="">Select a size…</option>'; }
+  document.getElementById('sqrow_' + parentId).classList.add('hidden');
+  document.getElementById('spricerow_' + parentId).classList.add('hidden');
+  document.getElementById('sb_' + parentId).disabled = true;
+  document.getElementById('sq_' + parentId).value = 1;
+  _resetFeature(parentId);
+  // Re-trigger color selection to repopulate sizes
+  onSelColor(parentId);
 }
 
 function addToOrder(recordId, name, price, qty) {
@@ -734,14 +922,44 @@ function addToOrder(recordId, name, price, qty) {
   validateOrder();
 }
 
-function filterCatalog() {
-  const q = document.getElementById('searchInput').value;
-  if (catalog) renderCatalog(catalog, q);
-}
-
-function toggleSection(header) {
-  header.classList.toggle('collapsed');
-  header.nextElementSibling.classList.toggle('hidden');
+function filterCatalog(query) {
+  const q = (query || '').trim().toLowerCase();
+  const wrap = document.getElementById('catalogWrap');
+  if (!wrap) return;
+  const sections = wrap.querySelectorAll('.cat-section');
+  sections.forEach(section => {
+    const items = section.querySelectorAll('.product-item');
+    let visibleCount = 0;
+    items.forEach(item => {
+      const name = (item.querySelector('.product-row span')?.textContent || '').toLowerCase();
+      const match = !q || name.includes(q);
+      item.style.display = match ? '' : 'none';
+      if (match) visibleCount++;
+    });
+    if (!q) {
+      section.style.display = '';
+      const header = section.querySelector('.cat-header');
+      const body   = section.querySelector('.cat-body');
+      if (section.dataset.searchExpanded) {
+        header.classList.remove('open');
+        body.classList.remove('open');
+        section.classList.remove('expanded');
+        delete section.dataset.searchExpanded;
+      }
+    } else if (visibleCount === 0) {
+      section.style.display = 'none';
+    } else {
+      section.style.display = '';
+      const header = section.querySelector('.cat-header');
+      const body   = section.querySelector('.cat-body');
+      if (!header.classList.contains('open')) {
+        section.dataset.searchExpanded = '1';
+        header.classList.add('open');
+        body.classList.add('open');
+        section.classList.add('expanded');
+      }
+    }
+  });
 }
 
 // ── Line Items ────────────────────────────────────────────────────────────────
