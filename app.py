@@ -7242,18 +7242,22 @@ def department_catalog(user):
             at_get_all, PRODUCT_SKUS_TABLE_ID, token,
             ["SKU ID", "Name + Variations", "Sale Price", "Newnan PD Price",
              "Newnan PD Discount", "Parent Product", "Color", "Size",
-             "Feature Variation", "Category"],
+             "Feature Variation", "Add-ons", "Category"],
             "{Newnan PD Discount}>0",
         )
-        with _cf_dc.ThreadPoolExecutor(max_workers=4) as ex:
-            fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID, token, fields=["Name"])
-            fut_colors  = ex.submit(at_get_all, COLORS_TABLE_ID,          token, fields=["Name"])
-            fut_sizes   = ex.submit(at_get_all, SIZES_TABLE_ID,           token, fields=["Name"])
+        with _cf_dc.ThreadPoolExecutor(max_workers=5) as ex:
+            fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID,    token, fields=["Name", "Category"])
+            fut_colors  = ex.submit(at_get_all, COLORS_TABLE_ID,             token, fields=["Name"])
+            fut_sizes   = ex.submit(at_get_all, SIZES_TABLE_ID,              token, fields=["Name"])
             fut_fvars   = ex.submit(at_get_all, FEATURE_VARIATIONS_TABLE_ID, token, fields=["Name"])
-            parent_map  = {r["id"]: r["fields"].get("Name", "") for r in fut_parents.result()}
+            fut_addons  = ex.submit(at_get_all, ADDONS_TABLE_ID,             token, fields=["Name"])
+            parent_recs = fut_parents.result()
+            parent_map  = {r["id"]: r["fields"].get("Name", "") for r in parent_recs}
+            parent_cat_map = {r["id"]: r["fields"].get("Category", "") for r in parent_recs}
             color_map   = {r["id"]: r["fields"].get("Name", "") for r in fut_colors.result()}
             size_map    = {r["id"]: r["fields"].get("Name", "") for r in fut_sizes.result()}
             fvar_map    = {r["id"]: r["fields"].get("Name", "").strip() for r in fut_fvars.result()}
+            addon_map   = {r["id"]: r["fields"].get("Name", "").strip() for r in fut_addons.result()}
 
         sku_records = fut_skus.result()
         skus = []
@@ -7272,16 +7276,22 @@ def department_catalog(user):
             color_ids = f.get("Color", [])
             size_ids  = f.get("Size", [])
             fvar_ids  = f.get("Feature Variation", [])
+            addon_ids = f.get("Add-ons", [])
             color_id   = color_ids[0] if color_ids else ""
             size_id    = size_ids[0]  if size_ids  else ""
             fvar_id    = fvar_ids[0]  if fvar_ids  else ""
+            addon_id   = addon_ids[0] if addon_ids else ""
             color_name = color_map.get(color_id, "")
             size_name  = size_map.get(size_id, "")
             fvar_name  = fvar_map.get(fvar_id, "").strip() if fvar_id else ""
+            addon_name = addon_map.get(addon_id, "").strip() if addon_id else ""
             if size_name.strip().lower() in ("none", "n/a", "one size"):
                 size_id = ""; size_name = ""
             if fvar_name.lower() in ("none", ""):
                 fvar_id = ""; fvar_name = ""
+            if addon_name.lower() in ("none", ""):
+                addon_id = ""; addon_name = ""
+            cat = f.get("Category", "") or parent_cat_map.get(parent_id, "")
             skus.append({
                 "recordId":       r["id"],
                 "sku":            f.get("SKU ID", ""),
@@ -7295,7 +7305,9 @@ def department_catalog(user):
                 "sizeName":       size_name,
                 "featureVarId":   fvar_id,
                 "featureVarName": fvar_name,
-                "category":       f.get("Category", ""),
+                "addonId":        addon_id,
+                "addonName":      addon_name,
+                "category":       cat,
             })
             if parent_id not in seen_parents:
                 seen_parents[parent_id] = parent_name
