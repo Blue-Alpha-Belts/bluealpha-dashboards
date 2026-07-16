@@ -7246,14 +7246,14 @@ def department_catalog(user):
             "{Newnan PD Discount}>0",
         )
         with _cf_dc.ThreadPoolExecutor(max_workers=5) as ex:
-            fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID,    token, fields=["Name", "Category"])
+            fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID,    token, fields=["Name"])
             fut_colors  = ex.submit(at_get_all, COLORS_TABLE_ID,             token, fields=["Name"])
             fut_sizes   = ex.submit(at_get_all, SIZES_TABLE_ID,              token, fields=["Name"])
             fut_fvars   = ex.submit(at_get_all, FEATURE_VARIATIONS_TABLE_ID, token, fields=["Name"])
             fut_addons  = ex.submit(at_get_all, ADDONS_TABLE_ID,             token, fields=["Name"])
             parent_recs = fut_parents.result()
             parent_map  = {r["id"]: r["fields"].get("Name", "") for r in parent_recs}
-            parent_cat_map = {r["id"]: r["fields"].get("Category", "") for r in parent_recs}
+            parent_cat_map = {}  # category comes from SKU records, not parent records
             color_map   = {r["id"]: r["fields"].get("Name", "") for r in fut_colors.result()}
             size_map    = {r["id"]: r["fields"].get("Name", "") for r in fut_sizes.result()}
             fvar_map    = {r["id"]: r["fields"].get("Name", "").strip() for r in fut_fvars.result()}
