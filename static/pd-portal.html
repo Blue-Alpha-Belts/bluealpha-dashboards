@@ -17,6 +17,7 @@
       --muted:   #6b7a8d;
       --white:   #ffffff;
       --success: #1a7a3c;
+      --steel:   #8fa3b8;
     }
     body { font-family: 'Lato', sans-serif; background: var(--light); color: var(--text); min-height: 100vh; }
 
@@ -126,12 +127,6 @@
 
     /* ── Catalog panel ── */
     .catalog-card { padding: 24px; }
-    .catalog-search {
-      width: 100%; padding: 10px 14px; border: 1.5px solid var(--border);
-      border-radius: 7px; font-size: 0.9rem; font-family: 'Lato', sans-serif;
-      outline: none; margin-bottom: 20px; transition: border-color 0.15s;
-    }
-    .catalog-search:focus { border-color: var(--navy); }
 
     /* ── Category accordion ── */
     .hidden { display: none !important; }
@@ -200,6 +195,22 @@
     }
     .sel-field select:focus, .sel-field input[type=number]:focus { border-color: var(--navy); }
 
+    /* ── Product description ── */
+    .product-desc { margin: 0 0 12px; padding: 10px 13px; background: #f4f7fa; border-left: 3px solid var(--steel); border-radius: 0 5px 5px 0; font-size: 0.85rem; color: #3a4a5c; line-height: 1.6; }
+    .product-desc ul { margin: 4px 0 0 0; padding-left: 18px; }
+    .product-desc li { margin: 1px 0; }
+    .product-desc .desc-section { font-weight: 700; margin-top: 8px; }
+    .product-desc .desc-section:first-child { margin-top: 0; }
+
+    /* ── Size note ── */
+    .size-note-row { margin-top: 10px; }
+    .size-note-row input { font-size: 0.92rem; }
+    .size-note-error { display:none; margin-top:6px; padding:7px 10px; background:#fff0f0; border:1px solid #f5c2c2; border-radius:5px; color:#7a1515; font-size:0.84rem; font-weight:600; }
+    .size-note-error.show { display:block; }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-6px)} 40%{transform:translateX(6px)} 60%{transform:translateX(-5px)} 80%{transform:translateX(5px)} }
+    .shake { animation: shake 0.4s ease; }
+    .item-note { font-size: 0.82rem; color: var(--muted); margin-top: 3px; font-style: italic; }
+
     /* ── Order form panel ── */
     .order-form-card { padding: 24px; position: sticky; top: 20px; }
     .order-panel-title {
@@ -263,9 +274,7 @@
 
     /* ── Confirmation ── */
     #confirmPanel { display: none; }
-    .confirm-badge {
-      text-align: center; padding: 28px 0 20px;
-    }
+    .confirm-badge { text-align: center; padding: 28px 0 20px; }
     .confirm-so {
       font-family: 'Montserrat', sans-serif; font-size: 2.2rem;
       font-weight: 800; color: var(--navy); letter-spacing: 0.05em;
@@ -316,9 +325,7 @@
 
     /* Detail row */
     .detail-row td { padding: 0 !important; border-bottom: 2px solid var(--navy) !important; }
-    .detail-inner {
-      background: #f8f9fb; padding: 16px 20px 20px;
-    }
+    .detail-inner { background: #f8f9fb; padding: 16px 20px 20px; }
     .detail-title {
       font-family: 'Montserrat', sans-serif; font-size: 0.75rem;
       font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
@@ -495,7 +502,7 @@
 'use strict';
 
 let portalUser   = null;
-let catalog      = null;
+let catalog      = null;   // { parents, skus }
 let lineItems    = [];
 let expandedRow  = null;
 let activeParent = null;
@@ -503,7 +510,6 @@ let activeParent = null;
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Check existing session
   try {
     const r = await fetch('/api/portal/me', { credentials: 'include' });
     if (r.ok) {
@@ -616,9 +622,64 @@ async function loadCatalog() {
   }
 }
 
-const catOrder = ['EDC Belts','Battle Belts','Duty Belts','Mag Pouches','Handcuff Cases','Pouches','Medical Kits','Accessories','Support Accessories','Apparel'];
+// ── Catalog constants (copied from quote.html) ────────────────────────────────
+
+const _SIZE_ONLY_RESET_PARENTS = new Set([
+  "2\" duty belt lite - molle",
+  "2\" duty belt lite - standard",
+  "1.75\" battle belt lite",
+]);
+
+const _PRODUCT_DESCRIPTIONS = {
+  "2\" duty belt lite - molle": `
+    <div class="desc-section">Combo includes</div>
+    <ul>
+      <li>(2) Pistol Magazine Pouches</li>
+      <li>Handcuff Strap</li>
+      <li>Set of 4 Keepers</li>
+    </ul>`,
+  "2\" duty belt lite - standard": `
+    <div class="desc-section">Combo includes</div>
+    <ul>
+      <li>(2) Pistol Magazine Pouches</li>
+      <li>Handcuff Strap</li>
+      <li>Set of 4 Keepers</li>
+    </ul>`,
+  "1.75\" battle belt lite": `
+    <div class="desc-section">Combo includes</div>
+    <ul>
+      <li>(2) Rifle Magazine Pouches</li>
+      <li>(2) 3&Prime; Pistol Magazine Pouches</li>
+      <li>Dump Pouch</li>
+      <li>Belt Lanyard</li>
+    </ul>
+    <div class="desc-section">Ultimate Combo additionally includes</div>
+    <ul>
+      <li>(6) MOLLE Straps</li>
+      <li>(4) Shock Cord/Pull Tab</li>
+    </ul>`,
+};
+
+const _ADDON_NOT_OPTIONAL = ['battle belt lite', 'mini medical pouch', 'non molle adapters', 'double enclosed handcuff pouch', 'cobra® buckle', 'duty belt lite - molle', 'duty belt lite - standard', 'molle duty belt', 'standard duty belt'];
+
+// ── Build accordion UI ────────────────────────────────────────────────────────
 
 function _productHtml(p) {
+  const descHtml = _PRODUCT_DESCRIPTIONS[p.name.toLowerCase()]
+    ? `<div class="product-desc hidden" id="pdesc_${p.id}">${_PRODUCT_DESCRIPTIONS[p.name.toLowerCase()]}</div>`
+    : '';
+
+  const _addonOptional = !_ADDON_NOT_OPTIONAL.some(n => p.name.toLowerCase().includes(n));
+  const addonHtml = `<div class="sel-row hidden" id="sarow_${p.id}">
+      <div class="sel-field" style="flex:1 1 100%">
+        <label>Add-on${_addonOptional ? ' <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">(optional)</span>' : ''}</label>
+        <select id="sadon_${p.id}" onchange="_updatePrice('${p.id}')">
+          <option value="">None</option>
+        </select>
+      </div>
+    </div>`;
+
+  const _isVarSelect = !!p.productSelect;
   return `
     <div class="product-item" id="pi_${p.id}">
       <div class="product-row" onclick="toggleProduct('${p.id}', this)">
@@ -627,27 +688,30 @@ function _productHtml(p) {
       </div>
       <div class="product-selector" id="ps_${p.id}">
         <div class="sel-row">
-          <div class="sel-field">
-            <label>Color</label>
-            <select id="sc_${p.id}" onchange="onSelColor('${p.id}')">
-              <option value="">Select a color…</option>
+          <div class="sel-field"${_isVarSelect ? ' style="flex:1 1 100%"' : ''}>
+            <label>${_isVarSelect ? 'Variation' : 'Color'}</label>
+            <select id="sc_${p.id}" onchange="${_isVarSelect ? `onSelVariation('${p.id}')` : `onSelColor('${p.id}')`}">
+              <option value="">${_isVarSelect ? 'Select a variation\u2026' : 'Select a color\u2026'}</option>
             </select>
           </div>
-          <div class="sel-field hidden" id="szfield_${p.id}">
+          ${_isVarSelect ? '' : `<div class="sel-field hidden" id="szfield_${p.id}">
             <label>Size</label>
             <select id="ss_${p.id}" onchange="onSelSize('${p.id}')" autocomplete="off">
-              <option value="">Select a size…</option>
+              <option value="">Select a size\u2026</option>
             </select>
-          </div>
+            <div id="sl_${p.id}" class="one-size-label hidden">One Size</div>
+          </div>`}
         </div>
-        <div class="sel-row hidden" id="sfrow_${p.id}">
+        ${_isVarSelect ? '' : `<div class="sel-row hidden" id="sfrow_${p.id}">
           <div class="sel-field" style="flex:1 1 100%">
             <label>Style / Version</label>
             <select id="sfeat_${p.id}" onchange="onSelFeature('${p.id}')">
-              <option value="">Select a style…</option>
+              <option value="">Select a style\u2026</option>
             </select>
           </div>
-        </div>
+        </div>`}
+        ${_isVarSelect ? '' : addonHtml}
+        ${descHtml}
         <div class="sku-price-row hidden" id="spricerow_${p.id}">
           Unit price: <span class="sku-price-val" id="sprice_${p.id}"></span>
         </div>
@@ -659,17 +723,36 @@ function _productHtml(p) {
           <button class="btn-add-inline" id="sb_${p.id}" disabled
                   onclick="addCatalogItem('${p.id}')">Add to Order</button>
         </div>
+        <div class="size-note-row hidden" id="sn_${p.id}">
+          <div class="sel-field">
+            <label>Pant Size <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0">(even sizes only)</span></label>
+            <input type="number" id="snote_${p.id}" placeholder="e.g. 52" min="20" max="98" step="2" style="max-width:90px" oninput="this.value=this.value.slice(0,2);clearSizeNoteError('${p.id}')">
+            <div class="size-note-error" id="snerr_${p.id}">⚠️ Please enter a valid even pant size (e.g. 32, 34, 36…)</div>
+          </div>
+        </div>
       </div>
     </div>`;
 }
 
 function buildCatalogUI() {
-  // Build catMap: category → Set of parentIds
-  const catMap = {};
+  const catOrder = ['EDC Belts','Battle Belts','Duty Belts','Mag Pouches','Handcuff Cases','Pouches','Medical Kits','Accessories','Support Accessories','Apparel'];
+
+  const catProductOrder = {
+    'Mag Pouches':    ['3" pistol pouch','4" pistol pouch','rifle pouch','horizontal rifle pouch','308 rifle pouch'],
+    'Handcuff Cases': ['gen 2','enclosed','double enclosed','handcuff strap'],
+  };
+
+  // Support both parent.category (quote API) and sku.category (dept API)
+  const parentCatMap = {};
   for (const sku of catalog.skus) {
-    const cat = sku.category || 'Other';
-    if (!catMap[cat]) catMap[cat] = new Set();
-    catMap[cat].add(sku.parentId);
+    if (!parentCatMap[sku.parentId]) parentCatMap[sku.parentId] = sku.category || 'Other';
+  }
+
+  const catMap = {};
+  for (const p of catalog.parents) {
+    const cat = p.category || parentCatMap[p.id] || 'Other';
+    if (!catMap[cat]) catMap[cat] = [];
+    catMap[cat].push(p);
   }
 
   const cats = Object.keys(catMap).sort((a, b) => {
@@ -684,243 +767,37 @@ function buildCatalogUI() {
   wrap.innerHTML = '';
 
   for (const cat of cats) {
-    // Preserve catalog.parents order within each category
-    const parentIds = catalog.parents.filter(p => catMap[cat].has(p.id));
+    let parents = catMap[cat];
+    if (catProductOrder[cat]) {
+      const order = catProductOrder[cat].map(s => s.toLowerCase());
+      const rankOf = name => {
+        const n = name.toLowerCase();
+        const exact = order.findIndex(s => n === s);
+        if (exact !== -1) return exact;
+        return order.findIndex(s => n.includes(s));
+      };
+      parents = [...parents].sort((a, b) => {
+        const ai = rankOf(a.name || '');
+        const bi = rankOf(b.name || '');
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    }
     const section = document.createElement('div');
     section.className = 'cat-section';
     section.innerHTML = `
       <div class="cat-header" onclick="toggleCat(this)">
-        <span>${esc(cat)}<span class="cat-count">(${parentIds.length})</span></span>
+        <span>${esc(cat)}<span class="cat-count">(${parents.length})</span></span>
         <span class="cat-arrow">▶</span>
       </div>
       <div class="cat-body">
-        ${parentIds.map(p => _productHtml(p)).join('')}
+        ${parents.map(p => _productHtml(p)).join('')}
       </div>
     `;
     wrap.appendChild(section);
   }
-}
-
-function toggleCat(header) {
-  header.classList.toggle('open');
-  header.nextElementSibling.classList.toggle('open');
-  header.closest('.cat-section').classList.toggle('expanded');
-}
-
-function toggleProduct(parentId, rowEl) {
-  if (activeParent && activeParent !== parentId) {
-    const prev     = document.getElementById('ps_' + activeParent);
-    const prevRow  = prev && prev.previousElementSibling;
-    const prevItem = document.getElementById('pi_' + activeParent);
-    if (prev)     prev.classList.remove('open');
-    if (prevRow)  prevRow.classList.remove('active');
-    if (prevItem) prevItem.classList.remove('active');
-  }
-
-  const selector = document.getElementById('ps_' + parentId);
-  const item     = document.getElementById('pi_' + parentId);
-  const isOpen   = selector.classList.contains('open');
-
-  selector.classList.toggle('open', !isOpen);
-  rowEl.classList.toggle('active', !isOpen);
-  item.classList.toggle('active', !isOpen);
-  activeParent = isOpen ? null : parentId;
-
-  // Populate colors when opening for the first time
-  if (!isOpen) {
-    const colorSel = document.getElementById('sc_' + parentId);
-    if (colorSel.options.length <= 1) {
-      const colorMap = {};
-      for (const sku of catalog.skus) {
-        if (sku.parentId === parentId && sku.colorId && sku.colorName)
-          colorMap[sku.colorId] = sku.colorName;
-      }
-      const colors = Object.entries(colorMap).sort((a,b) => a[1].localeCompare(b[1]));
-      for (const [id, name] of colors) {
-        const opt = document.createElement('option');
-        opt.value = id; opt.textContent = name;
-        colorSel.appendChild(opt);
-      }
-      if (colors.length === 1) {
-        colorSel.value = colors[0][0];
-        onSelColor(parentId);
-      }
-    }
-  }
-}
-
-function onSelColor(parentId) {
-  const colorId = document.getElementById('sc_' + parentId).value;
-  const sizeSel = document.getElementById('ss_' + parentId);
-  const szField = document.getElementById('szfield_' + parentId);
-
-  sizeSel.innerHTML = '<option value="">Select a size…</option>';
-  szField.classList.add('hidden');
-  _resetFeature(parentId);
-  document.getElementById('sqrow_' + parentId).classList.add('hidden');
-  document.getElementById('spricerow_' + parentId).classList.add('hidden');
-  document.getElementById('sb_' + parentId).disabled = true;
-
-  if (!colorId) return;
-
-  const sizeMap = {};
-  for (const sku of catalog.skus) {
-    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId && sku.sizeName)
-      sizeMap[sku.sizeId] = sku.sizeName;
-  }
-  const sizes = Object.entries(sizeMap).sort((a,b) => {
-    const na = parseFloat(a[1]), nb = parseFloat(b[1]);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    return a[1].localeCompare(b[1]);
-  });
-
-  if (sizes.length <= 1) {
-    szField.classList.add('hidden');
-    if (sizes.length === 1) {
-      const opt = document.createElement('option');
-      opt.value = sizes[0][0]; opt.textContent = sizes[0][1];
-      sizeSel.appendChild(opt);
-      sizeSel.value = sizes[0][0];
-    }
-    populateFeatures(parentId);
-    return;
-  }
-
-  szField.classList.remove('hidden');
-  for (const [id, name] of sizes) {
-    const opt = document.createElement('option');
-    opt.value = id; opt.textContent = name;
-    sizeSel.appendChild(opt);
-  }
-}
-
-function onSelSize(parentId) {
-  const sizeId = document.getElementById('ss_' + parentId).value;
-  _resetFeature(parentId);
-  document.getElementById('sqrow_' + parentId).classList.add('hidden');
-  document.getElementById('spricerow_' + parentId).classList.add('hidden');
-  document.getElementById('sb_' + parentId).disabled = true;
-  if (sizeId) populateFeatures(parentId);
-}
-
-function _resetFeature(parentId) {
-  const featRow = document.getElementById('sfrow_' + parentId);
-  const featSel = document.getElementById('sfeat_' + parentId);
-  if (featRow) featRow.classList.add('hidden');
-  if (featSel) { featSel.innerHTML = '<option value="">Select a style…</option>'; featSel.value = ''; }
-}
-
-function populateFeatures(parentId) {
-  const colorId = document.getElementById('sc_' + parentId).value;
-  const sizeId  = document.getElementById('ss_' + parentId).value;
-  const featRow = document.getElementById('sfrow_' + parentId);
-  const featSel = document.getElementById('sfeat_' + parentId);
-
-  const fvarMap = {};
-  for (const sku of catalog.skus) {
-    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId === sizeId
-        && sku.featureVarId && sku.featureVarName)
-      fvarMap[sku.featureVarId] = sku.featureVarName;
-  }
-  const fvars = Object.entries(fvarMap).sort((a,b) => a[1].localeCompare(b[1]));
-
-  if (!featRow || fvars.length <= 1) {
-    if (featRow) featRow.classList.add('hidden');
-    if (featSel && fvars.length === 1) featSel.value = fvars[0][0];
-    document.getElementById('sqrow_' + parentId).classList.remove('hidden');
-    document.getElementById('sb_' + parentId).disabled = false;
-    _updatePrice(parentId);
-    return;
-  }
-
-  featSel.innerHTML = '<option value="">Select a style…</option>';
-  for (const [id, name] of fvars) {
-    const opt = document.createElement('option');
-    opt.value = id; opt.textContent = name;
-    featSel.appendChild(opt);
-  }
-  featRow.classList.remove('hidden');
-  document.getElementById('sqrow_' + parentId).classList.remove('hidden');
-  document.getElementById('sb_' + parentId).disabled = true;
-}
-
-function onSelFeature(parentId) {
-  const featId = document.getElementById('sfeat_' + parentId)?.value || '';
-  document.getElementById('sb_' + parentId).disabled = !featId;
-  _updatePrice(parentId);
-}
-
-function _updatePrice(parentId) {
-  const colorId      = document.getElementById('sc_' + parentId).value;
-  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
-  const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
-  const priceEl      = document.getElementById('sprice_' + parentId);
-  const priceRow     = document.getElementById('spricerow_' + parentId);
-
-  const sizeRowHidden = document.getElementById('szfield_' + parentId)?.classList.contains('hidden') ?? true;
-  const featRowHidden = document.getElementById('sfrow_'   + parentId)?.classList.contains('hidden') ?? true;
-
-  if (!colorId || (!sizeRowHidden && !sizeId) || (!featRowHidden && !featureVarId)) {
-    if (priceRow) priceRow.classList.add('hidden');
-    return;
-  }
-
-  const sku = catalog.skus.find(s =>
-    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
-    (featureVarId ? s.featureVarId === featureVarId : true)
-  );
-
-  if (priceEl && priceRow) {
-    if (sku) {
-      priceEl.textContent = '$' + sku.price.toFixed(2);
-      priceRow.classList.remove('hidden');
-    } else {
-      priceRow.classList.add('hidden');
-    }
-  }
-}
-
-function addCatalogItem(parentId) {
-  const colorId      = document.getElementById('sc_' + parentId).value;
-  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
-  const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
-  const qty          = Math.max(1, parseInt(document.getElementById('sq_' + parentId).value) || 1);
-
-  if (!colorId) return;
-
-  const sku = catalog.skus.find(s =>
-    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
-    (featureVarId ? s.featureVarId === featureVarId : true)
-  ) || catalog.skus.find(s =>
-    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId
-  ) || catalog.skus.find(s =>
-    s.parentId === parentId && s.colorId === colorId
-  );
-  if (!sku) return;
-
-  addToOrder(sku.recordId, sku.name, sku.price, qty);
-
-  // Reset size after add (keep color selected for quick multi-size orders)
-  const sizeSel = document.getElementById('ss_' + parentId);
-  if (sizeSel) { sizeSel.value = ''; sizeSel.innerHTML = '<option value="">Select a size…</option>'; }
-  document.getElementById('sqrow_' + parentId).classList.add('hidden');
-  document.getElementById('spricerow_' + parentId).classList.add('hidden');
-  document.getElementById('sb_' + parentId).disabled = true;
-  document.getElementById('sq_' + parentId).value = 1;
-  _resetFeature(parentId);
-  // Re-trigger color selection to repopulate sizes
-  onSelColor(parentId);
-}
-
-function addToOrder(recordId, name, price, qty) {
-  const existing = lineItems.find(li => li.sku_record_id === recordId);
-  if (existing) {
-    existing.qty += qty;
-  } else {
-    lineItems.push({ sku_record_id: recordId, name, unit_price: price, qty });
-  }
-  renderLineItems();
-  validateOrder();
 }
 
 function filterCatalog(query) {
@@ -963,7 +840,531 @@ function filterCatalog(query) {
   });
 }
 
+function toggleCat(header) {
+  header.classList.toggle('open');
+  header.nextElementSibling.classList.toggle('open');
+  header.closest('.cat-section').classList.toggle('expanded');
+}
+
+function toggleProduct(parentId, rowEl) {
+  if (activeParent && activeParent !== parentId) {
+    const prev     = document.getElementById('ps_' + activeParent);
+    const prevRow  = prev && prev.previousElementSibling;
+    const prevItem = document.getElementById('pi_' + activeParent);
+    if (prev)     prev.classList.remove('open');
+    if (prevRow)  prevRow.classList.remove('active');
+    if (prevItem) prevItem.classList.remove('active');
+  }
+
+  const selector = document.getElementById('ps_' + parentId);
+  const item     = document.getElementById('pi_' + parentId);
+  const isOpen   = selector.classList.contains('open');
+
+  selector.classList.toggle('open', !isOpen);
+  rowEl.classList.toggle('active', !isOpen);
+  item.classList.toggle('active', !isOpen);
+  activeParent = isOpen ? null : parentId;
+
+  if (!isOpen) {
+    const colorSel  = document.getElementById('sc_' + parentId);
+    const parentObj = catalog.parents.find(p => p.id === parentId);
+    if (colorSel.options.length <= 1) {
+      if (parentObj && parentObj.productSelect) {
+        const parentSkus = catalog.skus
+          .filter(s => s.parentId === parentId)
+          .sort((a, b) => a.name.localeCompare(b.name));
+        for (const sku of parentSkus) {
+          const opt = document.createElement('option');
+          opt.value = sku.recordId; opt.textContent = sku.name;
+          colorSel.appendChild(opt);
+        }
+        if (parentSkus.length === 1) {
+          colorSel.value = parentSkus[0].recordId;
+          onSelVariation(parentId);
+        }
+      } else {
+        const colorMap = {};
+        for (const sku of catalog.skus) {
+          if (sku.parentId === parentId && sku.colorId && sku.colorName)
+            colorMap[sku.colorId] = sku.colorName;
+        }
+        const colors = Object.entries(colorMap).sort((a,b) => a[1].localeCompare(b[1]));
+        for (const [id, name] of colors) {
+          const opt = document.createElement('option');
+          opt.value = id; opt.textContent = name;
+          colorSel.appendChild(opt);
+        }
+        if (colors.length === 1) {
+          colorSel.value = colors[0][0];
+          onSelColor(parentId);
+        }
+      }
+    }
+  }
+}
+
+// ── Variation select (productSelect parents) ──────────────────────────────────
+
+function onSelVariation(parentId) {
+  const recordId = document.getElementById('sc_' + parentId).value;
+  const priceEl  = document.getElementById('sprice_' + parentId);
+  const priceRow = document.getElementById('spricerow_' + parentId);
+  const sqRow    = document.getElementById('sqrow_' + parentId);
+  const addBtn   = document.getElementById('sb_' + parentId);
+
+  sqRow.classList.add('hidden');
+  priceRow.classList.add('hidden');
+  addBtn.disabled = true;
+
+  if (!recordId) return;
+
+  const sku = catalog.skus.find(s => s.recordId === recordId);
+  if (!sku) return;
+
+  priceEl.textContent = '$' + sku.price.toFixed(2);
+  priceRow.classList.remove('hidden');
+  sqRow.classList.remove('hidden');
+  addBtn.disabled = false;
+}
+
+// ── Color → Size → Feature cascade ───────────────────────────────────────────
+
+function onSelColor(parentId) {
+  const colorId   = document.getElementById('sc_' + parentId).value;
+  const sizeSel   = document.getElementById('ss_' + parentId);
+  const sizeLabel = document.getElementById('sl_' + parentId);
+  const szField   = document.getElementById('szfield_' + parentId);
+
+  sizeSel.innerHTML = '<option value="">Select a size…</option>';
+  sizeSel.classList.remove('hidden');
+  if (sizeLabel) sizeLabel.classList.add('hidden');
+  szField.classList.add('hidden');
+  _resetFeature(parentId);
+  document.getElementById('sqrow_' + parentId).classList.add('hidden');
+  document.getElementById('spricerow_' + parentId).classList.add('hidden');
+  document.getElementById('sb_' + parentId).disabled = true;
+
+  if (!colorId) return;
+
+  const sizeMap = {};
+  for (const sku of catalog.skus) {
+    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId && sku.sizeName)
+      sizeMap[sku.sizeId] = sku.sizeName;
+  }
+  const sizes = Object.entries(sizeMap).sort((a,b) => {
+    const na = parseFloat(a[1]), nb = parseFloat(b[1]);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a[1].localeCompare(b[1]);
+  });
+
+  if (sizes.length <= 1) {
+    szField.classList.add('hidden');
+    if (sizes.length === 1) {
+      const opt = document.createElement('option');
+      opt.value = sizes[0][0]; opt.textContent = sizes[0][1];
+      sizeSel.appendChild(opt);
+      sizeSel.value = sizes[0][0];
+    }
+    populateFeatures(parentId);
+    return;
+  }
+
+  szField.classList.remove('hidden');
+  for (const [id, name] of sizes) {
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = name;
+    sizeSel.appendChild(opt);
+  }
+}
+
+function _repopulateSizes(parentId) {
+  const colorId = document.getElementById('sc_' + parentId).value;
+  const sizeSel = document.getElementById('ss_' + parentId);
+  const szField = document.getElementById('szfield_' + parentId);
+
+  sizeSel.innerHTML = '<option value="">Select a size\u2026</option>';
+
+  if (!colorId) { szField.classList.add('hidden'); return; }
+
+  const sizeMap = {};
+  for (const sku of catalog.skus) {
+    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId && sku.sizeName)
+      sizeMap[sku.sizeId] = sku.sizeName;
+  }
+  const sizes = Object.entries(sizeMap).sort((a,b) => {
+    const na = parseFloat(a[1]), nb = parseFloat(b[1]);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a[1].localeCompare(b[1]);
+  });
+
+  if (sizes.length <= 1) { szField.classList.add('hidden'); return; }
+
+  for (const [id, name] of sizes) {
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = name;
+    sizeSel.appendChild(opt);
+  }
+  sizeSel.selectedIndex = 0;
+  szField.classList.remove('hidden');
+}
+
+function clearSizeNoteError(parentId) {
+  const noteEl = document.getElementById('snote_' + parentId);
+  const errEl  = document.getElementById('snerr_' + parentId);
+  if (noteEl) { noteEl.style.borderColor = ''; noteEl.style.outline = ''; }
+  if (errEl)  errEl.classList.remove('show');
+}
+
+function onSelSize(parentId) {
+  const sizeSel  = document.getElementById('ss_' + parentId);
+  const sizeId   = sizeSel.value;
+
+  const noteRow  = document.getElementById('sn_' + parentId);
+  const sizeName = sizeId ? sizeSel.options[sizeSel.selectedIndex].text : '';
+  const isOther  = sizeName.toLowerCase().includes('other');
+  if (noteRow) noteRow.classList.toggle('hidden', !isOther);
+  if (!isOther) {
+    const snEl = document.getElementById('snote_' + parentId);
+    if (snEl) snEl.value = '';
+  }
+
+  const _pname = (catalog.parents.find(p => p.id === parentId)?.name || '').toLowerCase();
+  const _preservedFvar  = _SIZE_ONLY_RESET_PARENTS.has(_pname)
+    ? (document.getElementById('sfeat_' + parentId)?.value || '') : '';
+  const _preservedAddon = _SIZE_ONLY_RESET_PARENTS.has(_pname)
+    ? (document.getElementById('sadon_' + parentId)?.value || '') : '';
+
+  _resetFeature(parentId);
+  document.getElementById('sqrow_' + parentId).classList.add('hidden');
+  document.getElementById('spricerow_' + parentId).classList.add('hidden');
+  document.getElementById('sb_' + parentId).disabled = true;
+  if (sizeId) populateFeatures(parentId, _preservedFvar, _preservedAddon);
+}
+
+// ── Feature / style ───────────────────────────────────────────────────────────
+
+function _resetFeature(parentId) {
+  const featRow  = document.getElementById('sfrow_' + parentId);
+  const featSel  = document.getElementById('sfeat_' + parentId);
+  const addonRow = document.getElementById('sarow_' + parentId);
+  const addonSel = document.getElementById('sadon_' + parentId);
+  if (featRow)  featRow.classList.add('hidden');
+  if (featSel)  { featSel.innerHTML = '<option value="">Select a style…</option>'; featSel.value = ''; }
+  if (addonRow) addonRow.classList.add('hidden');
+  if (addonSel) { addonSel.innerHTML = '<option value="">None</option>'; addonSel.value = ''; }
+  const descEl = document.getElementById('pdesc_' + parentId);
+  if (descEl) descEl.classList.add('hidden');
+}
+
+function populateFeatures(parentId, preferredFvarId = '', preferredAddonId = '') {
+  const colorId = document.getElementById('sc_' + parentId).value;
+  const sizeId  = document.getElementById('ss_' + parentId)?.value || '';
+  const featRow = document.getElementById('sfrow_' + parentId);
+  const featSel = document.getElementById('sfeat_' + parentId);
+
+  const fvarMap = {};
+  for (const sku of catalog.skus) {
+    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId === sizeId
+        && sku.featureVarId && sku.featureVarName)
+      fvarMap[sku.featureVarId] = sku.featureVarName;
+  }
+  const fvars = Object.entries(fvarMap).sort((a,b) => a[1].localeCompare(b[1]));
+
+  if (!featRow || fvars.length <= 1) {
+    const autoFvarId = fvars.length === 1 ? fvars[0][0] : '';
+    if (featRow) featRow.classList.add('hidden');
+    if (featSel && fvars.length === 1) featSel.value = fvars[0][0];
+    populateAddons(parentId, colorId, sizeId, autoFvarId, preferredAddonId);
+    document.getElementById('sqrow_' + parentId).classList.remove('hidden');
+    document.getElementById('sb_' + parentId).disabled = false;
+    _updatePrice(parentId);
+    return;
+  }
+
+  featSel.innerHTML = '<option value="">Select a style…</option>';
+  for (const [id, name] of fvars) {
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = name;
+    featSel.appendChild(opt);
+  }
+  featRow.classList.remove('hidden');
+  document.getElementById('sqrow_' + parentId).classList.remove('hidden');
+
+  if (preferredFvarId && fvarMap[preferredFvarId]) {
+    featSel.value = preferredFvarId;
+    populateAddons(parentId, colorId, sizeId, preferredFvarId, preferredAddonId);
+    document.getElementById('sb_' + parentId).disabled = false;
+    _updatePrice(parentId);
+  } else {
+    document.getElementById('sb_' + parentId).disabled = true;
+  }
+}
+
+function onSelFeature(parentId) {
+  const featId  = document.getElementById('sfeat_' + parentId)?.value || '';
+  const colorId = document.getElementById('sc_' + parentId).value;
+  const sizeId  = document.getElementById('ss_' + parentId)?.value || '';
+  document.getElementById('sb_' + parentId).disabled = !featId;
+  if (featId) populateAddons(parentId, colorId, sizeId, featId);
+  _updatePrice(parentId);
+}
+
+// ── Add-ons ───────────────────────────────────────────────────────────────────
+
+function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredAddonId = '') {
+  const addonRow = document.getElementById('sarow_' + parentId);
+  const addonSel = document.getElementById('sadon_' + parentId);
+  if (!addonRow || !addonSel) return;
+
+  const addonMap = {};
+  let hasBase = false;
+  for (const sku of catalog.skus) {
+    if (sku.parentId === parentId && sku.colorId === colorId && sku.sizeId === sizeId &&
+        (featureVarId ? sku.featureVarId === featureVarId : true)) {
+      if (sku.addonId && sku.addonName) addonMap[sku.addonId] = sku.addonName;
+      else hasBase = true;
+    }
+  }
+
+  const _ADDON_ORDER = {
+    'low profile inner': 0,
+    'outer only':        1,
+    'combo':             2,
+    'ultimate combo':    3,
+  };
+  const _OUTER_FIRST_ADDON_ORDER = {
+    'outer only':        0,
+    'low profile inner': 1,
+    'combo':             2,
+  };
+  const _MINI_MED_ADDON_ORDER = {
+    '(2) easy tape':                              0,
+    '(2) #2 molle straps':                        1,
+    'mini med components + (2) easy tape':        2,
+    'mini med components + (2) #2 molle straps':  3,
+  };
+  const _parentEntrySort  = catalog?.parents?.find(p => p.id === parentId);
+  const _parentNameLower  = (_parentEntrySort?.name || '').toLowerCase();
+  const _useCustomOrder   = _parentNameLower.includes('battle belt lite');
+  const _useMiniMedOrder  = _parentNameLower.includes('mini medical pouch');
+  const _OUTER_FIRST_PARENTS = ['cobra® buckle', 'duty belt lite - molle', 'duty belt lite - standard', 'molle duty belt', 'standard duty belt'];
+  const _useOuterFirstOrder  = _OUTER_FIRST_PARENTS.some(n => _parentNameLower.includes(n));
+
+  const addons = Object.entries(addonMap).sort((a,b) => {
+    const an = a[1].toLowerCase(), bn = b[1].toLowerCase();
+    if (an === 'none') return -1;
+    if (bn === 'none') return 1;
+    if (_useMiniMedOrder) {
+      const ao = _MINI_MED_ADDON_ORDER[an] ?? 99, bo = _MINI_MED_ADDON_ORDER[bn] ?? 99;
+      if (ao !== bo) return ao - bo;
+    }
+    if (_useOuterFirstOrder) {
+      const ao = _OUTER_FIRST_ADDON_ORDER[an] ?? 99, bo = _OUTER_FIRST_ADDON_ORDER[bn] ?? 99;
+      if (ao !== bo) return ao - bo;
+    }
+    if (_useCustomOrder) {
+      const ao = _ADDON_ORDER[an] ?? 99, bo = _ADDON_ORDER[bn] ?? 99;
+      if (ao !== bo) return ao - bo;
+    }
+    return a[1].localeCompare(b[1]);
+  });
+
+  if (addons.length === 0) { addonRow.classList.add('hidden'); return; }
+
+  const noneAddonEntry = addons.find(([,name]) => name.toLowerCase() === 'none');
+
+  if (!hasBase && addons.length === 1 && noneAddonEntry) {
+    addonRow.classList.add('hidden');
+    addonSel.innerHTML = `<option value="${noneAddonEntry[0]}">None</option>`;
+    addonSel.value = noneAddonEntry[0];
+    _updatePrice(parentId);
+    return;
+  }
+
+  addonSel.innerHTML = '';
+  const phOpt = document.createElement('option');
+  phOpt.value = ''; phOpt.textContent = 'Select an add-on\u2026'; phOpt.disabled = true;
+  addonSel.appendChild(phOpt);
+
+  if (hasBase) {
+    const opt = document.createElement('option');
+    opt.value = '__none__'; opt.textContent = 'None';
+    addonSel.appendChild(opt);
+  }
+  for (const [id, name] of addons) {
+    if (hasBase && name.toLowerCase() === 'none') continue;
+    const opt = document.createElement('option');
+    opt.value = id; opt.textContent = name;
+    addonSel.appendChild(opt);
+  }
+
+  let defaultVal = '';
+  if (preferredAddonId !== '' && addonMap[preferredAddonId]) {
+    defaultVal = preferredAddonId;
+  } else if (preferredAddonId === '__none__' && hasBase) {
+    defaultVal = '__none__';
+  }
+  addonSel.value = defaultVal;
+  addonRow.classList.remove('hidden');
+  const _descEl = document.getElementById('pdesc_' + parentId);
+  if (_descEl) _descEl.classList.remove('hidden');
+  _updatePrice(parentId);
+}
+
+// ── Price display ─────────────────────────────────────────────────────────────
+
+function _updatePrice(parentId) {
+  const colorId      = document.getElementById('sc_' + parentId).value;
+  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
+  const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
+  const addonSel     = document.getElementById('sadon_' + parentId);
+  const addonRawVal  = addonSel?.value || '';
+  const addonId      = addonRawVal === '__none__' ? '' : addonRawVal;
+
+  const priceEl  = document.getElementById('sprice_' + parentId);
+  const priceRow = document.getElementById('spricerow_' + parentId);
+
+  const sizeRowHidden  = document.getElementById('szfield_' + parentId)?.classList.contains('hidden') ?? true;
+  const featRowHidden  = document.getElementById('sfrow_'   + parentId)?.classList.contains('hidden') ?? true;
+  const addonRowHidden = document.getElementById('sarow_'   + parentId)?.classList.contains('hidden') ?? true;
+
+  const addonOnPlaceholder = !addonRowHidden && !!addonSel &&
+    addonSel.selectedIndex === 0 && (addonSel.options[0]?.disabled ?? false);
+
+  if (!colorId ||
+      (!sizeRowHidden && !sizeId) ||
+      (!featRowHidden && !featureVarId) ||
+      addonOnPlaceholder) {
+    if (priceRow) priceRow.classList.add('hidden');
+    return;
+  }
+
+  const sku = catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
+    (featureVarId ? s.featureVarId === featureVarId : true) &&
+    s.addonId === addonId
+  );
+
+  if (priceEl && priceRow) {
+    if (sku) {
+      priceEl.textContent = '$' + sku.price.toFixed(2);
+      priceRow.classList.remove('hidden');
+    } else {
+      priceRow.classList.add('hidden');
+    }
+  }
+}
+
+// ── Add to order ──────────────────────────────────────────────────────────────
+
+function addCatalogItem(parentId) {
+  const parentObj = catalog.parents.find(p => p.id === parentId);
+
+  // productSelect parents: SKU identified directly by recordId
+  if (parentObj && parentObj.productSelect) {
+    const recordId = document.getElementById('sc_' + parentId).value;
+    if (!recordId) return;
+    const sku = catalog.skus.find(s => s.recordId === recordId);
+    if (!sku) return;
+    const qty = Math.max(1, parseInt(document.getElementById('sq_' + parentId).value) || 1);
+    addToOrder(sku.recordId, sku.name, sku.price, qty);
+    document.getElementById('sc_' + parentId).value = '';
+    document.getElementById('sq_' + parentId).value = 1;
+    document.getElementById('sqrow_' + parentId).classList.add('hidden');
+    document.getElementById('spricerow_' + parentId).classList.add('hidden');
+    document.getElementById('sb_' + parentId).disabled = true;
+    return;
+  }
+
+  const colorId      = document.getElementById('sc_' + parentId).value;
+  const sizeId       = document.getElementById('ss_' + parentId)?.value || '';
+  const qty          = Math.max(1, parseInt(document.getElementById('sq_' + parentId).value) || 1);
+  const featureVarId = document.getElementById('sfeat_' + parentId)?.value || '';
+
+  if (!colorId) return;
+
+  const addonSel = document.getElementById('sadon_' + parentId);
+  const addonId  = addonSel ? addonSel.value : '';
+
+  const sku = catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
+    (featureVarId ? s.featureVarId === featureVarId : true) &&
+    s.addonId === addonId
+  ) || catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
+    (featureVarId ? s.featureVarId === featureVarId : true)
+  ) || catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId
+  ) || catalog.skus.find(s =>
+    s.parentId === parentId && s.colorId === colorId
+  );
+  if (!sku) return;
+
+  const noteRow  = document.getElementById('sn_' + parentId);
+  const noteEl   = document.getElementById('snote_' + parentId);
+  const sizeNote = (noteEl?.value || '').trim();
+  if (noteRow && !noteRow.classList.contains('hidden')) {
+    const sizeNum = parseInt(sizeNote, 10);
+    if (!sizeNote || isNaN(sizeNum) || sizeNum % 2 !== 0) {
+      noteEl.focus();
+      noteEl.style.borderColor = 'var(--red)';
+      noteEl.style.outline = '2px solid var(--red)';
+      const errEl = document.getElementById('snerr_' + parentId);
+      if (errEl) errEl.classList.add('show');
+      [noteEl, errEl].forEach(el => {
+        if (!el) return;
+        el.classList.remove('shake');
+        void el.offsetWidth;
+        el.classList.add('shake');
+      });
+      return;
+    }
+  }
+
+  addToOrder(sku.recordId, sku.name, sku.price, qty, sizeNote);
+
+  // Reset after add
+  const _parentName = (parentObj?.name || '').toLowerCase();
+  document.getElementById('sq_' + parentId).value = 1;
+  const snEl = document.getElementById('snote_' + parentId);
+  if (snEl) snEl.value = '';
+  const snRow = document.getElementById('sn_' + parentId);
+  if (snRow) snRow.classList.add('hidden');
+  clearSizeNoteError(parentId);
+
+  const _parentSkus = catalog.skus.filter(s => s.parentId === parentId);
+  const _colorOnly  = _parentSkus.every(s => !s.sizeId && !s.featureVarId && !s.addonId);
+
+  if (_SIZE_ONLY_RESET_PARENTS.has(_parentName)) {
+    _repopulateSizes(parentId);
+    document.getElementById('spricerow_' + parentId).classList.add('hidden');
+    document.getElementById('sb_' + parentId).disabled = true;
+  } else if (_colorOnly) {
+    document.getElementById('sc_' + parentId).value = '';
+    document.getElementById('sqrow_' + parentId).classList.add('hidden');
+    document.getElementById('spricerow_' + parentId).classList.add('hidden');
+    document.getElementById('sb_' + parentId).disabled = true;
+    onSelColor(parentId);
+  } else {
+    document.getElementById('sqrow_' + parentId).classList.add('hidden');
+    document.getElementById('spricerow_' + parentId).classList.add('hidden');
+    document.getElementById('sb_' + parentId).disabled = true;
+    onSelColor(parentId);
+  }
+}
+
 // ── Line Items ────────────────────────────────────────────────────────────────
+
+function addToOrder(recordId, name, price, qty, sizeNote) {
+  const existing = lineItems.find(li => li.sku_record_id === recordId);
+  if (existing && !sizeNote) {
+    existing.qty += qty;
+  } else {
+    lineItems.push({ sku_record_id: recordId, name, unit_price: price, qty, size_note: sizeNote || '' });
+  }
+  renderLineItems();
+  validateOrder();
+}
 
 function renderLineItems() {
   const container = document.getElementById('lineItemsList');
@@ -977,8 +1378,9 @@ function renderLineItems() {
   for (let i = 0; i < lineItems.length; i++) {
     const li = lineItems[i];
     total += li.qty * li.unit_price;
+    const noteHtml = li.size_note ? `<div class="item-note">📏 ${esc(li.size_note)}</div>` : '';
     html += `<div class="line-item-row">
-      <div class="line-item-name">${esc(li.name)}</div>
+      <div class="line-item-name">${esc(li.name)}${noteHtml}</div>
       <div class="line-item-qty">${li.qty}</div>
       <div class="line-item-price">$${fmt(li.unit_price)}</div>
       <button class="btn-remove" onclick="removeItem(${i})" title="Remove">✕</button>
