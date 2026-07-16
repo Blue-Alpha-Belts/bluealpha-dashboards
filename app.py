@@ -13218,8 +13218,13 @@ def pd_catalog():
     if not _CATALOG_CACHE["data"]:
         return Response(json.dumps({"error": "Catalog not loaded yet"}), status=503, headers=c, mimetype="application/json")
     import copy
+    _PD_EXCLUDED_CATEGORIES = {"Apparel", "Other"}
     data = copy.deepcopy(_CATALOG_CACHE["data"])
-    for sku in data.get("skus", []):
+    # Filter out Apparel and Other categories
+    data["skus"] = [s for s in data.get("skus", []) if s.get("category", "") not in _PD_EXCLUDED_CATEGORIES]
+    filtered_parent_ids = {s["parentId"] for s in data["skus"]}
+    data["parents"] = [p for p in data.get("parents", []) if p["id"] in filtered_parent_ids]
+    for sku in data["skus"]:
         cat = sku.get("category", "")
         price = sku.get("price", 0) or 0
         if cat in _PD_DISCOUNT_25_CATEGORIES:
@@ -13287,24 +13292,9 @@ def pd_order_create():
     read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
     write_token = RETURNS_WRITE_TOKEN
 
-    # 1. Auto-generate Order ID
+    # 1. Auto-generate Order ID (shared SO-#### sequence with other manual orders)
     try:
-        existing = at_get_all(
-            MANUAL_ORDERS_TABLE_ID, read_token,
-            fields=["Order ID"],
-            formula="{Order Type}='PD Order'",
-        )
-        max_num = 0
-        for r in existing:
-            oid = (r.get("fields", {}).get("Order ID") or "").strip()
-            if oid.upper().startswith("PD-"):
-                try:
-                    n = int(oid[3:])
-                    if n > max_num:
-                        max_num = n
-                except ValueError:
-                    pass
-        order_id = f"PD-{max_num + 1:03d}"
+        order_id = _next_order_id(read_token)   # plain number, e.g. "0446"
     except Exception as e:
         return Response(json.dumps({"error": f"Order ID generation failed: {e}"}), status=500, headers=c, mimetype="application/json")
 
@@ -13355,7 +13345,7 @@ def pd_order_create():
         except Exception as e:
             print(f"[pd_order_create] line item create warning: {e}")
 
-    return Response(json.dumps({"ok": True, "record_id": mo_record_id, "order_id": order_id}),
+    return Response(json.dumps({"ok": True, "record_id": mo_record_id, "order_id": f"SO-{order_id}"}),
                     headers=c, mimetype="application/json")
 
 
@@ -13792,7 +13782,7 @@ def pd_portal_orders():
             f = r.get("fields", {})
             orders.append({
                 "record_id":                        r["id"],
-                "order_id":                         f.get("Order ID", ""),
+                "order_id":                         f"SO-{f.get('Order ID', '')}" if f.get("Order ID") else "",
                 "date":                             f.get("Date", ""),
                 "officer_name":                     f.get("Officer Name", ""),
                 "badge_num":                        f.get("Badge #", ""),
@@ -13830,9 +13820,10 @@ def pd_portal_order_detail(record_id):
         # Verify customer owns this order
         if customer_id and customer_id not in (f.get("Customer") or []):
             return Response(json.dumps({"error": "Forbidden"}), status=403, headers=c, mimetype="application/json")
+        raw_oid = f.get("Order ID", "")
         order = {
             "record_id":                        mo["id"],
-            "order_id":                         f.get("Order ID", ""),
+            "order_id":                         f"SO-{raw_oid}" if raw_oid and not str(raw_oid).upper().startswith("SO") else raw_oid,
             "date":                             f.get("Date", ""),
             "officer_name":                     f.get("Officer Name", ""),
             "badge_num":                        f.get("Badge #", ""),
