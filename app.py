@@ -7225,6 +7225,173 @@ def department_portal_page(user):
     return resp
 
 
+@app.route("/api/department/catalog", methods=["GET", "OPTIONS"])
+@portal_login_required
+def department_catalog(user):
+    """Return catalog SKUs that have a Newnan PD Price (department ordering portal)."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET"})
+    c = cors()
+    try:
+        token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        # Fetch all SKUs where Newnan PD Discount has a value
+        import concurrent.futures as _cf_dc
+        fut_skus = _cf_dc.ThreadPoolExecutor(max_workers=1).submit(
+            at_get_all, PRODUCT_SKUS_TABLE_ID, token,
+            ["SKU ID", "Name + Variations", "Sale Price", "Newnan PD Price",
+             "Newnan PD Discount", "Parent Product", "Color", "Size",
+             "Feature Variation", "Category"],
+            "{Newnan PD Discount}!=''",
+        )
+        with _cf_dc.ThreadPoolExecutor(max_workers=4) as ex:
+            fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID, token, fields=["Name"])
+            fut_colors  = ex.submit(at_get_all, COLORS_TABLE_ID,          token, fields=["Name"])
+            fut_sizes   = ex.submit(at_get_all, SIZES_TABLE_ID,           token, fields=["Name"])
+            fut_fvars   = ex.submit(at_get_all, FEATURE_VARIATIONS_TABLE_ID, token, fields=["Name"])
+            parent_map  = {r["id"]: r["fields"].get("Name", "") for r in fut_parents.result()}
+            color_map   = {r["id"]: r["fields"].get("Name", "") for r in fut_colors.result()}
+            size_map    = {r["id"]: r["fields"].get("Name", "") for r in fut_sizes.result()}
+            fvar_map    = {r["id"]: r["fields"].get("Name", "").strip() for r in fut_fvars.result()}
+
+        sku_records = fut_skus.result()
+        skus = []
+        seen_parents = {}
+        for r in sku_records:
+            f = r.get("fields", {})
+            parent_ids = f.get("Parent Product", [])
+            if not parent_ids:
+                continue
+            parent_id   = parent_ids[0]
+            parent_name = parent_map.get(parent_id, "")
+            if not parent_name:
+                continue
+            # Use Newnan PD Price as the price shown
+            pd_price = f.get("Newnan PD Price") or f.get("Sale Price") or 0
+            color_ids = f.get("Color", [])
+            size_ids  = f.get("Size", [])
+            fvar_ids  = f.get("Feature Variation", [])
+            color_id   = color_ids[0] if color_ids else ""
+            size_id    = size_ids[0]  if size_ids  else ""
+            fvar_id    = fvar_ids[0]  if fvar_ids  else ""
+            color_name = color_map.get(color_id, "")
+            size_name  = size_map.get(size_id, "")
+            fvar_name  = fvar_map.get(fvar_id, "").strip() if fvar_id else ""
+            if size_name.strip().lower() in ("none", "n/a", "one size"):
+                size_id = ""; size_name = ""
+            if fvar_name.lower() in ("none", ""):
+                fvar_id = ""; fvar_name = ""
+            skus.append({
+                "recordId":       r["id"],
+                "sku":            f.get("SKU ID", ""),
+                "name":           f.get("Name + Variations", ""),
+                "price":          float(pd_price),
+                "parentId":       parent_id,
+                "parentName":     parent_name,
+                "colorId":        color_id,
+                "colorName":      color_name,
+                "sizeId":         size_id,
+                "sizeName":       size_name,
+                "featureVarId":   fvar_id,
+                "featureVarName": fvar_name,
+                "category":       f.get("Category", ""),
+            })
+            if parent_id not in seen_parents:
+                seen_parents[parent_id] = parent_name
+
+        parents = sorted(
+            [{"id": k, "name": v} for k, v in seen_parents.items()],
+            key=lambda x: x["name"],
+        )
+        return Response(json.dumps({"skus": skus, "parents": parents}), headers=c, mimetype="application/json")
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/department/order/create", methods=["POST", "OPTIONS"])
+@portal_login_required
+def department_order_create(user):
+    """Create a department order (PD portal — officer places order directly)."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    data         = request.get_json(force=True) or {}
+    officer_name = data.get("officer_name", "").strip()
+    badge_num    = data.get("badge_num", "").strip()
+    line_items   = data.get("line_items", [])
+
+    if not officer_name or not line_items:
+        return Response(json.dumps({"error": "officer_name and line_items are required"}),
+                        status=400, headers=c, mimetype="application/json")
+
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+
+    # 1. Generate order ID
+    try:
+        order_id = _next_order_id(read_token)
+    except Exception as e:
+        return Response(json.dumps({"error": f"Order ID generation failed: {e}"}),
+                        status=500, headers=c, mimetype="application/json")
+
+    # 2. Get customer ID from session
+    customer_id = user.get("customer_id") or user.get("customerId", "")
+
+    import datetime as _dt_dept
+    today = _dt_dept.date.today().isoformat()
+
+    # 3. Create Manual Order record
+    try:
+        mo_fields = {
+            "Order Type":         "PD Order",
+            "Order ID":           order_id,
+            "Date":               today,
+            "Officer Name":       officer_name,
+            "Sales Order Status": "Approved",
+            "Production Status":  "Not Started",
+        }
+        if badge_num:
+            mo_fields["Badge #"] = badge_num
+        if customer_id:
+            mo_fields["Customer"] = [customer_id]
+
+        mo_resp = req_lib.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": mo_fields},
+            timeout=15,
+        )
+        if not mo_resp.ok:
+            return Response(json.dumps({"error": f"Order create error: {mo_resp.status_code} {mo_resp.text}"}),
+                            status=500, headers=c, mimetype="application/json")
+        mo_record_id = mo_resp.json()["id"]
+    except Exception as e:
+        return Response(json.dumps({"error": f"Order create failed: {e}"}),
+                        status=500, headers=c, mimetype="application/json")
+
+    # 4. Create MO Line Items
+    for li in line_items:
+        try:
+            req_lib.post(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {
+                    "Manual Order":              [mo_record_id],
+                    "Product SKU":               [li["sku_record_id"]],
+                    "Qty.":                      int(li["qty"]),
+                    "Confirmed Unit Price":       float(li["unit_price"]),
+                    "Confirmed Adj. Unit Price":  float(li["unit_price"]),
+                }},
+                timeout=15,
+            )
+        except Exception as e:
+            print(f"[department_order_create] line item warning: {e}")
+
+    return Response(json.dumps({"ok": True, "record_id": mo_record_id, "order_id": f"SO-{order_id}"}),
+                    headers=c, mimetype="application/json")
+
+
 @app.route("/api/contract-catalog", methods=["GET", "OPTIONS"])
 @portal_login_required
 def contract_catalog(user):

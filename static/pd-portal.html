@@ -1,155 +1,468 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Blue Alpha Invoice Portal</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<style>
-  :root {
-    --navy:     #1B2438;
-    --red:      #BD3333;
-    --cream:    #DDD8C4;
-    --bg:       #F2F3F5;
-    --card:     #FFFFFF;
-    --border:   #D0D5DD;
-    --text:     #1A1A2E;
-    --muted:    #6B7280;
-    --green:    #15803D;
-    --green-bg: #DCFCE7;
-    --orange:   #C05621;
-    --orange-bg:#FEF3C7;
-    --blue:     #1D4ED8;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blue Alpha — Department Portal</title>
+  <link rel="icon" href="https://www.bluealphabelts.com/wp-content/uploads/2019/05/cropped-BAG-FAV-32x32.png">
+  <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;600;700&family=Montserrat:wght@600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --navy:    #1B2438;
+      --red:     #7B2318;
+      --light:   #f5f7fa;
+      --border:  #dde3ea;
+      --text:    #1a2633;
+      --muted:   #6b7a8d;
+      --white:   #ffffff;
+      --success: #1a7a3c;
+    }
+    body { font-family: 'Lato', sans-serif; background: var(--light); color: var(--text); min-height: 100vh; }
 
-  /* Login */
-  .login-wrap { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-  .login-card { background: var(--card); border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.10);
-                padding: 40px 36px; width: 100%; max-width: 380px; }
-  .login-logo { text-align: center; margin-bottom: 24px; }
-  .login-logo span { font-size: 1.5rem; font-weight: 800; color: var(--navy); letter-spacing: 0.03em; }
-  .login-logo small { display: block; color: var(--muted); font-size: 0.82rem; margin-top: 4px; }
-  .field-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
-  .field-group label { font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .field-group input { padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
-                       font-size: 0.9rem; background: white; outline: none; }
-  .field-group input:focus { border-color: var(--navy); }
-  .btn-primary { background: var(--navy); color: white; border: none; border-radius: 8px; padding: 12px 20px;
-                 font-size: 0.95rem; font-weight: 700; cursor: pointer; width: 100%; margin-top: 6px; }
-  .btn-primary:hover { background: #253352; }
-  .login-error { color: var(--red); font-size: 0.83rem; margin-top: 8px; text-align: center; }
+    /* ── Login ── */
+    #loginScreen {
+      display: flex; align-items: center; justify-content: center; min-height: 100vh;
+      background: var(--light);
+    }
+    .login-card {
+      background: var(--white); border-radius: 12px; border: 1px solid var(--border);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08); padding: 44px 40px;
+      width: 100%; max-width: 400px; margin: 20px;
+    }
+    .login-logo { text-align: center; margin-bottom: 28px; }
+    .login-logo img { height: 48px; margin-bottom: 12px; }
+    .login-logo h2 {
+      font-family: 'Montserrat', sans-serif; font-size: 1.1rem; font-weight: 800;
+      color: var(--navy); margin-bottom: 4px;
+    }
+    .login-logo p { color: var(--muted); font-size: 0.84rem; }
+    .form-field { margin-bottom: 16px; }
+    .form-field label {
+      display: block; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #444; margin-bottom: 6px;
+    }
+    .form-field input {
+      width: 100%; border: 1.5px solid var(--border); border-radius: 7px;
+      padding: 11px 14px; font-size: 0.95rem; font-family: 'Lato', sans-serif;
+      outline: none; transition: border-color 0.15s;
+    }
+    .form-field input:focus { border-color: var(--navy); }
+    .btn-login {
+      width: 100%; background: var(--navy); color: var(--white);
+      font-family: 'Montserrat', sans-serif; font-size: 0.9rem; font-weight: 700;
+      border: none; border-radius: 8px; padding: 13px; cursor: pointer;
+      margin-top: 8px; transition: background 0.15s;
+    }
+    .btn-login:hover { background: #222d47; }
+    .btn-login:disabled { background: #7a8ea0; cursor: not-allowed; }
+    .login-error {
+      margin-top: 12px; padding: 10px 14px; background: #fdf0ef;
+      color: var(--red); border: 1px solid #f0c0b8; border-radius: 6px;
+      font-size: 0.84rem; text-align: center; display: none;
+    }
 
-  /* Portal App */
-  #app { display: none; min-height: 100vh; flex-direction: column; }
+    /* ── App Shell ── */
+    #app { display: none; flex-direction: column; min-height: 100vh; }
+    header {
+      background: var(--navy); padding: 0 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      min-height: 64px; flex-wrap: wrap; gap: 10px;
+    }
+    .header-left { display: flex; align-items: center; gap: 16px; padding: 14px 0; }
+    header img { height: 38px; width: auto; filter: brightness(0) invert(1); }
+    .header-divider { width: 2px; height: 32px; background: var(--red); border-radius: 2px; }
+    .header-agency {
+      font-family: 'Montserrat', sans-serif; font-size: 0.85rem; font-weight: 700;
+      color: rgba(255,255,255,0.85); letter-spacing: 1px;
+    }
+    .header-sub { font-size: 0.75rem; color: rgba(255,255,255,0.5); font-weight: 400; }
+    .header-right { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
+    .btn-logout {
+      background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.8);
+      border: 1px solid rgba(255,255,255,0.2); border-radius: 6px;
+      padding: 8px 18px; font-family: 'Lato', sans-serif; font-size: 0.84rem;
+      font-weight: 600; cursor: pointer; transition: background 0.15s;
+    }
+    .btn-logout:hover { background: rgba(255,255,255,0.2); }
 
-  .portal-header { background: var(--navy); color: white; padding: 14px 28px; display: flex;
-                   align-items: center; justify-content: space-between; }
-  .portal-header-left h1 { font-size: 1.1rem; font-weight: 700; }
-  .portal-header-left small { font-size: 0.78rem; color: rgba(255,255,255,0.6); }
-  .btn-logout { background: rgba(255,255,255,0.12); color: white; border: 1px solid rgba(255,255,255,0.2);
-                border-radius: 6px; padding: 7px 16px; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
-  .btn-logout:hover { background: rgba(255,255,255,0.22); }
+    /* ── Tabs ── */
+    .container { max-width: 1200px; margin: 0 auto; padding: 32px 20px 80px; }
+    .tabs {
+      display: flex; gap: 0; border-bottom: 2px solid var(--border);
+      margin-bottom: 28px; flex-wrap: wrap;
+    }
+    .tab {
+      padding: 12px 22px; font-family: 'Montserrat', sans-serif;
+      font-size: 0.82rem; font-weight: 700; letter-spacing: 0.5px;
+      text-transform: uppercase; color: var(--muted); cursor: pointer;
+      border-bottom: 3px solid transparent; margin-bottom: -2px;
+      transition: color 0.15s, border-color 0.15s; user-select: none;
+    }
+    .tab:hover { color: var(--navy); }
+    .tab.active { color: var(--navy); border-bottom-color: var(--red); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
 
-  .portal-body { flex: 1; padding: 28px 32px; max-width: 1100px; margin: 0 auto; width: 100%; }
+    /* ── Cards ── */
+    .card {
+      background: var(--white); border: 1px solid var(--border);
+      border-radius: 10px; padding: 32px;
+    }
+    .card-title {
+      font-family: 'Montserrat', sans-serif; font-size: 1rem;
+      font-weight: 800; color: var(--navy); margin-bottom: 8px;
+    }
+    .card-sub { color: var(--muted); font-size: 0.88rem; margin-bottom: 24px; }
 
-  .section-title { font-size: 1.1rem; font-weight: 700; color: var(--navy); margin-bottom: 16px; }
+    /* ── New Order layout ── */
+    .order-layout {
+      display: grid; grid-template-columns: 1fr 400px;
+      gap: 20px; align-items: start;
+    }
+    @media (max-width: 900px) {
+      .order-layout { grid-template-columns: 1fr; }
+    }
 
-  /* Table */
-  .invoice-table-wrap { background: var(--card); border-radius: 12px; overflow: hidden;
-                         box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
-  table { width: 100%; border-collapse: collapse; }
-  thead { background: var(--navy); color: white; }
-  thead th { padding: 12px 16px; text-align: left; font-size: 0.78rem; font-weight: 600;
-             text-transform: uppercase; letter-spacing: 0.05em; }
-  tbody tr { border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
-  tbody tr:hover { background: #F8F9FB; }
-  tbody tr.expanded { background: #F0F4FF; }
-  tbody td { padding: 12px 16px; font-size: 0.87rem; }
-  .col-amount { font-weight: 600; }
-  .col-pay { text-align: center; }
+    /* ── Catalog panel ── */
+    .catalog-card { padding: 24px; }
+    .catalog-search {
+      width: 100%; padding: 10px 14px; border: 1.5px solid var(--border);
+      border-radius: 7px; font-size: 0.9rem; font-family: 'Lato', sans-serif;
+      outline: none; margin-bottom: 20px; transition: border-color 0.15s;
+    }
+    .catalog-search:focus { border-color: var(--navy); }
 
-  /* Status badge */
-  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
-  .badge-open { background: var(--orange-bg); color: var(--orange); }
-  .badge-paid { background: var(--green-bg); color: var(--green); }
-  .badge-unknown { background: var(--bg); color: var(--muted); }
+    .cat-section { margin-bottom: 16px; }
+    .cat-section-header {
+      background: var(--navy); color: var(--white); padding: 10px 16px;
+      border-radius: 8px; cursor: pointer; display: flex;
+      justify-content: space-between; align-items: center;
+      font-family: 'Montserrat', sans-serif; font-size: 0.82rem;
+      font-weight: 700; letter-spacing: 0.5px; user-select: none;
+      transition: background 0.15s;
+    }
+    .cat-section-header:hover { background: #253352; }
+    .cat-section-header .chevron { transition: transform 0.2s; }
+    .cat-section-header.collapsed .chevron { transform: rotate(-90deg); }
+    .cat-section-body {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 10px; padding: 12px 0 4px;
+    }
+    .cat-section-body.hidden { display: none; }
 
-  /* Pay Now button */
-  .btn-pay { background: var(--red); color: white; border: none; border-radius: 6px; padding: 6px 14px;
-             font-size: 0.8rem; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
-  .btn-pay:hover { background: #a02b2b; }
-  .btn-pay-disabled { background: #ccc; color: #888; cursor: not-allowed; border-radius: 6px;
-                      padding: 6px 14px; font-size: 0.8rem; font-weight: 600; display: inline-block; }
+    .product-card {
+      background: var(--white); border: 1px solid var(--border);
+      border-radius: 8px; padding: 14px; display: flex;
+      flex-direction: column; gap: 8px;
+    }
+    .product-name { font-weight: 700; font-size: 0.85rem; color: var(--text); line-height: 1.3; }
+    .product-price { font-size: 1.05rem; font-weight: 700; color: var(--navy); }
+    .product-selectors { display: flex; flex-direction: column; gap: 6px; }
+    .product-selectors select {
+      width: 100%; padding: 6px 10px; border: 1.5px solid var(--border);
+      border-radius: 6px; font-size: 0.8rem; font-family: 'Lato', sans-serif;
+      background: var(--white); cursor: pointer; outline: none;
+    }
+    .product-selectors select:focus { border-color: var(--navy); }
+    .qty-row { display: flex; align-items: center; gap: 8px; }
+    .qty-row label { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+    .qty-row input[type=number] {
+      width: 64px; padding: 6px 10px; border: 1.5px solid var(--border);
+      border-radius: 6px; font-size: 0.85rem; text-align: center; outline: none;
+    }
+    .qty-row input:focus { border-color: var(--navy); }
+    .btn-add {
+      background: var(--navy); color: var(--white); border: none;
+      border-radius: 6px; padding: 8px 14px; font-size: 0.82rem;
+      font-weight: 700; font-family: 'Lato', sans-serif;
+      cursor: pointer; width: 100%; transition: background 0.15s;
+    }
+    .btn-add:hover { background: #253352; }
 
-  /* Expanded detail row */
-  .detail-row td { padding: 0 !important; }
-  .detail-inner { background: #F8F9FB; padding: 16px 24px 20px; border-bottom: 2px solid var(--navy); }
-  .detail-title { font-weight: 600; font-size: 0.82rem; color: var(--muted); text-transform: uppercase;
-                  letter-spacing: 0.04em; margin-bottom: 10px; }
-  .line-items-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
-  .line-items-table th { padding: 7px 12px; text-align: left; background: white; font-weight: 600;
-                          font-size: 0.75rem; color: var(--muted); text-transform: uppercase; border-bottom: 1px solid var(--border); }
-  .line-items-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
-  .li-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; }
-  .li-picked { background: var(--green-bg); color: var(--green); }
-  .li-not-picked { background: var(--orange-bg); color: var(--orange); }
+    /* ── Order form panel ── */
+    .order-form-card { padding: 24px; position: sticky; top: 20px; }
+    .order-panel-title {
+      font-family: 'Montserrat', sans-serif; font-size: 0.95rem;
+      font-weight: 800; color: var(--navy); margin-bottom: 20px;
+      padding-bottom: 14px; border-bottom: 2px solid var(--border);
+    }
+    .field-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+    .field-group label {
+      font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; color: var(--muted);
+    }
+    .field-group input {
+      padding: 10px 12px; border: 1.5px solid var(--border);
+      border-radius: 6px; font-size: 0.9rem; font-family: 'Lato', sans-serif;
+      outline: none; transition: border-color 0.15s;
+    }
+    .field-group input:focus { border-color: var(--navy); }
 
-  .loading { text-align: center; padding: 50px; color: var(--muted); }
-  .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid var(--border);
-             border-top-color: var(--navy); border-radius: 50%; animation: spin 0.8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+    /* ── Line items ── */
+    .line-items-section {
+      border: 1px solid var(--border); border-radius: 8px;
+      overflow: hidden; margin-bottom: 4px;
+    }
+    .line-items-header {
+      background: var(--light); padding: 8px 12px;
+      font-family: 'Montserrat', sans-serif; font-size: 0.72rem; font-weight: 700;
+      letter-spacing: 0.5px; color: var(--muted); text-transform: uppercase;
+      display: grid; grid-template-columns: 1fr 48px 72px 28px; gap: 6px;
+    }
+    .line-item-row {
+      padding: 9px 12px; border-top: 1px solid var(--border);
+      display: grid; grid-template-columns: 1fr 48px 72px 28px;
+      gap: 6px; align-items: center; font-size: 0.84rem;
+    }
+    .line-item-name { font-weight: 600; line-height: 1.3; }
+    .line-item-qty, .line-item-price { text-align: right; color: var(--muted); }
+    .btn-remove {
+      background: none; border: none; cursor: pointer;
+      color: var(--red); font-size: 1rem; padding: 2px; line-height: 1;
+    }
+    .btn-remove:hover { color: #9b3626; }
+    .empty-cart {
+      padding: 20px; text-align: center;
+      color: var(--muted); font-size: 0.85rem;
+    }
+    .order-total-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 0; border-top: 2px solid var(--navy);
+      font-weight: 700; font-size: 1rem; margin-top: 4px; margin-bottom: 16px;
+    }
 
-  .empty-state { text-align: center; padding: 50px; color: var(--muted); }
-  .empty-state h3 { font-size: 1rem; color: var(--text); margin-bottom: 6px; }
+    .btn-place-order {
+      display: block; width: 100%; background: var(--navy); color: var(--white);
+      font-family: 'Montserrat', sans-serif; font-size: 0.9rem; font-weight: 700;
+      letter-spacing: 0.5px; border: none; border-radius: 8px;
+      padding: 14px 20px; cursor: pointer; transition: background 0.15s;
+    }
+    .btn-place-order:hover:not(:disabled) { background: #253352; }
+    .btn-place-order:disabled { background: #a0aab6; cursor: not-allowed; }
 
-  @media (max-width: 700px) {
-    .portal-body { padding: 16px; }
-    thead th:nth-child(3), tbody td:nth-child(3),
-    thead th:nth-child(4), tbody td:nth-child(4) { display: none; }
-  }
-</style>
+    /* ── Confirmation ── */
+    #confirmPanel { display: none; }
+    .confirm-badge {
+      text-align: center; padding: 28px 0 20px;
+    }
+    .confirm-so {
+      font-family: 'Montserrat', sans-serif; font-size: 2.2rem;
+      font-weight: 800; color: var(--navy); letter-spacing: 0.05em;
+    }
+    .confirm-label { color: var(--muted); font-size: 0.84rem; margin-top: 4px; }
+    .confirm-success {
+      background: #e6f7ed; color: #1a5c35; border: 1px solid #a3d9b8;
+      border-radius: 6px; padding: 10px 14px; font-size: 0.88rem;
+      font-weight: 600; margin-bottom: 16px; text-align: center;
+    }
+    .confirm-info {
+      background: var(--light); border-radius: 8px; padding: 14px 16px;
+      font-size: 0.88rem; margin-bottom: 16px;
+    }
+    .confirm-info p { margin: 4px 0; }
+    .confirm-info strong { color: var(--navy); }
+    .btn-new-order {
+      display: block; width: 100%; background: transparent;
+      color: var(--navy); border: 1.5px solid var(--navy);
+      font-family: 'Montserrat', sans-serif; font-size: 0.88rem;
+      font-weight: 700; border-radius: 8px; padding: 12px;
+      cursor: pointer; transition: all 0.15s; margin-top: 8px;
+    }
+    .btn-new-order:hover { background: var(--navy); color: var(--white); }
+
+    /* ── Our Orders tab ── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    th {
+      background: var(--navy); color: var(--white);
+      font-family: 'Montserrat', sans-serif; font-size: 0.72rem;
+      font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+      padding: 10px 14px; text-align: left;
+    }
+    td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tbody tr { cursor: pointer; transition: background 0.1s; }
+    tbody tr:hover td { background: #f8f9fb; }
+    tbody tr.expanded td { background: #f0f4ff; }
+
+    .badge {
+      display: inline-block; padding: 3px 10px; border-radius: 12px;
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+    }
+    .badge-paid    { background: #d4edda; color: #155724; }
+    .badge-open    { background: #fff3cd; color: #856404; }
+    .badge-approved { background: #cce5ff; color: #004085; }
+    .badge-unknown { background: #f0f2f5; color: var(--muted); }
+
+    /* Detail row */
+    .detail-row td { padding: 0 !important; border-bottom: 2px solid var(--navy) !important; }
+    .detail-inner {
+      background: #f8f9fb; padding: 16px 20px 20px;
+    }
+    .detail-title {
+      font-family: 'Montserrat', sans-serif; font-size: 0.75rem;
+      font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+      color: var(--muted); margin-bottom: 12px;
+    }
+    .li-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+    .li-table th {
+      background: var(--white); padding: 8px 12px; font-size: 0.72rem;
+      font-weight: 700; color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.5px; border-bottom: 1px solid var(--border);
+    }
+    .li-table td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+    .li-table tr:last-child td { border-bottom: none; }
+    .li-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-weight: 700; }
+    .li-picked   { background: #d4edda; color: #155724; }
+    .li-pending  { background: #fff3cd; color: #856404; }
+
+    /* Shared */
+    .loading { text-align: center; padding: 40px; color: var(--muted); }
+    .spinner {
+      display: inline-block; width: 24px; height: 24px;
+      border: 3px solid var(--border); border-top-color: var(--navy);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty-state { text-align: center; padding: 48px 20px; color: var(--muted); }
+    .empty-state h3 { font-family: 'Montserrat', sans-serif; font-size: 1rem; color: var(--text); margin-bottom: 6px; }
+    .msg-error {
+      background: #fdf0ef; color: var(--red); border: 1px solid #f0c0b8;
+      border-radius: 6px; padding: 10px 14px; font-size: 0.85rem;
+      margin-bottom: 12px; display: none;
+    }
+
+    @media (max-width: 580px) {
+      .card { padding: 20px 16px; }
+      th, td { padding: 9px 10px; }
+      .order-form-card { position: static; }
+    }
+  </style>
 </head>
 <body>
 
-<!-- Login Screen -->
-<div class="login-wrap" id="loginScreen">
+<!-- ── Login Screen ─────────────────────────────────────────────────────── -->
+<div id="loginScreen">
   <div class="login-card">
     <div class="login-logo">
-      <span>🔵 Blue Alpha</span>
-      <small>Invoice Portal</small>
+      <img src="https://www.bluealphabelts.com/wp-content/uploads/2024/04/logo-1.png" alt="Blue Alpha">
+      <h2>Department Portal</h2>
+      <p>Newnan Police Department</p>
     </div>
     <form onsubmit="doLogin(event)">
-      <div class="field-group">
+      <div class="form-field">
         <label>Username</label>
-        <input type="text" id="loginUsername" autocomplete="username" required />
+        <input type="text" id="loginUsername" autocomplete="username" required placeholder="Enter username">
       </div>
-      <div class="field-group">
+      <div class="form-field">
         <label>Password</label>
-        <input type="password" id="loginPassword" autocomplete="current-password" required />
+        <input type="password" id="loginPassword" autocomplete="current-password" required placeholder="Enter password">
       </div>
-      <button type="submit" class="btn-primary" id="loginBtn">Sign In</button>
+      <button type="submit" class="btn-login" id="loginBtn">Sign In</button>
       <div class="login-error" id="loginError"></div>
     </form>
   </div>
 </div>
 
-<!-- Portal App -->
+<!-- ── App ──────────────────────────────────────────────────────────────── -->
 <div id="app">
-  <div class="portal-header">
-    <div class="portal-header-left">
-      <h1>Blue Alpha Invoice Portal</h1>
-      <small id="orgName"></small>
+  <header>
+    <div class="header-left">
+      <img src="https://www.bluealphabelts.com/wp-content/uploads/2024/04/logo-1.png" alt="Blue Alpha">
+      <div class="header-divider"></div>
+      <div>
+        <div class="header-agency" id="orgName">Department Portal</div>
+        <div class="header-sub">Newnan Police Department</div>
+      </div>
     </div>
-    <button class="btn-logout" onclick="doLogout()">Sign Out</button>
-  </div>
-  <div class="portal-body">
-    <div class="section-title">Police Department Orders</div>
-    <div id="ordersContainer">
-      <div class="loading"><div class="spinner"></div></div>
+    <div class="header-right">
+      <button class="btn-logout" onclick="doLogout()">Sign Out</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="tabs">
+      <div class="tab active" data-tab="new-order">New Order</div>
+      <div class="tab" data-tab="our-orders">Our Orders</div>
+    </div>
+
+    <!-- ── New Order Tab ── -->
+    <div class="tab-panel active" id="panel-new-order">
+      <div class="order-layout">
+
+        <!-- Catalog (left) -->
+        <div class="card catalog-card">
+          <div class="card-title">Product Catalog</div>
+          <div class="card-sub">Newnan PD pricing applied. Select items to add to the order.</div>
+          <input type="text" class="catalog-search" id="searchInput"
+                 placeholder="Search products…" oninput="filterCatalog()">
+          <div id="catalogContainer">
+            <div class="loading"><div class="spinner"></div><p style="margin-top:12px">Loading catalog…</p></div>
+          </div>
+        </div>
+
+        <!-- Order Form (right) -->
+        <div class="card order-form-card">
+          <!-- Order Input Form -->
+          <div id="orderForm">
+            <div class="order-panel-title">New Order</div>
+
+            <div class="field-group">
+              <label>Officer Name *</label>
+              <input type="text" id="officerName" placeholder="Full name" oninput="validateOrder()">
+            </div>
+            <div class="field-group">
+              <label>Badge #</label>
+              <input type="text" id="badgeNum" placeholder="e.g. 1042">
+            </div>
+
+            <div style="margin-bottom: 12px;">
+              <div class="line-items-section">
+                <div class="line-items-header">
+                  <span>Item</span>
+                  <span style="text-align:right">Qty</span>
+                  <span style="text-align:right">Price</span>
+                  <span></span>
+                </div>
+                <div id="lineItemsList"><div class="empty-cart">No items yet — add from the catalog</div></div>
+              </div>
+              <div class="order-total-row">
+                <span>Order Total</span>
+                <span id="orderTotal">$0.00</span>
+              </div>
+            </div>
+
+            <div class="msg-error" id="createError"></div>
+
+            <button class="btn-place-order" id="placeOrderBtn" onclick="placeOrder()" disabled>
+              Place Order
+            </button>
+          </div>
+
+          <!-- Confirmation Panel -->
+          <div id="confirmPanel">
+            <div class="confirm-badge">
+              <div class="confirm-so" id="confirmSO"></div>
+              <div class="confirm-label">Order Placed Successfully</div>
+            </div>
+            <div class="confirm-success">✓ Your order has been submitted and is being processed.</div>
+            <div class="confirm-info" id="confirmInfo"></div>
+            <button class="btn-new-order" onclick="resetOrder()">+ New Order</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Our Orders Tab ── -->
+    <div class="tab-panel" id="panel-our-orders">
+      <div class="card">
+        <div class="card-title">Department Orders</div>
+        <div class="card-sub">All orders placed by your department. Click a row to see line items.</div>
+        <div id="ordersContainer">
+          <div class="loading"><div class="spinner"></div></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -158,12 +471,14 @@
 'use strict';
 
 let portalUser  = null;
-let ordersData  = [];
+let catalog     = null;
+let lineItems   = [];
 let expandedRow = null;
 
-// ── Init ─────────────────────────────────────────────────────────────────────
+// ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
+  // Check existing session
   try {
     const r = await fetch('/api/portal/me', { credentials: 'include' });
     if (r.ok) {
@@ -186,34 +501,32 @@ function showLogin() {
 function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
-
   const org = portalUser.org || portalUser.organization || '';
   if (org) document.getElementById('orgName').textContent = org;
-
-  loadOrders();
+  loadCatalog();
 }
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
 async function doLogin(e) {
   e.preventDefault();
   const btn = document.getElementById('loginBtn');
-  btn.disabled = true; btn.textContent = 'Signing in…';
-  document.getElementById('loginError').textContent = '';
+  const errEl = document.getElementById('loginError');
+  btn.disabled = true;
+  btn.textContent = 'Signing in…';
+  errEl.style.display = 'none';
 
   const username = document.getElementById('loginUsername').value.trim();
   const password = document.getElementById('loginPassword').value;
 
   try {
     const r = await fetch('/api/portal/login', {
-      method: 'POST',
-      credentials: 'include',
+      method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
     const d = await r.json();
     if (r.ok && d.ok !== false) {
-      // Re-check session
       const me = await fetch('/api/portal/me', { credentials: 'include' });
       if (me.ok) {
         portalUser = await me.json();
@@ -222,23 +535,318 @@ async function doLogin(e) {
       }
       window.location.reload();
     } else {
-      document.getElementById('loginError').textContent = d.error || 'Invalid username or password.';
-      btn.disabled = false; btn.textContent = 'Sign In';
+      errEl.textContent = d.error || 'Invalid username or password.';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
     }
   } catch(err) {
-    document.getElementById('loginError').textContent = 'Network error. Please try again.';
-    btn.disabled = false; btn.textContent = 'Sign In';
+    errEl.textContent = 'Network error. Please try again.';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
   }
 }
 
 async function doLogout() {
-  try {
-    await fetch('/api/portal/logout', { method: 'POST', credentials: 'include' });
-  } catch(e) {}
+  try { await fetch('/api/portal/logout', { method: 'POST', credentials: 'include' }); } catch(e) {}
   window.location.reload();
 }
 
-// ── Orders ────────────────────────────────────────────────────────────────────
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+  });
+  init();
+});
+
+let ordersLoaded = false;
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `panel-${name}`));
+  if (name === 'our-orders' && !ordersLoaded) {
+    ordersLoaded = true;
+    loadOrders();
+  }
+}
+
+// ── Catalog ───────────────────────────────────────────────────────────────────
+
+async function loadCatalog() {
+  const el = document.getElementById('catalogContainer');
+  try {
+    const r = await fetch('/api/department/catalog', { credentials: 'include' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      el.innerHTML = `<div style="color:var(--red);padding:16px">Failed to load catalog (${r.status}): ${esc(d.error || '')}</div>`;
+      return;
+    }
+    catalog = await r.json();
+    renderCatalog(catalog, '');
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--red);padding:16px">Network error: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderCatalog(data, filterText) {
+  const container = document.getElementById('catalogContainer');
+  if (!data || !data.skus) { container.innerHTML = '<div class="empty-state"><h3>No catalog data</h3></div>'; return; }
+
+  const lowerFilter = (filterText || '').toLowerCase().trim();
+
+  // Group SKUs by parentId
+  const parentMap = {};
+  for (const sku of data.skus) {
+    if (!parentMap[sku.parentId]) {
+      parentMap[sku.parentId] = { name: sku.parentName, skus: [], category: sku.category };
+    }
+    parentMap[sku.parentId].skus.push(sku);
+  }
+
+  // Ordered parent IDs from data.parents
+  const parentOrder = (data.parents || []).map(p => p.id).filter(id => parentMap[id]);
+
+  let html = '';
+  for (const parentId of parentOrder) {
+    const group = parentMap[parentId];
+    let visibleSkus = group.skus;
+    if (lowerFilter) {
+      visibleSkus = visibleSkus.filter(s =>
+        s.name.toLowerCase().includes(lowerFilter) ||
+        s.parentName.toLowerCase().includes(lowerFilter)
+      );
+    }
+    if (!visibleSkus.length) continue;
+
+    const hasColor = visibleSkus.some(s => s.colorId);
+    const hasSize  = visibleSkus.some(s => s.sizeId);
+    const hasFvar  = visibleSkus.some(s => s.featureVarId);
+
+    html += `<div class="cat-section">
+      <div class="cat-section-header" onclick="toggleSection(this)">
+        <span>${esc(group.name)}</span>
+        <span class="chevron">▾</span>
+      </div>
+      <div class="cat-section-body">`;
+
+    if (hasColor || hasSize || hasFvar) {
+      html += buildVariantCard(parentId, group.name, visibleSkus);
+    } else {
+      for (const sku of visibleSkus) {
+        html += buildSimpleCard(sku);
+      }
+    }
+
+    html += `</div></div>`;
+  }
+
+  container.innerHTML = html || '<div class="empty-state"><h3>No products match your search.</h3></div>';
+}
+
+function buildVariantCard(parentId, parentName, skus) {
+  const colors = [...new Map(skus.filter(s => s.colorId).map(s => [s.colorId, s.colorName])).entries()];
+  const sizes  = [...new Map(skus.filter(s => s.sizeId).map(s  => [s.sizeId,  s.sizeName])).entries()];
+  const fvars  = [...new Map(skus.filter(s => s.featureVarId).map(s => [s.featureVarId, s.featureVarName])).entries()];
+
+  const firstSku  = skus[0];
+  const colorSel  = colors.length ? `<select onchange="updateVariantPrice('${parentId}')">${colors.map(([id,n]) => `<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
+  const sizeSel   = sizes.length  ? `<select onchange="updateVariantPrice('${parentId}')">${sizes.map(([id,n])  => `<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
+  const fvarSel   = fvars.length  ? `<select onchange="updateVariantPrice('${parentId}')">${fvars.map(([id,n])  => `<option value="${id}">${esc(n)}</option>`).join('')}</select>` : '';
+
+  return `<div class="product-card" data-parent-id="${parentId}" data-skus='${JSON.stringify(skus).replace(/'/g,"&#39;")}'>
+    <div class="product-name">${esc(parentName)}</div>
+    <div class="product-price" id="price-${parentId}">$${fmt(firstSku.price)}</div>
+    <div class="product-selectors">${colorSel}${sizeSel}${fvarSel}</div>
+    <div class="qty-row">
+      <label>Qty:</label>
+      <input type="number" id="qty-${parentId}" value="1" min="1" max="99">
+    </div>
+    <button class="btn-add" onclick="addVariantItem('${parentId}')">Add to Order</button>
+  </div>`;
+}
+
+function buildSimpleCard(sku) {
+  return `<div class="product-card">
+    <div class="product-name">${esc(sku.name)}</div>
+    <div class="product-price">$${fmt(sku.price)}</div>
+    <div class="qty-row">
+      <label>Qty:</label>
+      <input type="number" id="qty-sku-${sku.recordId}" value="1" min="1" max="99">
+    </div>
+    <button class="btn-add" onclick="addSimpleItem('${sku.recordId}', ${JSON.stringify(sku.name)}, ${sku.price})">Add to Order</button>
+  </div>`;
+}
+
+function updateVariantPrice(parentId) {
+  const card = document.querySelector(`.product-card[data-parent-id="${parentId}"]`);
+  if (!card) return;
+  const skus = JSON.parse(card.dataset.skus);
+  const selects = card.querySelectorAll('select');
+  const colorVal = selects[0] ? selects[0].value : '';
+  const sizeVal  = selects[1] ? selects[1].value : '';
+  const fvarVal  = selects[2] ? selects[2].value : '';
+  const match = findSku(skus, colorVal, sizeVal, fvarVal);
+  if (match) document.getElementById(`price-${parentId}`).textContent = `$${fmt(match.price)}`;
+}
+
+function findSku(skus, colorId, sizeId, fvarId) {
+  let match = skus.find(s =>
+    (!colorId || s.colorId === colorId) &&
+    (!sizeId  || s.sizeId  === sizeId)  &&
+    (!fvarId  || s.featureVarId === fvarId)
+  );
+  if (!match) match = skus.find(s => (!colorId || s.colorId === colorId) && (!sizeId || s.sizeId === sizeId));
+  if (!match) match = skus.find(s => (!colorId || s.colorId === colorId));
+  if (!match) match = skus[0];
+  return match;
+}
+
+function addVariantItem(parentId) {
+  const card = document.querySelector(`.product-card[data-parent-id="${parentId}"]`);
+  if (!card) return;
+  const skus = JSON.parse(card.dataset.skus);
+  const selects = card.querySelectorAll('select');
+  const colorVal = selects[0] ? selects[0].value : '';
+  const sizeVal  = selects[1] ? selects[1].value : '';
+  const fvarVal  = selects[2] ? selects[2].value : '';
+  const sku = findSku(skus, colorVal, sizeVal, fvarVal);
+  if (!sku) return;
+  const qty = parseInt(document.getElementById(`qty-${parentId}`)?.value || '1', 10) || 1;
+  addToOrder(sku.recordId, sku.name, sku.price, qty);
+}
+
+function addSimpleItem(recordId, name, price) {
+  const qty = parseInt(document.getElementById(`qty-sku-${recordId}`)?.value || '1', 10) || 1;
+  addToOrder(recordId, name, price, qty);
+}
+
+function addToOrder(recordId, name, price, qty) {
+  const existing = lineItems.find(li => li.sku_record_id === recordId);
+  if (existing) {
+    existing.qty += qty;
+  } else {
+    lineItems.push({ sku_record_id: recordId, name, unit_price: price, qty });
+  }
+  renderLineItems();
+  validateOrder();
+}
+
+function filterCatalog() {
+  const q = document.getElementById('searchInput').value;
+  if (catalog) renderCatalog(catalog, q);
+}
+
+function toggleSection(header) {
+  header.classList.toggle('collapsed');
+  header.nextElementSibling.classList.toggle('hidden');
+}
+
+// ── Line Items ────────────────────────────────────────────────────────────────
+
+function renderLineItems() {
+  const container = document.getElementById('lineItemsList');
+  if (!lineItems.length) {
+    container.innerHTML = '<div class="empty-cart">No items yet — add from the catalog</div>';
+    document.getElementById('orderTotal').textContent = '$0.00';
+    return;
+  }
+  let total = 0;
+  let html = '';
+  for (let i = 0; i < lineItems.length; i++) {
+    const li = lineItems[i];
+    total += li.qty * li.unit_price;
+    html += `<div class="line-item-row">
+      <div class="line-item-name">${esc(li.name)}</div>
+      <div class="line-item-qty">${li.qty}</div>
+      <div class="line-item-price">$${fmt(li.unit_price)}</div>
+      <button class="btn-remove" onclick="removeItem(${i})" title="Remove">✕</button>
+    </div>`;
+  }
+  container.innerHTML = html;
+  document.getElementById('orderTotal').textContent = `$${fmt(total)}`;
+}
+
+function removeItem(idx) {
+  lineItems.splice(idx, 1);
+  renderLineItems();
+  validateOrder();
+}
+
+function validateOrder() {
+  const btn     = document.getElementById('placeOrderBtn');
+  const officer = document.getElementById('officerName').value.trim();
+  btn.disabled  = !(officer && lineItems.length > 0);
+}
+
+// ── Place Order ───────────────────────────────────────────────────────────────
+
+async function placeOrder() {
+  const btn    = document.getElementById('placeOrderBtn');
+  const errEl  = document.getElementById('createError');
+  btn.disabled = true;
+  btn.textContent = 'Placing Order…';
+  errEl.style.display = 'none';
+
+  const body = {
+    officer_name: document.getElementById('officerName').value.trim(),
+    badge_num:    document.getElementById('badgeNum').value.trim(),
+    line_items:   lineItems,
+  };
+
+  try {
+    const r = await fetch('/api/department/order/create', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) {
+      errEl.textContent = '⚠ ' + (d.error || 'Failed to place order. Please try again.');
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Place Order';
+      return;
+    }
+    showConfirmation(d, body);
+  } catch(e) {
+    errEl.textContent = '⚠ ' + e.message;
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Place Order';
+  }
+}
+
+function showConfirmation(data, body) {
+  document.getElementById('orderForm').style.display = 'none';
+  const panel = document.getElementById('confirmPanel');
+  panel.style.display = 'block';
+
+  document.getElementById('confirmSO').textContent = data.order_id;
+
+  const total = lineItems.reduce((s, li) => s + li.qty * li.unit_price, 0);
+  document.getElementById('confirmInfo').innerHTML = `
+    <p><strong>Officer:</strong> ${esc(body.officer_name)}${body.badge_num ? `&nbsp; <strong>Badge:</strong> ${esc(body.badge_num)}` : ''}</p>
+    <p><strong>Items:</strong> ${lineItems.length} item type${lineItems.length !== 1 ? 's' : ''}</p>
+    <p><strong>Order Total:</strong> $${fmt(total)}</p>
+  `;
+}
+
+function resetOrder() {
+  lineItems = [];
+  renderLineItems();
+  document.getElementById('officerName').value = '';
+  document.getElementById('badgeNum').value = '';
+  document.getElementById('createError').style.display = 'none';
+  document.getElementById('placeOrderBtn').textContent = 'Place Order';
+  document.getElementById('orderForm').style.display = 'block';
+  document.getElementById('confirmPanel').style.display = 'none';
+  validateOrder();
+}
+
+// ── Our Orders ────────────────────────────────────────────────────────────────
 
 async function loadOrders() {
   const container = document.getElementById('ordersContainer');
@@ -249,33 +857,31 @@ async function loadOrders() {
       container.innerHTML = `<div class="empty-state"><h3>Unable to load orders</h3><p>${esc(d.error || `Status ${r.status}`)}</p></div>`;
       return;
     }
-    ordersData = await r.json();
-    renderOrders();
+    const orders = await r.json();
+    renderOrders(orders);
   } catch(e) {
     container.innerHTML = `<div class="empty-state"><h3>Network Error</h3><p>${esc(e.message)}</p></div>`;
   }
 }
 
-function renderOrders() {
+function renderOrders(orders) {
   const container = document.getElementById('ordersContainer');
-  if (!ordersData.length) {
-    container.innerHTML = `<div class="empty-state"><h3>No orders yet</h3><p>Police department orders will appear here once created.</p></div>`;
+  if (!orders.length) {
+    container.innerHTML = `<div class="empty-state"><h3>No orders yet</h3><p>Orders placed by your department will appear here.</p></div>`;
     return;
   }
 
-  const rows = ordersData.map((o, idx) => `
-    <tr onclick="toggleDetail(${idx})" id="row-${idx}">
-      <td><strong>${esc(o.order_id)}</strong></td>
+  const rows = orders.map((o, idx) => `
+    <tr onclick="toggleOrderDetail(${idx}, '${o.record_id}')" id="orow-${idx}">
+      <td><strong>${esc(o.order_id || '—')}</strong></td>
       <td>${fmtDate(o.date)}</td>
       <td>${esc(o.officer_name || '—')}</td>
       <td>${esc(o.badge_num || '—')}</td>
-      <td class="col-amount">$${fmt(o.department_portion)}</td>
       <td>${statusBadge(o.department_stripe_invoice_status)}</td>
-      <td class="col-pay">${payBtn(o)}</td>
     </tr>
-    <tr class="detail-row" id="detail-${idx}" style="display:none">
-      <td colspan="7">
-        <div class="detail-inner" id="detail-inner-${idx}">
+    <tr class="detail-row" id="odetail-${idx}" style="display:none">
+      <td colspan="5">
+        <div class="detail-inner" id="odetail-inner-${idx}">
           <div class="loading"><div class="spinner"></div></div>
         </div>
       </td>
@@ -283,32 +889,27 @@ function renderOrders() {
   `).join('');
 
   container.innerHTML = `
-    <div class="invoice-table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Order #</th>
-            <th>Date</th>
-            <th>Officer</th>
-            <th>Badge #</th>
-            <th>Dept. Amount</th>
-            <th>Status</th>
-            <th>Pay</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
+    <table>
+      <thead>
+        <tr>
+          <th>Order #</th>
+          <th>Date</th>
+          <th>Officer</th>
+          <th>Badge #</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
-async function toggleDetail(idx) {
-  const detailRow = document.getElementById(`detail-${idx}`);
-  const headerRow = document.getElementById(`row-${idx}`);
+async function toggleOrderDetail(idx, recordId) {
+  const detailRow = document.getElementById(`odetail-${idx}`);
+  const headerRow = document.getElementById(`orow-${idx}`);
 
   if (expandedRow !== null && expandedRow !== idx) {
-    // Close previous
-    document.getElementById(`detail-${expandedRow}`).style.display = 'none';
-    document.getElementById(`row-${expandedRow}`).classList.remove('expanded');
+    document.getElementById(`odetail-${expandedRow}`).style.display = 'none';
+    document.getElementById(`orow-${expandedRow}`).classList.remove('expanded');
   }
 
   if (expandedRow === idx) {
@@ -322,29 +923,26 @@ async function toggleDetail(idx) {
   headerRow.classList.add('expanded');
   expandedRow = idx;
 
-  // Fetch detail
-  const order = ordersData[idx];
-  const inner = document.getElementById(`detail-inner-${idx}`);
+  const inner = document.getElementById(`odetail-inner-${idx}`);
   try {
-    const r = await fetch(`/api/pd/portal/order/${order.record_id}`, { credentials: 'include' });
+    const r = await fetch(`/api/pd/portal/order/${recordId}`, { credentials: 'include' });
     const d = await r.json();
     if (!r.ok) {
       inner.innerHTML = `<p style="color:var(--red)">Error: ${esc(d.error || 'Unknown')}</p>`;
       return;
     }
-    const lineItems = d.line_items || [];
-    const liRows = lineItems.map(li => `
+    const liRows = (d.line_items || []).map(li => `
       <tr>
-        <td>${esc(li.name)}</td>
+        <td>${esc(li.name || '—')}</td>
         <td>${li.qty}</td>
         <td>$${fmt(li.unit_price)}</td>
         <td>$${fmt((li.qty || 1) * (li.unit_price || 0))}</td>
-        <td><span class="li-badge ${li.picked_up ? 'li-picked' : 'li-not-picked'}">${li.picked_up ? '✓ Picked Up' : 'Pending'}</span></td>
-      </tr>`).join('') || '<tr><td colspan="5" style="color:var(--muted);text-align:center">No line items</td></tr>';
+        <td><span class="li-badge ${li.picked_up ? 'li-picked' : 'li-pending'}">${li.picked_up ? '✓ Ready' : 'Pending'}</span></td>
+      </tr>`).join('') || `<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No line items found</td></tr>`;
 
     inner.innerHTML = `
-      <div class="detail-title">Order ${esc(d.order_id)} — Line Items</div>
-      <table class="line-items-table">
+      <div class="detail-title">Order ${esc(d.order_id || '')} — Line Items</div>
+      <table class="li-table">
         <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
         <tbody>${liRows}</tbody>
       </table>`;
@@ -353,40 +951,25 @@ async function toggleDetail(idx) {
   }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function statusBadge(status) {
-  if (!status) return `<span class="badge badge-unknown">—</span>`;
-  const s = status.toLowerCase();
-  if (s === 'paid')   return `<span class="badge badge-paid">Paid</span>`;
-  if (s === 'open')   return `<span class="badge badge-open">Open</span>`;
+  if (!status) return `<span class="badge badge-approved">Approved</span>`;
+  const s = (status || '').toLowerCase();
+  if (s === 'paid')  return `<span class="badge badge-paid">Paid</span>`;
+  if (s === 'open')  return `<span class="badge badge-open">Open</span>`;
   return `<span class="badge badge-unknown">${esc(status)}</span>`;
-}
-
-function payBtn(order) {
-  if (order.department_stripe_invoice_url && order.department_stripe_invoice_status !== 'paid') {
-    return `<a class="btn-pay" href="${esc(order.department_stripe_invoice_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Pay Now</a>`;
-  }
-  if (order.department_stripe_invoice_status === 'paid') {
-    return `<span class="li-badge li-picked" style="font-size:0.75rem">Paid</span>`;
-  }
-  return `<span class="btn-pay-disabled">Invoice Pending</span>`;
 }
 
 function fmtDate(d) {
   if (!d) return '—';
-  try {
-    const [y,m,day] = d.split('-');
-    return `${m}/${day}/${y}`;
-  } catch(e) { return d; }
+  try { const [y,m,day] = d.split('-'); return `${m}/${day}/${y}`; } catch(e) { return d; }
 }
 
 function fmt(n) { return parseFloat(n || 0).toFixed(2); }
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
-document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>
