@@ -236,7 +236,7 @@ def _next_order_id(read_token):
     import time as _t
     return str(int(_t.time()))[-6:]   # fallback: last 6 digits of timestamp
 
-def at_get_all(table_id, token, fields=None, formula=None, base_id=None):
+def at_get_all(table_id, token, fields=None, formula=None, base_id=None, view=None):
     """Paginate through all records in an Airtable table."""
     records = []
     offset = None
@@ -248,6 +248,8 @@ def at_get_all(table_id, token, fields=None, formula=None, base_id=None):
                 params[f"fields[{i}]"] = f
         if formula:
             params["filterByFormula"] = formula
+        if view:
+            params["view"] = view
         if offset:
             params["offset"] = offset
         r = req_lib.get(
@@ -7234,14 +7236,15 @@ def department_catalog(user):
     c = cors()
     try:
         token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
-        # Fetch all SKUs where Newnan PD Discount has a value
+        # Fetch all SKUs from the Newnan PD discount view (already filtered correctly in Airtable)
+        _PD_SKU_VIEW = "viwU0xZ10IDGo9qMx"
         import concurrent.futures as _cf_dc
         fut_skus = _cf_dc.ThreadPoolExecutor(max_workers=1).submit(
             at_get_all, PRODUCT_SKUS_TABLE_ID, token,
             ["SKU ID", "Name + Variations", "Sale Price", "Newnan PD Price",
              "Newnan PD Discount", "Parent Product", "Color", "Size",
              "Feature Variation", "Category"],
-            "{Newnan PD Discount}!=''",
+            None, None, _PD_SKU_VIEW,
         )
         with _cf_dc.ThreadPoolExecutor(max_workers=4) as ex:
             fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID, token, fields=["Name"])
