@@ -7236,15 +7236,14 @@ def department_catalog(user):
     c = cors()
     try:
         token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
-        # Fetch all SKUs from the Newnan PD discount view (already filtered correctly in Airtable)
-        _PD_SKU_VIEW = "viwU0xZ10IDGo9qMx"
+        # Fetch all SKUs where Newnan PD Discount > 0 (percent field stored as decimal e.g. 0.1 = 10%)
         import concurrent.futures as _cf_dc
         fut_skus = _cf_dc.ThreadPoolExecutor(max_workers=1).submit(
             at_get_all, PRODUCT_SKUS_TABLE_ID, token,
             ["SKU ID", "Name + Variations", "Sale Price", "Newnan PD Price",
              "Newnan PD Discount", "Parent Product", "Color", "Size",
              "Feature Variation", "Category"],
-            None, None, _PD_SKU_VIEW,
+            "{Newnan PD Discount}>0",
         )
         with _cf_dc.ThreadPoolExecutor(max_workers=4) as ex:
             fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID, token, fields=["Name"])
