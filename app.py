@@ -13968,9 +13968,9 @@ def pd_portal_orders():
     try:
         records = at_get_all(
             MANUAL_ORDERS_TABLE_ID, read_token,
-            fields=["Order ID", "Date", "Officer Name", "Badge #",
+            fields=["Order ID", "Date", "Officer Name", "Badge Number",
                     "Department Portion $", "Department Stripe Invoice URL",
-                    "Department Stripe Invoice Status", "Customer"],
+                    "Department Stripe Invoice Status", "Picked Up", "Customer"],
             formula=f"AND({{Order Type}}='PD Order',FIND('{customer_id}',ARRAYJOIN({{Customer}},','))>0)",
         )
         orders = []
@@ -13981,10 +13981,11 @@ def pd_portal_orders():
                 "order_id":                         f"SO-{f.get('Order ID', '')}" if f.get("Order ID") else "",
                 "date":                             f.get("Date", ""),
                 "officer_name":                     f.get("Officer Name", ""),
-                "badge_num":                        f.get("Badge #", ""),
+                "badge_num":                        f.get("Badge Number", ""),
                 "department_portion":               f.get("Department Portion $", 0),
                 "department_stripe_invoice_url":    f.get("Department Stripe Invoice URL", ""),
                 "department_stripe_invoice_status": f.get("Department Stripe Invoice Status", ""),
+                "picked_up":                        bool(f.get("Picked Up", False)),
             })
         orders.sort(key=lambda x: x["date"] or "", reverse=True)
         return Response(json.dumps(orders), headers=c, mimetype="application/json")
@@ -14022,11 +14023,12 @@ def pd_portal_order_detail(record_id):
             "order_id":                         f"SO-{raw_oid}" if raw_oid and not str(raw_oid).upper().startswith("SO") else raw_oid,
             "date":                             f.get("Date", ""),
             "officer_name":                     f.get("Officer Name", ""),
-            "badge_num":                        f.get("Badge #", ""),
+            "badge_num":                        f.get("Badge Number", ""),
             "department_portion":               f.get("Department Portion $", 0),
             "department_stripe_invoice_url":    f.get("Department Stripe Invoice URL", ""),
             "department_stripe_invoice_status": f.get("Department Stripe Invoice Status", ""),
             "sales_order_status":               f.get("Sales Order Status", ""),
+            "picked_up":                        bool(f.get("Picked Up", False)),
         }
         li_ids = f.get("MO Line Items", [])
         line_items = []
