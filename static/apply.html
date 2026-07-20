@@ -161,10 +161,6 @@
               <label>Company / Agency Name <span class="req">*</span></label>
               <input type="text" name="companyName" required>
             </div>
-            <div class="form-group">
-              <label>EIN (Tax ID) <span class="req">*</span></label>
-              <input type="text" name="ein" placeholder="XX-XXXXXXX" required>
-            </div>
           </div>
 
           <!-- Tax exempt toggle -->
@@ -188,9 +184,15 @@
           <div id="exemptFields">
             <div class="form-row">
               <div class="form-group">
+                <label>EIN (Tax ID) <span class="req">*</span></label>
+                <input type="text" name="ein" placeholder="XX-XXXXXXX">
+              </div>
+              <div class="form-group">
                 <label>State Tax Exemption Number <span class="req">*</span></label>
                 <input type="text" name="taxExemptionNumber" placeholder="e.g. TX-98-00123">
               </div>
+            </div>
+            <div class="form-row">
               <div class="form-group">
                 <label>Website</label>
                 <input type="url" name="website" placeholder="https://">
@@ -364,6 +366,7 @@
         document.getElementById('nonExemptNote').style.display  = exempt ? 'none' : '';
         // Clear exemption fields when switching to not-exempt so they don't block submit
         if (!exempt) {
+          document.querySelector('[name="ein"]').value = '';
           document.querySelector('[name="taxExemptionNumber"]').value = '';
           document.getElementById('exemptionCert').value = '';
           document.getElementById('uploadArea').classList.remove('has-file');
@@ -393,7 +396,7 @@
 
       // Always-required fields
       const alwaysRequired = [
-        'companyName','ein',
+        'companyName',
         'shippingContactName','shippingContactEmail','shippingContactPhone',
         'shippingAddr1','shippingCity','shippingState','shippingZip'
       ];
@@ -416,6 +419,7 @@
       const certFile = document.getElementById('exemptionCert');
       const uploadArea = document.getElementById('uploadArea');
       if (isTaxExempt()) {
+        if (!checkField(form.querySelector('[name="ein"]'))) valid = false;
         if (!checkField(form.querySelector('[name="taxExemptionNumber"]'))) valid = false;
         if (!certFile.files || certFile.files.length === 0) {
           uploadArea.style.outline = '2px solid var(--error)';

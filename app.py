@@ -6826,11 +6826,11 @@ def apply_page():
     billing_state          = gf("billingState")        if not billing_same else shipping_state
     billing_zip            = gf("billingZip")          if not billing_same else shipping_zip
 
-    required_fields = [company_name, ein,
+    required_fields = [company_name,
                        shipping_contact_name, shipping_contact_email, shipping_contact_phone,
                        shipping_addr1, shipping_city, shipping_state, shipping_zip]
     if tax_exempt:
-        required_fields.append(tax_exemption_number)
+        required_fields += [ein, tax_exemption_number]
     if not billing_same:
         required_fields += [billing_contact_name, billing_contact_email,
                             billing_addr1, billing_city, billing_state, billing_zip]
