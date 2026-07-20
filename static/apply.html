@@ -243,7 +243,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>Contact Phone <span class="req">*</span></label>
-              <input type="tel" name="shippingContactPhone" required>
+              <input type="tel" name="shippingContactPhone" placeholder="(555) 555-5555" maxlength="14" required>
             </div>
           </div>
           <div class="form-row full">
@@ -297,7 +297,7 @@
             <div class="form-row">
               <div class="form-group">
                 <label>Contact Phone <span class="req">*</span></label>
-                <input type="tel" name="billingContactPhone">
+                <input type="tel" name="billingContactPhone" placeholder="(555) 555-5555" maxlength="14">
               </div>
             </div>
             <div class="form-row full">
@@ -355,6 +355,19 @@
       billingFields.style.display = sameAsShippingCb.checked ? 'none' : 'block';
     });
 
+    // Phone auto-formatter — strips non-digits, caps at 10, formats as (XXX) XXX-XXXX
+    function formatPhone(e) {
+      const input = e.target;
+      const digits = input.value.replace(/\D/g, '').slice(0, 10);
+      let out = '';
+      if (digits.length > 0) out = '(' + digits.slice(0, 3);
+      if (digits.length >= 4) out += ') ' + digits.slice(3, 6);
+      if (digits.length >= 7) out += '-' + digits.slice(6, 10);
+      input.value = out;
+    }
+    document.querySelectorAll('[name="shippingContactPhone"], [name="billingContactPhone"]')
+      .forEach(el => el.addEventListener('input', formatPhone));
+
     // Tax exempt toggle
     function isTaxExempt() {
       return document.getElementById('taxExemptYes').checked;
@@ -394,25 +407,39 @@
         return true;
       }
 
+      function checkPhone(el) {
+        if (!el) return true;
+        const digits = (el.value || '').replace(/\D/g, '');
+        if (digits.length !== 10) {
+          el.classList.add('error');
+          firstErrorEl = firstErrorEl || el;
+          return false;
+        }
+        el.classList.remove('error');
+        return true;
+      }
+
       // Always-required fields
       const alwaysRequired = [
         'companyName',
-        'shippingContactName','shippingContactEmail','shippingContactPhone',
+        'shippingContactName','shippingContactEmail',
         'shippingAddr1','shippingCity','shippingState','shippingZip'
       ];
       for (const name of alwaysRequired) {
         if (!checkField(form.querySelector(`[name="${name}"]`))) valid = false;
       }
+      if (!checkPhone(form.querySelector('[name="shippingContactPhone"]'))) valid = false;
 
       // Billing required only when not same as shipping
       if (!sameAsShippingCb.checked) {
         const billingRequired = [
-          'billingContactName','billingContactEmail','billingContactPhone',
+          'billingContactName','billingContactEmail',
           'billingAddr1','billingCity','billingState','billingZip'
         ];
         for (const name of billingRequired) {
           if (!checkField(form.querySelector(`[name="${name}"]`))) valid = false;
         }
+        if (!checkPhone(form.querySelector('[name="billingContactPhone"]'))) valid = false;
       }
 
       // Exemption fields required only when tax exempt
