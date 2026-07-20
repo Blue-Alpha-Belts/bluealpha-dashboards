@@ -1282,8 +1282,9 @@ function addCatalogItem(parentId) {
 
   if (!colorId) return;
 
-  const addonSel = document.getElementById('sadon_' + parentId);
-  const addonId  = addonSel ? addonSel.value : '';
+  const addonSel    = document.getElementById('sadon_' + parentId);
+  const addonRawVal = addonSel ? addonSel.value : '';
+  const addonId     = addonRawVal === '__none__' ? '' : addonRawVal;
 
   const sku = catalog.skus.find(s =>
     s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
