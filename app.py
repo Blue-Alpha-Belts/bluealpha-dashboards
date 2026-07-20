@@ -7368,12 +7368,9 @@ def department_order_create(user):
             "Order Type":         "PD Order",
             "Order ID":           order_id,
             "Date":               today,
-            "Officer Name":       officer_name,
             "Sales Order Status": "Approved",
-            "Production Status":  "Not Started",
+            "Internal Notes":     f"Officer: {officer_name}" + (f"\nBadge #: {badge_num}" if badge_num else ""),
         }
-        if badge_num:
-            mo_fields["Badge Number"] = badge_num
         if customer_id:
             mo_fields["Customer"] = [customer_id]
 
