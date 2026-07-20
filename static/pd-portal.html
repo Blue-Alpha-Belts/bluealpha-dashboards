@@ -534,7 +534,20 @@ function showApp() {
   document.getElementById('app').style.display = 'flex';
   const org = portalUser.org || portalUser.organization || '';
   if (org) document.getElementById('orgName').textContent = org;
-  loadCatalog();
+
+  const canOrder = portalUser.role !== 'invoices';
+  if (!canOrder) {
+    // Invoices-role: hide New Order tab, default straight to Our Orders
+    const newOrderTab = document.querySelector('[data-tab="new-order"]');
+    if (newOrderTab) newOrderTab.style.display = 'none';
+    document.getElementById('panel-new-order').classList.remove('active');
+    document.querySelector('[data-tab="our-orders"]').classList.add('active');
+    document.getElementById('panel-our-orders').classList.add('active');
+    ordersLoaded = true;
+    loadOrders();
+  } else {
+    loadCatalog();
+  }
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

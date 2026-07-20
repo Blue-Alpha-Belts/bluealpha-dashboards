@@ -7330,6 +7330,9 @@ def department_order_create(user):
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
                                      "Access-Control-Allow-Methods": "POST"})
     c = cors()
+    if user.get("role") == "invoices":
+        return Response(json.dumps({"error": "Your account does not have permission to create orders."}),
+                        status=403, headers=c, mimetype="application/json")
     data         = request.get_json(force=True) or {}
     officer_name = data.get("officer_name", "").strip()
     badge_num    = data.get("badge_num", "").strip()
