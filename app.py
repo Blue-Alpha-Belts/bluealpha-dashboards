@@ -7292,8 +7292,9 @@ def department_catalog(user):
                 size_id = ""; size_name = ""
             if fvar_name.lower() in ("none", ""):
                 fvar_id = ""; fvar_name = ""
-            if addon_name.lower() in ("none", ""):
-                addon_id = ""; addon_name = ""
+            # Don't strip "None" addon — it's explicitly set in Airtable and needed for exact SKU matching
+            if not addon_id:
+                addon_name = ""
             cat = f.get("Category", "") or parent_cat_map.get(parent_id, "")
             skus.append({
                 "recordId":       r["id"],
