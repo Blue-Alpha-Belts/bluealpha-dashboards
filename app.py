@@ -7360,16 +7360,18 @@ def department_order_create(user):
 
     # 3. Create Manual Order record
     try:
+        internal_note = f"Officer: {officer_name}"
+        if badge_num:
+            internal_note += f"\nBadge #: {badge_num}"
         mo_fields = {
             "Order Type":         "PD Order",
             "Order ID":           order_id,
             "Date":               today,
-            "Officer Name":       officer_name,
+            "Snapshot Contact":   officer_name,
+            "Internal Notes":     internal_note,
             "Sales Order Status": "Approved",
             "Production Status":  "Not Started",
         }
-        if badge_num:
-            mo_fields["Badge #"] = badge_num
         if customer_id:
             mo_fields["Customer"] = [customer_id]
 
