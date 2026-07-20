@@ -7243,9 +7243,7 @@ def department_catalog(user):
             ["SKU ID", "Name + Variations", "Sale Price", "Newnan PD Price",
              "Newnan PD Discount", "Parent Product", "Color", "Size",
              "Feature Variation", "Add-ons", "Category"],
-            None,  # no formula — view handles filtering
-            None,  # base_id default
-            "viwU0xZ10IDGo9qMx",  # Newnan PD Discount view (percent fields don't filter reliably with formulas)
+            "{Newnan PD Discount}>0",
         )
         with _cf_dc.ThreadPoolExecutor(max_workers=5) as ex:
             fut_parents = ex.submit(at_get_all, PARENT_PRODUCTS_TABLE_ID,    token, fields=["Name"])
@@ -7284,6 +7282,9 @@ def department_catalog(user):
             fvar_id    = fvar_ids[0]  if fvar_ids  else ""
             addon_id   = addon_ids[0] if addon_ids else ""
             color_name = color_map.get(color_id, "")
+            # Department portal: Black only
+            if color_name.lower() != "black":
+                continue
             size_name  = size_map.get(size_id, "")
             fvar_name  = fvar_map.get(fvar_id, "").strip() if fvar_id else ""
             addon_name = addon_map.get(addon_id, "").strip() if addon_id else ""
