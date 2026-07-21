@@ -518,7 +518,7 @@
             <span>From</span><input class="filter-date" type="date" id="ordersDateFrom" onchange="filterOrdersDate()">
             <span>To</span><input class="filter-date" type="date" id="ordersDateTo" onchange="filterOrdersDate()">
           </div>
-          <input class="filter-search" id="ordersSearch" type="search" placeholder="Search order #, PO #…" oninput="searchOrders(this.value)">
+          <input class="filter-search" id="ordersSearch" type="search" placeholder="Search order #…" oninput="searchOrders(this.value)">
         </div>
         <div id="ordersContainer"><div class="loading"><div class="spinner"></div></div></div>
       </div>
@@ -1577,7 +1577,7 @@ function _renderOrders() {
     :                                  _ordersCache.filter(o => o.status === 'inprogress');
 
   const q = _ordersSearch.toLowerCase().trim();
-  const searched = q ? statusFiltered.filter(o => [o.so_number, o.po_number].some(v => (v||'').toLowerCase().includes(q))) : statusFiltered;
+  const searched = q ? statusFiltered.filter(o => (o.so_number||'').toLowerCase().includes(q)) : statusFiltered;
 
   const df = _ordersDateFrom ? new Date(_ordersDateFrom + 'T00:00:00') : null;
   const dt = _ordersDateTo   ? new Date(_ordersDateTo   + 'T23:59:59') : null;
@@ -1595,12 +1595,11 @@ function _renderOrders() {
     b.classList.toggle('active', map[b.textContent] === _ordersFilter);
   });
 
-  container.innerHTML = '<table><thead><tr><th>Order #</th><th>PO #</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' +
-    (filtered.length === 0 ? `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">No matching orders.</td></tr>` :
+  container.innerHTML = '<table><thead><tr><th>Order #</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' +
+    (filtered.length === 0 ? `<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:20px;">No matching orders.</td></tr>` :
     filtered.map(o => `
       <tr>
         <td><strong>${esc(o.so_number || '—')}</strong></td>
-        <td>${o.po_number ? esc(o.po_number) : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td>${fmtDate(o.date)}</td>
         <td>$${fmt(o.total)}</td>
         <td style="line-height:1.2;">${_orderStatusBadge(o)}${_trackingCell(o)}</td>
