@@ -13965,7 +13965,10 @@ def pd_portal_orders():
     if not portal_can(user, "view_invoices"):
         return Response(json.dumps({"error": "Forbidden"}), status=403, headers=c, mimetype="application/json")
     customer_id = user.get("customer_id") or user.get("customerId", "")
-    if not customer_id:
+    user_id     = user.get("user_id", "")
+    # Build set of IDs to match — user's own record + parent company (if applicable)
+    customer_ids = {i for i in [customer_id, user_id] if i}
+    if not customer_ids:
         return Response(json.dumps({"error": "No customer context"}), status=403, headers=c, mimetype="application/json")
     read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
     try:
@@ -13977,7 +13980,8 @@ def pd_portal_orders():
             formula='AND({Order Type}="Sales Order",{Officer Name}!="")',
         )
         # ARRAYJOIN on linked fields returns display names, not record IDs — filter in Python
-        records = [r for r in records if customer_id in (r.get("fields", {}).get("Customer") or [])]
+        # Match on either the user's own record ID or the parent company ID
+        records = [r for r in records if customer_ids & set(r.get("fields", {}).get("Customer") or [])]
         orders = []
         for r in records:
             f = r.get("fields", {})
