@@ -13974,7 +13974,7 @@ def pd_portal_orders():
             fields=["Order ID", "Date", "Officer Name", "Badge Number",
                     "Department Portion $", "Department Stripe Invoice URL",
                     "Department Stripe Invoice Status", "Picked Up", "Customer"],
-            formula=f"AND({{Order Type}}='Sales Order',FIND('{customer_id}',ARRAYJOIN({{Customer}},','))>0,{{Officer Name}}!='')",
+            formula=f'AND({{Order Type}}="Sales Order",FIND("{customer_id}",ARRAYJOIN({{Customer}},","))>0,{{Officer Name}}!="")',
         )
         orders = []
         for r in records:
