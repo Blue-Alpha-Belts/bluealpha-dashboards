@@ -13978,9 +13978,8 @@ def pd_portal_orders():
     try:
         records = at_get_all(
             MANUAL_ORDERS_TABLE_ID, read_token,
-            fields=["Order ID", "Date", "Officer Name", "Badge Number",
-                    "Department Portion $", "Department Stripe Invoice URL",
-                    "Department Stripe Invoice Status", "Picked Up", "Customer"],
+            fields=["Order ID", "Date", "Officer Name", "Badge Number", "Customer",
+                    "Sales Order Status", "Total Gross"],
             formula='AND({Order Type}="Sales Order",{Officer Name}!="")',
         )
         # ARRAYJOIN on linked fields returns display names, not record IDs — filter in Python
