@@ -318,10 +318,19 @@
       display: inline-block; padding: 3px 10px; border-radius: 12px;
       font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
     }
-    .badge-paid    { background: #d4edda; color: #155724; }
-    .badge-open    { background: #fff3cd; color: #856404; }
+    .badge-paid     { background: #d4edda; color: #155724; }
+    .badge-open     { background: #fff3cd; color: #856404; }
     .badge-approved { background: #cce5ff; color: #004085; }
-    .badge-unknown { background: #f0f2f5; color: var(--muted); }
+    .badge-shipped  { background: #cce5ff; color: #004085; }
+    .badge-unknown  { background: #f0f2f5; color: var(--muted); }
+
+    /* Filter bar */
+    .filter-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:16px; }
+    .filter-btn { padding:5px 14px; border-radius:20px; border:1px solid var(--border); background:#fff; color:var(--text); font-size:0.82rem; cursor:pointer; font-weight:500; }
+    .filter-btn.active { background:var(--navy); color:#fff; border-color:var(--navy); }
+    .filter-date-wrap { display:flex; align-items:center; gap:6px; font-size:0.82rem; color:var(--muted); }
+    .filter-date { padding:4px 8px; border:1px solid var(--border); border-radius:6px; font-size:0.82rem; }
+    .filter-search { padding:5px 10px; border:1px solid var(--border); border-radius:6px; font-size:0.82rem; min-width:180px; }
 
     /* Detail row */
     .detail-row td { padding: 0 !important; border-bottom: 2px solid var(--navy) !important; }
@@ -488,12 +497,31 @@
     <!-- ── Our Orders Tab ── -->
     <div class="tab-panel" id="panel-our-orders">
       <div class="card">
-        <div class="card-title">Department Orders</div>
-        <div class="card-sub">All orders placed by your department. Click a row to see line items.</div>
-        <div id="ordersContainer">
-          <div class="loading"><div class="spinner"></div></div>
+        <div class="card-title" style="margin-bottom:20px;">Our Orders</div>
+        <div class="filter-bar" id="ordersFilterBar" style="display:none;">
+          <button class="filter-btn active" onclick="filterOrders('all')">All</button>
+          <button class="filter-btn" onclick="filterOrders('inprogress')">In Progress</button>
+          <button class="filter-btn" onclick="filterOrders('shipped')">Shipped</button>
+          <div class="filter-date-wrap">
+            <span>From</span><input class="filter-date" type="date" id="ordersDateFrom" onchange="filterOrdersDate()">
+            <span>To</span><input class="filter-date" type="date" id="ordersDateTo" onchange="filterOrdersDate()">
+          </div>
+          <input class="filter-search" id="ordersSearch" type="search" placeholder="Search order #, PO #…" oninput="searchOrders(this.value)">
         </div>
+        <div id="ordersContainer"><div class="loading"><div class="spinner"></div></div></div>
       </div>
+    </div>
+
+    <!-- View Order panel (shown when View → is clicked) -->
+    <div class="tab-panel" id="panel-view-order">
+      <div style="margin-bottom:12px;">
+        <button onclick="closeViewOrder()" style="background:none;border:none;cursor:pointer;color:var(--navy);font-size:0.9rem;font-weight:600;display:flex;align-items:center;gap:6px;padding:0;">
+          ← Back to Our Orders
+        </button>
+      </div>
+      <iframe id="viewOrderFrame" src=""
+        style="width:100%;border:none;display:block;min-height:600px;"
+        scrolling="no"></iframe>
     </div>
   </div>
 </div>
@@ -1469,118 +1497,121 @@ function resetOrder() {
 
 // ── Our Orders ────────────────────────────────────────────────────────────────
 
+let _ordersCache      = null;
+let _ordersFilter     = 'all';
+let _ordersSearch     = '';
+let _ordersDateFrom   = '';
+let _ordersDateTo     = '';
+
+function trackingUrl(tn) {
+  if (!tn) return '#';
+  const t = tn.replace(/\s/g, '');
+  if (/^1Z/i.test(t)) return `https://www.ups.com/track?tracknum=${t}`;
+  if (/^\d{22}$/.test(t) || /^9[2-4]\d{20}$/.test(t) || /^9[0-9]{15,21}$/.test(t))
+    return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${t}`;
+  if (/^[0-9]{12,15}$/.test(t)) return `https://www.fedex.com/fedextrack/?tracknumbers=${t}`;
+  return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${t}`;
+}
+
+function _orderStatusBadge(o) {
+  const s = o.status || '';
+  if (s === 'shipped')   return '<span class="badge badge-shipped">Shipped</span>';
+  return '<span class="badge badge-approved">In Progress</span>';
+}
+
 async function loadOrders() {
   const container = document.getElementById('ordersContainer');
   try {
-    const r = await fetch('/api/pd/portal/orders', { credentials: 'include' });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      container.innerHTML = `<div class="empty-state"><h3>Unable to load orders</h3><p>${esc(d.error || `Status ${r.status}`)}</p></div>`;
-      return;
-    }
-    const orders = await r.json();
-    renderOrders(orders);
+    const oData = await fetch('/api/portal/orders', { credentials: 'include' }).then(r => r.ok ? r.json() : { orders: [] });
+    _ordersCache = (oData.orders || []).map(o => ({
+      record_id:  o.record_id,
+      so_number:  o.so_number,
+      date:       o.date,
+      total:      o.total,
+      status:     o.tracking ? 'shipped' : 'approved',
+      tracking:   o.tracking,
+      po_number:  o.po_number || '',
+      splitShipments: o.splitShipments || [],
+    }));
+    _renderOrders();
   } catch(e) {
     container.innerHTML = `<div class="empty-state"><h3>Network Error</h3><p>${esc(e.message)}</p></div>`;
   }
 }
 
-function renderOrders(orders) {
+function _renderOrders() {
   const container = document.getElementById('ordersContainer');
-  if (!orders.length) {
+  const bar = document.getElementById('ordersFilterBar');
+  if (!_ordersCache || !_ordersCache.length) {
+    bar.style.display = 'none';
     container.innerHTML = `<div class="empty-state"><h3>No orders yet</h3><p>Orders placed by your department will appear here.</p></div>`;
     return;
   }
 
-  const rows = orders.map((o, idx) => `
-    <tr onclick="toggleOrderDetail(${idx}, '${o.record_id}')" id="orow-${idx}">
-      <td><strong>${esc(o.order_id || '—')}</strong></td>
-      <td>${fmtDate(o.date)}</td>
-      <td>${esc(o.officer_name || '—')}</td>
-      <td>${esc(o.badge_num || '—')}</td>
-      <td>${statusBadge(o.department_stripe_invoice_status)}</td>
-    </tr>
-    <tr class="detail-row" id="odetail-${idx}" style="display:none">
-      <td colspan="5">
-        <div class="detail-inner" id="odetail-inner-${idx}">
-          <div class="loading"><div class="spinner"></div></div>
-        </div>
-      </td>
-    </tr>
-  `).join('');
+  const statusFiltered = _ordersFilter === 'all' ? _ordersCache
+    : _ordersFilter === 'shipped'    ? _ordersCache.filter(o => o.status === 'shipped')
+    :                                   _ordersCache.filter(o => o.status !== 'shipped');
 
-  container.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Order #</th>
-          <th>Date</th>
-          <th>Officer</th>
-          <th>Badge #</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+  const q = _ordersSearch.toLowerCase().trim();
+  const searched = q ? statusFiltered.filter(o => [o.so_number, o.po_number].some(v => (v||'').toLowerCase().includes(q))) : statusFiltered;
+
+  const df = _ordersDateFrom ? new Date(_ordersDateFrom + 'T00:00:00') : null;
+  const dt = _ordersDateTo   ? new Date(_ordersDateTo   + 'T23:59:59') : null;
+  const filtered = (df || dt) ? searched.filter(o => {
+    if (!o.date) return false;
+    const d = new Date(o.date);
+    if (df && d < df) return false;
+    if (dt && d > dt) return false;
+    return true;
+  }) : searched;
+
+  bar.style.display = 'flex';
+  bar.querySelectorAll('.filter-btn').forEach(b => {
+    const map = { 'All':'all','In Progress':'inprogress','Shipped':'shipped' };
+    b.classList.toggle('active', map[b.textContent] === _ordersFilter);
+  });
+
+  container.innerHTML = '<table><thead><tr><th>Order #</th><th>PO #</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>' +
+    (filtered.length === 0 ? `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px;">No matching orders.</td></tr>` :
+    filtered.map(o => `
+      <tr>
+        <td><strong>${esc(o.so_number || '—')}</strong></td>
+        <td>${o.po_number ? esc(o.po_number) : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${fmtDate(o.date)}</td>
+        <td>$${fmt(o.total)}</td>
+        <td style="line-height:1.2;">${_orderStatusBadge(o)}${o.tracking ? `<a href="${trackingUrl(o.tracking)}" target="_blank" rel="noopener" style="display:block;font-size:0.68rem;font-family:monospace;color:var(--text-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">${esc(o.tracking)}</a>` : ''}</td>
+        <td><button class="btn-sm" onclick="openViewOrder('${esc(o.record_id)}')">View →</button></td>
+      </tr>`
+    ).join('')) + '</tbody></table>';
 }
 
-async function toggleOrderDetail(idx, recordId) {
-  const detailRow = document.getElementById(`odetail-${idx}`);
-  const headerRow = document.getElementById(`orow-${idx}`);
+function filterOrders(f)    { _ordersFilter = f;   _renderOrders(); }
+function searchOrders(val)  { _ordersSearch = val; _renderOrders(); }
+function filterOrdersDate() {
+  _ordersDateFrom = document.getElementById('ordersDateFrom').value;
+  _ordersDateTo   = document.getElementById('ordersDateTo').value;
+  _renderOrders();
+}
 
-  if (expandedRow !== null && expandedRow !== idx) {
-    document.getElementById(`odetail-${expandedRow}`).style.display = 'none';
-    document.getElementById(`orow-${expandedRow}`).classList.remove('expanded');
-  }
+function openViewOrder(recordId) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  const frame = document.getElementById('viewOrderFrame');
+  frame.src = '/view-quote/' + recordId + '?from=department';
+  document.getElementById('panel-view-order').classList.add('active');
+  window.scrollTo(0, 0);
+}
 
-  if (expandedRow === idx) {
-    detailRow.style.display = 'none';
-    headerRow.classList.remove('expanded');
-    expandedRow = null;
-    return;
-  }
-
-  detailRow.style.display = 'table-row';
-  headerRow.classList.add('expanded');
-  expandedRow = idx;
-
-  const inner = document.getElementById(`odetail-inner-${idx}`);
-  try {
-    const r = await fetch(`/api/pd/portal/order/${recordId}`, { credentials: 'include' });
-    const d = await r.json();
-    if (!r.ok) {
-      inner.innerHTML = `<p style="color:var(--red)">Error: ${esc(d.error || 'Unknown')}</p>`;
-      return;
-    }
-    const liRows = (d.line_items || []).map(li => `
-      <tr>
-        <td>${esc(li.name || '—')}</td>
-        <td>${li.qty}</td>
-        <td>$${fmt(li.unit_price)}</td>
-        <td>$${fmt((li.qty || 1) * (li.unit_price || 0))}</td>
-        <td><span class="li-badge ${li.picked_up ? 'li-picked' : 'li-pending'}">${li.picked_up ? '✓ Ready' : 'Pending'}</span></td>
-      </tr>`).join('') || `<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">No line items found</td></tr>`;
-
-    inner.innerHTML = `
-      <div class="detail-title">Order ${esc(d.order_id || '')} — Line Items</div>
-      <table class="li-table">
-        <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
-        <tbody>${liRows}</tbody>
-      </table>`;
-  } catch(e) {
-    inner.innerHTML = `<p style="color:var(--red)">Network error: ${esc(e.message)}</p>`;
-  }
+function closeViewOrder() {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('viewOrderFrame').src = '';
+  document.querySelector('[data-tab="our-orders"]').classList.add('active');
+  document.getElementById('panel-our-orders').classList.add('active');
+  loadOrders();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function statusBadge(status) {
-  if (!status) return `<span class="badge badge-approved">Approved</span>`;
-  const s = (status || '').toLowerCase();
-  if (s === 'paid')  return `<span class="badge badge-paid">Paid</span>`;
-  if (s === 'open')  return `<span class="badge badge-open">Open</span>`;
-  return `<span class="badge badge-unknown">${esc(status)}</span>`;
-}
 
 function fmtDate(d) {
   if (!d) return '—';

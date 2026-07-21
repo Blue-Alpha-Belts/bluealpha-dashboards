@@ -13960,18 +13960,13 @@ def pd_portal_orders():
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
     c = cors()
     user = get_portal_user(request)
-    print(f"[pd_portal_orders] user={user}", flush=True)
     if not user:
         return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
-    can = portal_can(user, "view_invoices")
-    print(f"[pd_portal_orders] role={user.get('role')} can_view_invoices={can}", flush=True)
-    if not can:
+    if not portal_can(user, "view_invoices"):
         return Response(json.dumps({"error": "Forbidden"}), status=403, headers=c, mimetype="application/json")
     customer_id = user.get("customer_id") or user.get("customerId", "")
     user_id     = user.get("user_id", "")
-    # Build set of IDs to match — user's own record + parent company (if applicable)
     customer_ids = {i for i in [customer_id, user_id] if i}
-    print(f"[pd_portal_orders] customer_id={customer_id} user_id={user_id} customer_ids={customer_ids}", flush=True)
     if not customer_ids:
         return Response(json.dumps({"error": "No customer context"}), status=403, headers=c, mimetype="application/json")
     read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -13982,21 +13977,7 @@ def pd_portal_orders():
                     "Sales Order Status", "Total Gross"],
             formula='AND({Order Type}="Sales Order",{Officer Name}!="")',
         )
-        # ARRAYJOIN on linked fields returns display names, not record IDs — filter in Python
-        # Match on either the user's own record ID or the parent company ID
-        print(f"[pd_portal_orders] total records from AT: {len(records)}", flush=True)
-        # Direct debug call to confirm what AT returns with this token+formula
-        _dbg = req_lib.get(
-            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
-            headers=at_headers(read_token),
-            params={"filterByFormula": 'AND({Order Type}="Sales Order",{Officer Name}!="")', "pageSize": 5, "fields[0]": "Order ID", "fields[1]": "Officer Name"},
-            timeout=15,
-        )
-        print(f"[pd_portal_orders] direct AT debug status={_dbg.status_code} body={_dbg.text[:500]}", flush=True)
-        for r in records[:5]:
-            print(f"[pd_portal_orders]   record Customer field: {r.get('fields',{}).get('Customer')}", flush=True)
         records = [r for r in records if customer_ids & set(r.get("fields", {}).get("Customer") or [])]
-        print(f"[pd_portal_orders] after filter: {len(records)} records", flush=True)
         orders = []
         for r in records:
             f = r.get("fields", {})
