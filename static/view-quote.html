@@ -1458,20 +1458,9 @@ async function toggleAddItem() {
 
 async function loadCatalog() {
   try {
-    // Try contract catalog first (uses session credentials — returns customer-specific pricing).
-    // If it has SKUs the user is a contract customer; otherwise fall back to the standard catalog.
-    let catalogData = null;
-    const rc = await fetch('/api/contract-catalog', { credentials: 'same-origin' });
-    if (rc.ok) {
-      const cd = await rc.json();
-      if (cd.skus && cd.skus.length > 0) catalogData = cd;
-    }
-    if (!catalogData) {
-      const r = await fetch('/api/quote-catalog');
-      if (!r.ok) throw new Error();
-      catalogData = await r.json();
-    }
-    catalog = catalogData;
+    const r = await fetch('/api/quote-catalog');
+    if (!r.ok) throw new Error();
+    catalog = await r.json();
     catalogLoaded = true;
     const prodSel = document.getElementById('vProd');
     if (prodSel) {
