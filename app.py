@@ -4976,7 +4976,7 @@ _EXCLUDED_PARENTS = {
     "1.75\" standard belt outer only",
     "misc.",
     "hat", "hoodie", "t-shirt",
-    "sentry strap - ba",
+
     "fanny pack",
     "medical pouch - side pull outer",
     "medical pouch - top/bottom pull outer",
