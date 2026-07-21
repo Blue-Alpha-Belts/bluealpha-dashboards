@@ -318,11 +318,12 @@
       display: inline-block; padding: 3px 10px; border-radius: 12px;
       font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
     }
-    .badge-paid     { background: #d4edda; color: #155724; }
-    .badge-open     { background: #fff3cd; color: #856404; }
-    .badge-approved { background: #cce5ff; color: #004085; }
-    .badge-shipped  { background: #cce5ff; color: #004085; }
-    .badge-unknown  { background: #f0f2f5; color: var(--muted); }
+    .badge-paid       { background: #d4edda; color: #155724; }
+    .badge-open       { background: #fff3cd; color: #856404; }
+    .badge-inprogress { background: #d4edda; color: #155724; }  /* green = in progress */
+    .badge-shipped    { background: #cce5ff; color: #004085; }  /* blue  = shipped/picked up */
+    .badge-approved   { background: #d4edda; color: #155724; }  /* legacy alias → green */
+    .badge-unknown    { background: #f0f2f5; color: var(--muted); }
 
     /* Buttons */
     .btn-sm {
@@ -1526,8 +1527,19 @@ function trackingUrl(tn) {
 
 function _orderStatusBadge(o) {
   const s = o.status || '';
-  if (s === 'shipped')   return '<span class="badge badge-shipped">Shipped</span>';
-  return '<span class="badge badge-approved">In Progress</span>';
+  if (s === 'shipped') return '<span class="badge badge-shipped">Shipped</span>';
+  return '<span class="badge badge-inprogress">In Progress</span>';
+}
+
+function _trackingCell(o) {
+  if (o.tracking) {
+    return `<a href="${trackingUrl(o.tracking)}" target="_blank" rel="noopener"
+      style="display:block;font-size:0.68rem;font-family:monospace;color:var(--text-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">${esc(o.tracking)}</a>`;
+  }
+  if (o.picked_up) {
+    return `<span style="display:block;font-size:0.82rem;color:#777;font-style:italic;margin-top:1px;">Picked Up</span>`;
+  }
+  return '';
 }
 
 async function loadOrders() {
@@ -1539,8 +1551,9 @@ async function loadOrders() {
       so_number:  o.so_number,
       date:       o.date,
       total:      o.total,
-      status:     o.tracking ? 'shipped' : 'approved',
+      status:     (o.tracking || o.picked_up) ? 'shipped' : 'inprogress',
       tracking:   o.tracking,
+      picked_up:  o.picked_up,
       po_number:  o.po_number || '',
       splitShipments: o.splitShipments || [],
     }));
@@ -1559,9 +1572,9 @@ function _renderOrders() {
     return;
   }
 
-  const statusFiltered = _ordersFilter === 'all' ? _ordersCache
+  const statusFiltered = _ordersFilter === 'all'        ? _ordersCache
     : _ordersFilter === 'shipped'    ? _ordersCache.filter(o => o.status === 'shipped')
-    :                                   _ordersCache.filter(o => o.status !== 'shipped');
+    :                                  _ordersCache.filter(o => o.status === 'inprogress');
 
   const q = _ordersSearch.toLowerCase().trim();
   const searched = q ? statusFiltered.filter(o => [o.so_number, o.po_number].some(v => (v||'').toLowerCase().includes(q))) : statusFiltered;
@@ -1590,7 +1603,7 @@ function _renderOrders() {
         <td>${o.po_number ? esc(o.po_number) : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td>${fmtDate(o.date)}</td>
         <td>$${fmt(o.total)}</td>
-        <td style="line-height:1.2;">${_orderStatusBadge(o)}${o.tracking ? `<a href="${trackingUrl(o.tracking)}" target="_blank" rel="noopener" style="display:block;font-size:0.68rem;font-family:monospace;color:var(--text-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">${esc(o.tracking)}</a>` : ''}</td>
+        <td style="line-height:1.2;">${_orderStatusBadge(o)}${_trackingCell(o)}</td>
         <td><button class="btn-sm" onclick="openViewOrder('${esc(o.record_id)}')">View →</button></td>
       </tr>`
     ).join('')) + '</tbody></table>';

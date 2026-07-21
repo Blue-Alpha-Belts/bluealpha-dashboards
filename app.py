@@ -7775,25 +7775,28 @@ def portal_orders(user):
             )
             _fut_tracking = _ex_po.submit(at_get_all,
                 _SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
-                fields=["Order #", "Tracking #", "Base Order #"],
+                fields=["Order #", "Tracking #", "Base Order #", "Ship Date"],
                 base_id=_SO_TRACKING_BASE,
             )
         records       = _fut_records.result()
         tracking_recs = _fut_tracking.result()
         tracking_map      = {}  # so_number → main tracking
+        ship_date_map     = {}  # so_number → ship date
         split_tracking_map = {}  # so_number → list of {split_num, tracking}
         for r in tracking_recs:
             f2 = r.get("fields", {})
             key  = f2.get("Order #", "").strip()
             trk  = f2.get("Tracking #") or ""
             base = f2.get("Base Order #") or ""
+            sd   = f2.get("Ship Date") or ""
             if not key:
                 continue
             if base:
                 # This is a split — add to parent's split list
                 split_tracking_map.setdefault(base, []).append({"splitNum": key, "tracking": trk})
             else:
-                tracking_map[key] = trk
+                tracking_map[key]  = trk
+                ship_date_map[key] = sd
         records = [r for r in records
                    if customer_id in r.get("fields", {}).get("Customer", [])
                    and r.get("fields", {}).get("Sales Order Status") == "Approved"
@@ -7821,13 +7824,17 @@ def portal_orders(user):
             total = sum(li_total_map.get(lid, 0) for lid in f.get("MO Line Items", []))
             go_to_pdf_field = f.get("Go-to PDF") or {}
             go_to_pdf_url   = go_to_pdf_field.get("url", "") if isinstance(go_to_pdf_field, dict) else ""
+            tracking = tracking_map.get(so_number, "") or f.get("Tracking #", "") or f.get("Tracking", "")
+            ship_date = ship_date_map.get(so_number, "")
             orders.append({
                 "record_id":      r["id"],
                 "so_number":      so_number,
                 "date":           f.get("Date", ""),
                 "total":          round(total, 2),
                 "go_to_pdf":      go_to_pdf_url,
-                "tracking":       tracking_map.get(so_number, "") or f.get("Tracking #", "") or f.get("Tracking", ""),
+                "tracking":       tracking,
+                "ship_date":      ship_date,
+                "picked_up":      bool(ship_date and not tracking),
                 "splitShipments": split_tracking_map.get(so_number, []),
                 "po_number":      f.get("Purchase Order #", ""),
             })
