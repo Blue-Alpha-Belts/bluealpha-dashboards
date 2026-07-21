@@ -13986,6 +13986,14 @@ def pd_portal_orders():
         # ARRAYJOIN on linked fields returns display names, not record IDs — filter in Python
         # Match on either the user's own record ID or the parent company ID
         print(f"[pd_portal_orders] total records from AT: {len(records)}", flush=True)
+        # Direct debug call to confirm what AT returns with this token+formula
+        _dbg = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
+            headers=at_headers(read_token),
+            params={"filterByFormula": 'AND({Order Type}="Sales Order",{Officer Name}!="")', "pageSize": 5, "fields[0]": "Order ID", "fields[1]": "Officer Name"},
+            timeout=15,
+        )
+        print(f"[pd_portal_orders] direct AT debug status={_dbg.status_code} body={_dbg.text[:500]}", flush=True)
         for r in records[:5]:
             print(f"[pd_portal_orders]   record Customer field: {r.get('fields',{}).get('Customer')}", flush=True)
         records = [r for r in records if customer_ids & set(r.get("fields", {}).get("Customer") or [])]
