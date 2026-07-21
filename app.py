@@ -7189,7 +7189,7 @@ def portal_logout():
 @portal_login_required
 def portal_page(user):
     # Department/law enforcement accounts go to their own portal
-    if user.get("role", "").lower() == "invoices":
+    if (user.get("role") or "").lower() == "invoices":
         return redirect("/department")
     # If this customer has contract SKUs, redirect them to the contract portal
     customer_id = user.get("customer_id", "")
