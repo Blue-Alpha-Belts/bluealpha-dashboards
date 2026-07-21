@@ -7365,7 +7365,7 @@ def department_order_create(user):
     # 3. Create Manual Order record
     try:
         mo_fields = {
-            "Order Type":         "PD Order",
+            "Order Type":         "Sales Order",
             "Order ID":           order_id,
             "Date":               today,
             "Officer Name":       officer_name,
