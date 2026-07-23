@@ -2760,10 +2760,12 @@ def _create_inventory_adjustment_for_return(sku_text, qty, read_token, write_tok
     Returns (success: bool, message: str).
     NOTE: 'Return Received' must exist as an option in the Adjustment Reason field in Airtable."""
     try:
+        # Escape \ and " so SKUs like 1182-BLK-1/8-20"-BASE don't break the formula string
+        sku_escaped = str(sku_text).replace("\\", "\\\\").replace('"', '\\"')
         # Look up the Product SKU record ID and current Finished Inventory
         sku_recs = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{PRODUCT_SKUS_TABLE_ID}",
-            params={"filterByFormula": f'{{SKU ID}}="{sku_text}"', "maxRecords": 1,
+            params={"filterByFormula": f'{{SKU ID}}="{sku_escaped}"', "maxRecords": 1,
                     "fields[]": ["SKU ID", "Name + Variations", "Finished Inventory"]},
             headers=at_headers(read_token),
             timeout=10,
