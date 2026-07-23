@@ -4881,7 +4881,6 @@ _EXCLUDED_PARENTS = {
     "hat", "hoodie", "t-shirt",
     "sentry strap - ba",
     "fanny pack",
-    "breaching rescue bar",
     "medical pouch - side pull outer",
     "medical pouch - top/bottom pull outer",
 }
