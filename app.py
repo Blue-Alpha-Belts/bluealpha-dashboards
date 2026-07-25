@@ -11611,39 +11611,76 @@ def warranty_submit():
             )
         record_id = create_resp.json()["id"]
 
-        # ── Step 2: Serve photos temporarily from this app, then PATCH Airtable with URLs ──
-        # The Airtable content upload API (uploadAttachment) requires OAuth scopes our PATs
-        # don't have. Instead: stash each photo in memory under a UUID-keyed route,
-        # PATCH the record with those public URLs, then Airtable fetches them.
+        # ── Step 2: Attach photos via Airtable's content upload API ──
+        # Photos used to be stashed on this container's disk and served back to
+        # Airtable via public URLs, which Airtable fetched asynchronously — a
+        # restart/redeploy in that window silently lost them (all three real
+        # requests of 2026-07-22 lost their photos this way). uploadAttachment
+        # pushes the bytes into Airtable synchronously: no temp storage, no
+        # fetch window, and a hard status code if it fails. PATs with
+        # data.records:write can use it (verified against this base 2026-07-25).
+        # Files over the endpoint's 5 MB cap fall back to the legacy URL flow.
+        import base64 as _b64
         import uuid as _uuid
         import os as _os
         BASE_URL = _os.environ.get("RAILWAY_PUBLIC_DOMAIN", "quote.bluealphabelts.com")
         if not BASE_URL.startswith("http"):
             BASE_URL = f"https://{BASE_URL}"
+        _PHOTOS_FIELD_ID = "fld1g7wNcTB9b7SsW"  # Warranty Requests → Photos
+        _DIRECT_UPLOAD_MAX = 5 * 1024 * 1024
 
-        photo_urls = []
+        legacy_photo_urls = []
+        uploaded_attachments = []  # field value from the last successful upload
         for photo in photos:
             photo_bytes = photo.read()
             content_type = photo.content_type or "image/jpeg"
             filename = photo.filename or "photo.jpg"
-            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
-            key = f"{_uuid.uuid4().hex}.{ext}"
-            file_path = os.path.join(_WARRANTY_PHOTO_DIR, key)
-            with open(file_path, "wb") as pf:
-                pf.write(photo_bytes)
-            with open(file_path + ".meta", "w") as mf:
-                mf.write(f"{content_type}\n{filename}")
-            photo_urls.append({
-                "url": f"{BASE_URL}/warranty/photos/{key}",
-                "filename": filename,
-            })
 
-        if photo_urls:
+            uploaded = False
+            if len(photo_bytes) <= _DIRECT_UPLOAD_MAX:
+                try:
+                    up_resp = req_lib.post(
+                        f"https://content.airtable.com/v0/{AIRTABLE_BASE_ID}/{record_id}/{_PHOTOS_FIELD_ID}/uploadAttachment",
+                        headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}", "Content-Type": "application/json"},
+                        json={"contentType": content_type,
+                              "file": _b64.b64encode(photo_bytes).decode("ascii"),
+                              "filename": filename},
+                        timeout=30,
+                    )
+                    if up_resp.ok:
+                        uploaded = True
+                        uploaded_attachments = up_resp.json().get("fields", {}).get(_PHOTOS_FIELD_ID, uploaded_attachments)
+                        print(f"[warranty_submit] Photo uploaded directly: {filename} ({len(photo_bytes)} bytes)")
+                    else:
+                        print(f"[warranty_submit] Direct upload failed {up_resp.status_code} for {filename}: {up_resp.text[:200]}")
+                except Exception as up_err:
+                    print(f"[warranty_submit] Direct upload error for {filename}: {up_err}")
+
+            if not uploaded:
+                # Legacy fallback (oversize file or upload failure): serve from
+                # disk and let Airtable fetch the URL. Still has the old loss
+                # window, but now only for the rare photo that needs it.
+                ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+                key = f"{_uuid.uuid4().hex}.{ext}"
+                file_path = os.path.join(_WARRANTY_PHOTO_DIR, key)
+                with open(file_path, "wb") as pf:
+                    pf.write(photo_bytes)
+                with open(file_path + ".meta", "w") as mf:
+                    mf.write(f"{content_type}\n{filename}")
+                legacy_photo_urls.append({
+                    "url": f"{BASE_URL}/warranty/photos/{key}",
+                    "filename": filename,
+                })
+
+        if legacy_photo_urls:
             try:
+                # PATCH replaces the whole field, so re-include the attachments
+                # already uploaded directly (by id) or they would be wiped.
+                keep_existing = [{"id": a["id"]} for a in uploaded_attachments if a.get("id")]
                 patch_resp = req_lib.patch(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
                     headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}", "Content-Type": "application/json"},
-                    json={"fields": {"Photos": photo_urls}},
+                    json={"fields": {"Photos": keep_existing + legacy_photo_urls}},
                     timeout=15,
                 )
                 if not patch_resp.ok:
