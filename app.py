@@ -10257,7 +10257,7 @@ def _ontime_bg_worker():
     """Refresh on-time cache on startup (if no data), then daily at 9 PM ET."""
     import time as _t
     from zoneinfo import ZoneInfo
-    from datetime import timedelta
+    from datetime import datetime, timedelta
     _t.sleep(5)  # brief delay so app finishes starting up
     # Refresh on startup if we have no data yet
     if _ONTIME_CACHE["data"] is None:
