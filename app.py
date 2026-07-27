@@ -6966,7 +6966,7 @@ def login_page():
                 return
             user_rec = records[0]
             user_id  = user_rec["id"]  # Customer record ID is both user_id and customer_id
-            magic_link = generate_magic_link(user_id, expiry_hours=0.25)
+            magic_link = generate_magic_link(user_id, expiry_hours=48)
             send_magic_link_email(email, magic_link)
         except Exception as e:
             print(f"[login] magic link error: {e}")
@@ -7007,6 +7007,42 @@ def _validate_password(password: str):
     if len(password) < 8:
         return "Password must be at least 8 characters."
     return None
+
+@app.route("/api/portal/setup-account", methods=["GET"])
+def portal_setup_account_info():
+    """Return info about a setup/reset token — lets the frontend know if this is a new or existing account."""
+    from datetime import datetime, timezone
+    c = cors()
+    token = (request.args.get("token") or "").strip()
+    if not token:
+        return Response(json.dumps({"error": "Missing token"}), status=400, headers=c, mimetype="application/json")
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    try:
+        records = at_get_all(CUSTOMERS_TABLE_ID, read_token,
+                             fields=["Magic Token", "Token Expiry", "Portal Hash", "Portal Username"],
+                             formula=f"{{Magic Token}}='{token}'")
+        if not records:
+            return Response(json.dumps({"error": "Invalid or expired link"}), status=400, headers=c, mimetype="application/json")
+        rec = records[0]
+        f   = rec["fields"]
+        expiry_str = f.get("Token Expiry", "")
+        if expiry_str:
+            try:
+                exp_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > exp_dt:
+                    return Response(json.dumps({"error": "This link has expired. Use the login page to request a new one."}),
+                                    status=400, headers=c, mimetype="application/json")
+            except Exception:
+                pass
+        existing_username = (f.get("Portal Username") or "").strip()
+        has_account = bool(f.get("Portal Hash")) and bool(existing_username)
+        return Response(json.dumps({"ok": True, "hasAccount": has_account, "username": existing_username}),
+                        headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
 
 @app.route("/api/portal/setup-account", methods=["POST"])
 def portal_setup_account():
@@ -7049,18 +7085,20 @@ def portal_setup_account():
                 if exp_dt.tzinfo is None:
                     exp_dt = exp_dt.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) > exp_dt:
-                    return Response(json.dumps({"error": "This setup link has expired. Please contact orders@bluealpha.us to get a new one."}),
+                    return Response(json.dumps({"error": "This link has expired. Go back to the login page and request a new one — it will be sent to your email."}),
                                     status=400, headers=c, mimetype="application/json")
             except Exception:
                 pass
 
-        # Check username not already taken
-        existing = at_get_all(CUSTOMERS_TABLE_ID, read_token,
-                              fields=["Portal Username"],
-                              formula=f"LOWER({{Portal Username}})='{username}'")
-        if existing:
-            return Response(json.dumps({"error": "Username already taken — please choose another"}),
-                            status=400, headers=c, mimetype="application/json")
+        # Check username not already taken (exclude this record — user may be keeping their own)
+        existing_username = (f.get("Portal Username") or "").strip().lower()
+        if username != existing_username:
+            taken = at_get_all(CUSTOMERS_TABLE_ID, read_token,
+                               fields=["Portal Username"],
+                               formula=f"LOWER({{Portal Username}})='{username}'")
+            if taken:
+                return Response(json.dumps({"error": "Username already taken — please choose another"}),
+                                status=400, headers=c, mimetype="application/json")
 
         # Set username + password, clear invite token
         pw_hash = _hash_password(password)

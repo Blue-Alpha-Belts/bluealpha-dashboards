@@ -65,18 +65,20 @@
 <body>
   <div class="card">
     <img class="logo" src="https://bluealphabelts.com/wp-content/uploads/2021/01/Blue-Alpha-Logo-White-Background.png" alt="Blue Alpha">
-    <h1>Set Up Your Account</h1>
-    <p class="subtitle">Choose a username and password to access the portal.</p>
+    <h1 id="pageTitle">Set Up Your Account</h1>
+    <p class="subtitle" id="pageSubtitle">Choose a username and password to access the portal.</p>
     <div id="msg" class="msg"></div>
     <div id="formWrap">
-      <label for="username">Username</label>
-      <input type="text" id="username" autocomplete="username" placeholder="e.g. jsmith" spellcheck="false"
-             oninput="this.value = this.value.toLowerCase(); checkPwReqs()">
-      <p class="req-header">Username requirements</p>
-      <ul class="requirements">
-        <li id="req-un-len">3–32 characters</li>
-        <li id="req-un-chars">Lowercase letters, numbers, and . _ - only (no spaces)</li>
-      </ul>
+      <div id="usernameSection">
+        <label for="username">Username</label>
+        <input type="text" id="username" autocomplete="username" placeholder="e.g. jsmith" spellcheck="false"
+               oninput="this.value = this.value.toLowerCase(); checkPwReqs()">
+        <p class="req-header" id="unReqHeader">Username requirements</p>
+        <ul class="requirements" id="unReqs">
+          <li id="req-un-len">3–32 characters</li>
+          <li id="req-un-chars">Lowercase letters, numbers, and . _ - only (no spaces)</li>
+        </ul>
+      </div>
 
       <label for="password">Password</label>
       <div class="input-wrap">
@@ -103,8 +105,47 @@
     </div>
   </div>
 
+  <style>
+    .username-readonly {
+      width: 100%; padding: 10px 12px; border: 1.5px solid var(--border);
+      border-radius: 7px; font-size: 0.95rem; font-family: inherit;
+      background: #f4f6f9; color: var(--navy); font-weight: 600;
+    }
+  </style>
+
   <script>
     const _token = window.location.pathname.split('/setup-account/')[1] || '';
+    let _isReset = false;
+
+    // On load, check token to see if this is a password reset (existing account) or new setup
+    async function checkToken() {
+      if (!_token) return;
+      try {
+        const r = await fetch(`/api/portal/setup-account?token=${encodeURIComponent(_token)}`);
+        const d = await r.json();
+        if (!d.ok) {
+          document.getElementById('msg').className = 'msg error';
+          document.getElementById('msg').textContent = d.error || 'Invalid or expired link.';
+          document.getElementById('formWrap').style.display = 'none';
+          return;
+        }
+        if (d.hasAccount && d.username) {
+          // Existing user — switch to password reset mode
+          _isReset = true;
+          document.getElementById('pageTitle').textContent = 'Reset Your Password';
+          document.getElementById('pageSubtitle').textContent = `Resetting password for account: ${d.username}`;
+          // Replace username input with a read-only display
+          const section = document.getElementById('usernameSection');
+          section.innerHTML = `<label>Username</label><div class="username-readonly">${d.username}</div>`;
+          // Pre-set the hidden username value for submission
+          window._existingUsername = d.username;
+          document.getElementById('submitBtn').textContent = 'Set New Password';
+        }
+      } catch (e) {
+        // If the check fails, just show the normal form — backend will catch expired tokens
+      }
+    }
+    checkToken();
 
     function togglePw(fieldId, btn) {
       const inp = document.getElementById(fieldId);
@@ -119,9 +160,14 @@
       setReq('req-len',   pw.length >= 8);
       setReq('req-match', pw.length > 0 && pw === conf);
 
-      const un = document.getElementById('username').value;
-      setReq('req-un-len',   un.length >= 3 && un.length <= 32);
-      setReq('req-un-chars', /^[a-z0-9._-]*$/.test(un) && un.length > 0);
+      if (!_isReset) {
+        const unEl = document.getElementById('username');
+        if (unEl) {
+          const un = unEl.value;
+          setReq('req-un-len',   un.length >= 3 && un.length <= 32);
+          setReq('req-un-chars', /^[a-z0-9._-]*$/.test(un) && un.length > 0);
+        }
+      }
     }
 
     function setReq(id, met) {
@@ -132,7 +178,9 @@
     document.getElementById('username').addEventListener('input', checkPwReqs);
 
     async function doSetup() {
-      const username = document.getElementById('username').value.trim().toLowerCase();
+      const username = _isReset
+        ? (window._existingUsername || '')
+        : document.getElementById('username').value.trim().toLowerCase();
       const password = document.getElementById('password').value;
       const confirm  = document.getElementById('confirm').value;
       const msg      = document.getElementById('msg');
@@ -141,15 +189,17 @@
       msg.className = 'msg';
       msg.textContent = '';
 
-      if (!username)                              { showErr('Please enter a username.'); return; }
-      if (username.length < 3 || username.length > 32)
-                                                  { showErr('Username must be 3–32 characters.'); return; }
-      if (!/^[a-z0-9._-]+$/.test(username))      { showErr('Username can only contain lowercase letters, numbers, and . _ -'); return; }
+      if (!_isReset) {
+        if (!username)                              { showErr('Please enter a username.'); return; }
+        if (username.length < 3 || username.length > 32)
+                                                    { showErr('Username must be 3–32 characters.'); return; }
+        if (!/^[a-z0-9._-]+$/.test(username))      { showErr('Username can only contain lowercase letters, numbers, and . _ -'); return; }
+      }
       if (password.length < 8)  { showErr('Password must be at least 8 characters.'); return; }
       if (password !== confirm) { showErr('Passwords do not match.'); return; }
 
       btn.disabled = true;
-      btn.innerHTML = '<span class="spinner"></span>Setting up…';
+      btn.innerHTML = _isReset ? '<span class="spinner"></span>Updating…' : '<span class="spinner"></span>Setting up…';
 
       try {
         const r = await fetch('/api/portal/setup-account', {
@@ -160,18 +210,18 @@
         const d = await r.json();
         if (d.ok) {
           msg.className = 'msg success';
-          msg.textContent = 'Account created! Redirecting to the portal…';
+          msg.textContent = _isReset ? 'Password updated! Redirecting to the portal…' : 'Account created! Redirecting to the portal…';
           document.getElementById('formWrap').style.opacity = '0.4';
           setTimeout(() => { window.location.href = '/portal'; }, 1500);
         } else {
           showErr(d.error || 'Something went wrong. Please try again.');
           btn.disabled = false;
-          btn.textContent = 'Create My Account';
+          btn.textContent = _isReset ? 'Set New Password' : 'Create My Account';
         }
       } catch (e) {
         showErr('Network error — please try again.');
         btn.disabled = false;
-        btn.textContent = 'Create My Account';
+        btn.textContent = _isReset ? 'Set New Password' : 'Create My Account';
       }
     }
 
