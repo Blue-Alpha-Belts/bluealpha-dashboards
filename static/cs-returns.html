@@ -614,14 +614,14 @@
       <!-- Missing/Incorrect item selection panel -->
       <div id="reship-panel" class="hidden">
         <div id="reship-groups"></div>
-        <!-- Notes for special SKUs -->
-        <div id="reship-notes-section" class="hidden" style="margin-top:14px;">
-          <div style="background:#fff8e1;border:1px solid #f9c73a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:0.875rem;color:#7a5800;">
+        <!-- Notes — always available; the size/color warning appears only for special SKUs -->
+        <div id="reship-notes-section" style="margin-top:14px;">
+          <div id="reship-notes-warning" class="hidden" style="background:#fff8e1;border:1px solid #f9c73a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:0.875rem;color:#7a5800;">
             ⚠️ <strong>Size &amp; color required</strong> — One or more items in this reshipment require a specific size and color. Please enter the requested size and color in the notes box below.
           </div>
           <div class="field">
-            <label>Reshipment Notes <span class="req">*</span></label>
-            <textarea id="reship-notes" placeholder="Enter requested size and color (e.g. Black 34, Coyote Brown 38)…" style="min-height:70px;"></textarea>
+            <label>Reshipment Notes <span class="req hidden" id="reship-notes-req">*</span></label>
+            <textarea id="reship-notes" placeholder="Any context for this reshipment (size/color, who approved, what happened)…" style="min-height:70px;"></textarea>
           </div>
         </div>
         <div class="message message-error hidden" id="msg-reship-none">Please select at least one item.</div>
@@ -1028,8 +1028,10 @@ function setMode(mode) {
   // Lost address section
   document.getElementById('section-lost-address').classList.toggle('hidden', !isLost);
 
-  // Notes field — hide in lost/exchange/intl modes
-  document.getElementById('field-notes').classList.toggle('hidden', isLost || isExchange || isIntl);
+  // Notes field — hide only in exchange/intl modes (lost orders take notes
+  // too as of 2026-07-28; they flow to Status Notes / ShipStation notes and
+  // show in the cs.bluealphaops portal)
+  document.getElementById('field-notes').classList.toggle('hidden', isExchange || isIntl);
 
   // Notes label
   document.getElementById('notes-label').textContent = isReturn ? 'Exception Notes' : 'CS Notes';
@@ -1449,6 +1451,7 @@ async function csSubmitReshipment() {
           orderNumber: orderNum,
           items:       items,
           customerName: (orderData && orderData.customerName) || '',
+          csNotes:     document.getElementById('cs-notes').value.trim(),
         })
       });
       const result = await res.json();
@@ -1498,6 +1501,7 @@ async function csSubmitReshipment() {
         password: csPassword,
         orderNumber: orderNum,
         items: items,
+        csNotes: document.getElementById('cs-notes').value.trim(),
         shipTo: {
           name:       name,
           street1:    street1,
@@ -2121,14 +2125,12 @@ function buildReshipGroups(orderGroups) {
     });
   });
 
-  const notesSec = document.getElementById('reship-notes-section');
-  if (notesSec) {
-    if (hasSpecialSku) {
-      notesSec.classList.remove('hidden');
-    } else {
-      notesSec.classList.add('hidden');
-    }
-  }
+  // Notes box is always available; the size/color warning + required marker
+  // only appear when a special SKU needs them.
+  const notesWarn = document.getElementById('reship-notes-warning');
+  if (notesWarn) notesWarn.classList.toggle('hidden', !hasSpecialSku);
+  const notesReq = document.getElementById('reship-notes-req');
+  if (notesReq) notesReq.classList.toggle('hidden', !hasSpecialSku);
 }
 
 async function submitReship(evt) {

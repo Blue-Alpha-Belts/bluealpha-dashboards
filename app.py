@@ -1867,6 +1867,7 @@ def submit_lost_refund():
     order_number  = data.get("orderNumber", "").strip()
     items         = data.get("items", [])
     customer_name = data.get("customerName", "").strip()
+    cs_notes      = data.get("csNotes", "").strip()
 
     if not order_number or not items:
         return Response(json.dumps({"status": "error", "message": "Missing required fields"}), headers=c, mimetype="application/json")
@@ -1881,6 +1882,7 @@ def submit_lost_refund():
         "Customer Name from Shipstation": customer_name,
         "Items to Return":                items_text,
         "Reason for Return":              "[LOST ORDER] Refund requested",
+        "Status Notes":                   cs_notes,
         "Submission Date":                datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "Status":                         "Refund Lost Order",
         "Type":                           "Lost",
@@ -1971,6 +1973,7 @@ def submit_reshipment():
     original_order_number = data.get("orderNumber", "").strip()
     items = data.get("items", [])  # [{"sku": ..., "name": ..., "quantity": ...}]
     ship_to = data.get("shipTo", {})  # edited address from CS
+    cs_notes = data.get("csNotes", "").strip()
 
     if not original_order_number or not items or not ship_to:
         return Response(json.dumps({"status": "error", "message": "Missing required fields"}), headers=c, mimetype="application/json")
@@ -2032,7 +2035,8 @@ def submit_reshipment():
             "amountPaid": 0,
             "taxAmount": 0,
             "shippingAmount": 0,
-            "internalNotes": f"Reshipment of order {original_order_number}",
+            "internalNotes": f"Reshipment of order {original_order_number}"
+                             + (f"\n{cs_notes}" if cs_notes else ""),
             "customerNotes": "",
             "customerEmail": customer_email,
             "shipTo": {
@@ -2209,13 +2213,16 @@ def submit_cancellation():
     wc_link = (f"https://www.bluealphabelts.com/wp-admin/post.php"
                f"?post={order_id}&action=edit")
 
-    reason_str = f"[CANCELLATION] {reason}" + (f" — {cs_notes}" if cs_notes else "")
+    # CS notes go to Status Notes so they surface as notes in the
+    # cs.bluealphaops portal (2026-07-28) instead of inside the reason text.
+    reason_str = f"[CANCELLATION] {reason}"
 
     fields = {
         "Order Number":                   order_number,
         "Customer Name from Shipstation": customer_name,
         "Items to Return":                items_text,
         "Reason for Return":              reason_str,
+        "Status Notes":                   cs_notes,
         "Submission Date":                datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "Status":                         "Cancellation Needs Refund",
         "Type":                           "Cancellation",
@@ -2530,11 +2537,14 @@ def submit_return():
                f"?post={data.get('orderId', '')}&action=edit")
 
     # ── Create Airtable record immediately (Status: "New") ───────────────
-    # Build reason string — CS exceptions get a visible prefix
+    # Build reason string — CS exceptions get a visible prefix. CS notes go to
+    # the dedicated Status Notes field (2026-07-28, Patty: notes need to show
+    # as notes in the cs.bluealphaops portal, not buried in the reason text).
     reason_for_return = data.get("reasonForReturn", "")
+    cs_notes = ""
     if data.get("csException"):
         cs_notes = data.get("csNotes", "").strip()
-        reason_for_return = "[CS Exception] " + reason_for_return + (f" — Notes: {cs_notes}" if cs_notes else "")
+        reason_for_return = "[CS Exception] " + reason_for_return
 
     fields = {
         "Order Number":                   data.get("orderNumber", ""),
@@ -2544,6 +2554,7 @@ def submit_return():
         "Confirmed Shipping Address":     address_str,
         "Items to Return":                data.get("itemsToReturn", ""),
         "Reason for Return":              reason_for_return,
+        "Status Notes":                   cs_notes,
         "Submission Date":                datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "Ship Date from Shipstation":     data.get("shipDate", "")[:10] if data.get("shipDate") else "",
         "Eligible Until":                 data.get("eligibleUntil", "")[:10] if data.get("eligibleUntil") else "",
