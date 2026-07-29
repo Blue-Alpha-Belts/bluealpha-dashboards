@@ -438,29 +438,33 @@ _ACCT_STATUS_TTL = 60           # seconds — short, so admin approval takes eff
 
 def get_account_status(customer_id):
     """Return (application_status, tax_exempt) for a customer record.
-    '' = legacy record with no status (treated as approved). None = lookup failed (fail closed)."""
+    '' = legacy record with no status (treated as approved). None = lookup failed
+    (callers decide: accept_quote fails closed; /api/portal/me fails open for view
+    flags so a transient Airtable error doesn't degrade the portal)."""
     import time as _t
     if not customer_id:
         return None, False
     cached = _ACCT_STATUS_CACHE.get(customer_id)
     if cached and (_t.time() - cached["ts"]) < _ACCT_STATUS_TTL:
         return cached["status"], cached["tax_exempt"]
-    try:
-        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
-        r = req_lib.get(
-            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{customer_id}",
-            headers=at_headers(read_token),
-            params={"fields[]": ["Application Status", "Tax Exempt"]},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            f = r.json().get("fields", {})
-            status     = f.get("Application Status", "") or ""
-            tax_exempt = bool(f.get("Tax Exempt"))
-            _ACCT_STATUS_CACHE[customer_id] = {"ts": _t.time(), "status": status, "tax_exempt": tax_exempt}
-            return status, tax_exempt
-    except Exception as e:
-        print(f"[get_account_status] error: {e}")
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    for attempt in (1, 2):
+        try:
+            r = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{customer_id}",
+                headers=at_headers(read_token),
+                params={"fields[]": ["Application Status", "Tax Exempt"]},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                f = r.json().get("fields", {})
+                status     = f.get("Application Status", "") or ""
+                tax_exempt = bool(f.get("Tax Exempt"))
+                _ACCT_STATUS_CACHE[customer_id] = {"ts": _t.time(), "status": status, "tax_exempt": tax_exempt}
+                return status, tax_exempt
+            print(f"[get_account_status] attempt {attempt}: AT {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            print(f"[get_account_status] attempt {attempt} error: {e}")
     return None, False
 
 def account_can_order(customer_id):
@@ -7984,8 +7988,10 @@ def portal_me(user):
 
     # Account-level overlay: quote-only accounts (Registered/Pending) can't order until Approved.
     # Legacy records with no Application Status are treated as approved — no change for existing customers.
+    # On lookup failure (None) fail OPEN for these view flags — the accept-quote endpoint does its
+    # own authoritative fail-closed check, so a transient Airtable error here must not degrade the UI.
     account_status, _tax_exempt = get_account_status(customer_id)
-    _can_order = account_status in ("", "Approved")
+    _can_order = account_status is None or account_status in ("", "Approved")
     can_accept_quote  = can_accept_quote  and _can_order
     can_view_orders   = can_view_orders   and _can_order
     can_view_invoices = can_view_invoices and _can_order
