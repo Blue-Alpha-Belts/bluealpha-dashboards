@@ -13517,6 +13517,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                           "orderDate": today_str, "billTo": _caddr, "shipTo": _caddr,
                           "items": [{"name": replacement_item, "quantity": 1, "unitPrice": 0}],
                           "advancedOptions": {"storeId": 241180}}
+                if email:
+                    _order_payload["customerEmail"] = email
                 if _pd:
                     _order_payload["paymentDate"] = _pd
                 order_resp = req_lib.post(
@@ -13594,6 +13596,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                           "weight": {"value": 4, "units": "ounces"},
                           "dimensions": {"units": "inches", "length": 8, "width": 6, "height": 2},
                           "advancedOptions": {"storeId": 241180}}
+                if email:
+                    _order_payload["customerEmail"] = email
                 if _pd:
                     _order_payload["paymentDate"] = _pd
                 order_resp = req_lib.post(
@@ -13636,6 +13640,7 @@ def _warranty_webhook_inner(record_id, trigger, c):
             approval           = (fields.get("Approval") or "").strip()
             first_name         = (fields.get("First Name") or "").strip()
             last_name          = (fields.get("Last Name") or "").strip()
+            email              = (fields.get("Email") or "").strip()
             phone              = (fields.get("Phone") or "").strip()
             address            = (fields.get("Address") or "").strip()
             city               = (fields.get("City") or "").strip()
@@ -13690,6 +13695,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 }],
                 "advancedOptions": {"storeId": 241180},
             }
+            if email:
+                _repair_payload["customerEmail"] = email
             if _pd:
                 _repair_payload["paymentDate"] = _pd
             order_resp = req_lib.post(
