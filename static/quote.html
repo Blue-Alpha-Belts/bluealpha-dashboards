@@ -464,6 +464,37 @@
       line-height: 1.5;
     }
 
+    /* ── Guest print acknowledgment modal ───────────────────────────────── */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(15, 23, 42, 0.55);
+      z-index: 1000;
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--white);
+      border-radius: 12px;
+      max-width: 420px; width: 100%;
+      padding: 28px 26px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+      text-align: center;
+    }
+    .modal-box .modal-icon { font-size: 2rem; margin-bottom: 10px; }
+    .modal-box h3 {
+      font-family: 'Montserrat', sans-serif;
+      font-size: 1.05rem; font-weight: 800; color: var(--navy);
+      margin-bottom: 10px;
+    }
+    .modal-box p { color: var(--muted); font-size: 0.92rem; line-height: 1.55; margin-bottom: 20px; }
+    .modal-box .btn { width: 100%; margin-bottom: 10px; }
+    .modal-cancel {
+      background: none; border: none; color: var(--muted);
+      font-size: 0.85rem; cursor: pointer; text-decoration: underline;
+    }
+
     /* ── Print (guest quote printout) ───────────────────────────────────── */
     #printArea { display: none; }
     @media print {
@@ -690,6 +721,18 @@ if (window.self !== window.top) {
      hides body > * except this element, so nesting it inside .container would
      print a blank page -->
 <div id="printArea" aria-hidden="true"></div>
+
+<!-- Guest print acknowledgment -->
+<div class="modal-overlay" id="printAckModal">
+  <div class="modal-box">
+    <div class="modal-icon">⚠️</div>
+    <h3>This quote will not be saved</h3>
+    <p><strong>Printing does not save this quote.</strong> Create a free account to save it — otherwise you'll need to re-enter these items to place an order later.</p>
+    <a href="/signup" class="btn btn-primary" style="display:block;text-decoration:none;box-sizing:border-box;">Create a Free Account</a>
+    <button class="btn btn-secondary" onclick="ackAndPrint()">I Understand — Print Anyway</button>
+    <button class="modal-cancel" onclick="closePrintAck()">Cancel</button>
+  </div>
+</div>
 
 
 <script>
@@ -1751,6 +1794,15 @@ function printGuestQuote() {
   window.print();
 }
 
+// ─── Guest print acknowledgment ──────────────────────────────────────────────
+function closePrintAck() {
+  document.getElementById('printAckModal').classList.remove('open');
+}
+function ackAndPrint() {
+  closePrintAck();
+  printGuestQuote();
+}
+
 // ─── Submit ───────────────────────────────────────────────────────────────────
 async function submitQuote() {
   const errEl  = document.getElementById('submitError');
@@ -1761,9 +1813,9 @@ async function submitQuote() {
 
   if (items.length === 0) { showError('Please add at least one item.'); return; }
 
-  // Guest mode — nothing is saved; render the printable view instead
+  // Guest mode — nothing is saved; require acknowledgment, then print
   if (isGuest) {
-    printGuestQuote();
+    document.getElementById('printAckModal').classList.add('open');
     return;
   }
 
