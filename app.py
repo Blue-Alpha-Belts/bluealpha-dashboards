@@ -8556,7 +8556,7 @@ def _send_portal_invite_email(to_email, invitee_name, inviter_company, setup_lin
             "subject": f"You've been invited to the Blue Alpha Portal",
             "content": [{"type": "text/html", "value": f"""
 <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;padding:32px 16px;color:#1a2633;">
-  <img src="https://bluealphabelts.com/wp-content/uploads/2021/01/Blue-Alpha-Logo-White-Background.png" alt="Blue Alpha" style="height:40px;margin-bottom:24px;">
+  <img src="{QUOTE_BASE_URL}/static/ba-logo-dark.png" alt="Blue Alpha" style="height:40px;margin-bottom:24px;">
   <h2 style="font-size:20px;font-weight:700;margin:0 0 12px;">You've been invited</h2>
   <p style="font-size:15px;margin:0 0 16px;">Hi {first},</p>
   <p style="font-size:15px;margin:0 0 24px;">{inviter_company} has invited you to join their Blue Alpha portal account. Click the button below to set up your username and password.</p>
