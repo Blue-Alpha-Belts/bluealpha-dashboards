@@ -730,10 +730,11 @@
                 <div class="kv"><span class="k">Tax Exemption #</span><span class="v">${esc(a.tax_exemption_number || '—')}</span></div>
                 <div class="kv"><span class="k">Tax Exempt Certificate</span><span class="v">${a.tax_cert_url ? `<a href="${esc(a.tax_cert_url)}" target="_blank" style="color:#1a6fc4;">View Certificate</a>` : '—'}</span></div>
                 ` : `
-                <div class="kv"><span class="k">Tax Rate</span><span class="v" style="display:flex;align-items:center;gap:6px;">
+                <div class="kv"><span class="k">Tax Rate</span><span class="v" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                   <input type="number" id="taxRateInput-${a.id}" value="${a.tax_rate ? (a.tax_rate * 100).toFixed(4).replace(/\.?0+$/, '') : ''}" placeholder="e.g. 7.5" step="0.001" min="0" max="99" style="width:80px;border:1px solid #ccc;border-radius:4px;padding:4px 6px;font-size:0.9rem;">
                   %
                   <span style="color:#6b7a8d;font-size:0.8rem;">(enter before approving)</span>
+                  <a href="https://www.avalara.com/taxrates/en/calculator.html" target="_blank" rel="noopener" style="color:#1a6fc4;font-size:0.8rem;white-space:nowrap;">Look up rate by address (Avalara) ↗</a>
                 </span></div>
                 `}
                 <div class="kv"><span class="k">Website</span><span class="v">${esc(a.website || '—')}</span></div>
