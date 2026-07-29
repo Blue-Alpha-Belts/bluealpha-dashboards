@@ -623,6 +623,11 @@
             set('billingContactEmail',  info.billEmail);
             set('billingContactPhone',  info.billPhone);
             set('billingAddr1',         info.billAddr1);
+            // Normalize prefilled phones through the 10-digit formatter
+            ['shippingContactPhone', 'billingContactPhone'].forEach(n => {
+              const el = form.querySelector(`[name="${n}"]`);
+              if (el && el.value) el.dispatchEvent(new Event('input'));
+            });
           }
         }
       } catch (_) {}
