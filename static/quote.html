@@ -504,7 +504,7 @@
     }
     #printArea { font-family: 'Lato', Arial, sans-serif; color: #1a2633; padding: 24px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     #printArea .p-head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1B2438; padding-bottom: 14px; margin-bottom: 6px; }
-    #printArea .p-logo { height: 44px; width: auto; display: block; margin-bottom: 6px; filter: brightness(0); }
+    #printArea .p-logo { height: 56px; width: auto; display: block; margin-bottom: 6px; }
     #printArea .p-brand { font-family: 'Montserrat', Arial, sans-serif; font-size: 22px; font-weight: 800; letter-spacing: 2px; color: #1B2438; }
     #printArea .p-brand-sub { font-size: 11px; color: #6b7a8d; margin-top: 3px; }
     #printArea .p-doc { text-align: right; }
@@ -801,7 +801,7 @@ function restoreSavedCart() {
 // ─── Guest mode UI ───────────────────────────────────────────────────────────
 function activateGuestMode() {
   isGuest = true;
-  new Image().src = '/static/ba-logo-white-bg.jpg';  // preload the print-header logo
+  new Image().src = '/static/ba-logo-black.png';  // preload the print-header logo
   document.getElementById('guestBanner').classList.remove('hidden');
   document.getElementById('guestPrintNote').classList.remove('hidden');
   document.getElementById('btnSubmit').textContent = 'Print Quote';
@@ -1756,7 +1756,7 @@ function printGuestQuote() {
   document.getElementById('printArea').innerHTML = `
     <div class="p-head">
       <div>
-        <img class="p-logo" src="/static/ba-logo-white-bg.jpg" alt="Blue Alpha">
+        <img class="p-logo" src="/static/ba-logo-black.png" alt="Blue Alpha">
         <div class="p-brand-sub">bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</div>
       </div>
       <div class="p-doc">
