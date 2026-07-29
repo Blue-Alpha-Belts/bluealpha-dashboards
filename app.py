@@ -450,10 +450,11 @@ def get_account_status(customer_id):
     read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
     for attempt in (1, 2):
         try:
+            # NOTE: Airtable's single-record GET rejects the fields[] parameter
+            # (INVALID_REQUEST_UNKNOWN) — fetch the full record.
             r = req_lib.get(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{customer_id}",
                 headers=at_headers(read_token),
-                params={"fields[]": ["Application Status", "Tax Exempt"]},
                 timeout=10,
             )
             if r.status_code == 200:
@@ -7000,10 +7001,10 @@ def apply_page():
         # Org name is fixed at registration — fetch it so the application keeps the account's name
         try:
             _read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+            # (full-record fetch — Airtable's single-record GET rejects fields[])
             _own = req_lib.get(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{upgrade_rec_id}",
                 headers=at_headers(_read_token),
-                params={"fields[]": ["Organization Name"]},
                 timeout=10,
             )
             if _own.status_code == 200:
