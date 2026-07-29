@@ -667,9 +667,6 @@ if (window.self !== window.top) {
     </div>
   </div>
 
-  <!-- Guest print view (rendered on demand, shown only via @media print) -->
-  <div id="printArea" aria-hidden="true"></div>
-
   <!-- ────────────────────────────────────────────────────────────────────── -->
   <!-- Step 3: Success                                                       -->
   <!-- ────────────────────────────────────────────────────────────────────── -->
@@ -687,6 +684,11 @@ if (window.self !== window.top) {
   </div>
 
 </div>
+
+<!-- Guest print view — MUST be a direct child of <body>: the @media print rule
+     hides body > * except this element, so nesting it inside .container would
+     print a blank page -->
+<div id="printArea" aria-hidden="true"></div>
 
 
 <script>
