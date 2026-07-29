@@ -184,7 +184,7 @@
           <div class="form-row">
             <div class="form-group">
               <label>EIN (Tax ID) <span class="req">*</span></label>
-              <input type="text" name="ein" placeholder="XX-XXXXXXX">
+              <input type="text" name="ein" placeholder="XX-XXXXXXX" maxlength="10" inputmode="numeric">
             </div>
           </div>
 
@@ -372,6 +372,14 @@
     document.querySelectorAll('[name="shippingContactPhone"], [name="billingContactPhone"]')
       .forEach(el => el.addEventListener('input', formatPhone));
 
+    // EIN auto-formatter — 9 digits only, dash auto-inserted after the second (XX-XXXXXXX)
+    function formatEin(e) {
+      const input = e.target;
+      const digits = input.value.replace(/\D/g, '').slice(0, 9);
+      input.value = digits.length > 2 ? digits.slice(0, 2) + '-' + digits.slice(2) : digits;
+    }
+    document.querySelector('[name="ein"]').addEventListener('input', formatEin);
+
     // Tax exempt toggle
     function isTaxExempt() {
       return document.getElementById('taxExemptYes').checked;
@@ -425,7 +433,7 @@
 
       // Always-required fields
       const alwaysRequired = [
-        'companyName','ein',
+        'companyName',
         'shippingContactName','shippingContactEmail',
         'shippingAddr1','shippingCity','shippingState','shippingZip'
       ];
@@ -433,6 +441,16 @@
         if (!checkField(form.querySelector(`[name="${name}"]`))) valid = false;
       }
       if (!checkPhone(form.querySelector('[name="shippingContactPhone"]'))) valid = false;
+
+      // EIN — exactly 9 digits (dash auto-inserted by the formatter)
+      const einEl = form.querySelector('[name="ein"]');
+      if ((einEl.value || '').replace(/\D/g, '').length !== 9) {
+        einEl.classList.add('error');
+        firstErrorEl = firstErrorEl || einEl;
+        valid = false;
+      } else {
+        einEl.classList.remove('error');
+      }
 
       // Billing required only when not same as shipping
       if (!sameAsShippingCb.checked) {

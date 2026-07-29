@@ -7046,6 +7046,13 @@ def apply_page():
     billing_state          = gf("billingState")        if not billing_same else shipping_state
     billing_zip            = gf("billingZip")          if not billing_same else shipping_zip
 
+    # EIN: exactly 9 digits, stored normalized as XX-XXXXXXX
+    _ein_digits = _re.sub(r"\D", "", ein or "")
+    if len(_ein_digits) != 9:
+        return Response(json.dumps({"error": "EIN must be 9 digits."}),
+                        status=400, headers=c, mimetype="application/json")
+    ein = f"{_ein_digits[:2]}-{_ein_digits[2:]}"
+
     required_fields = [company_name, ein,
                        shipping_contact_name, shipping_contact_email, shipping_contact_phone,
                        shipping_addr1, shipping_city, shipping_state, shipping_zip]
