@@ -7284,6 +7284,11 @@ def send_registration_email(to_email, to_name, company, setup_link):
         print(f"[send_registration_email] failed: {e}")
 
 
+# Testing: these emails may register multiple accounts (skips the one-account-per-email
+# check). NOTE: magic-link login always matches the FIRST record with the email — test
+# accounts created this way should be accessed via their username + password.
+_MULTI_ACCOUNT_TEST_EMAILS = {"patty@bluealpha.us"}
+
 # Simple in-memory per-IP throttle for registration (10 attempts per hour)
 _REGISTER_ATTEMPTS: dict = {}  # ip -> [timestamps]
 
@@ -7335,11 +7340,14 @@ def portal_register():
 
     try:
         # One account per email — check across all Customers records
-        email_matches = at_get_all(
-            CUSTOMERS_TABLE_ID, read_token,
-            fields=["Main Contact Email", "Portal Username", "Application Status", "Main Contact Name", "Organization Name"],
-            formula=f"LOWER({{Main Contact Email}})='{_esc(email)}'",
-        )
+        # (skipped for test emails in _MULTI_ACCOUNT_TEST_EMAILS)
+        email_matches = []
+        if email not in _MULTI_ACCOUNT_TEST_EMAILS:
+            email_matches = at_get_all(
+                CUSTOMERS_TABLE_ID, read_token,
+                fields=["Main Contact Email", "Portal Username", "Application Status", "Main Contact Name", "Organization Name"],
+                formula=f"LOWER({{Main Contact Email}})='{_esc(email)}'",
+            )
         if email_matches:
             rec = email_matches[0]
             f   = rec.get("fields", {})
