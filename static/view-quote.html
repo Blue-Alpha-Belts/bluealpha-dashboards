@@ -990,6 +990,11 @@ if (window.self === window.top) {
 
   try {
     const r = await fetch(`/api/get-quote/${recordId}`);
+    if (r.status === 403 && window.self === window.top) {
+      // Standalone view without a session — send through login and come back here
+      window.location = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+      return;
+    }
     if (!r.ok) throw new Error('not found');
     quoteData  = await r.json();
     editItems  = quoteData.lineItems.map(i => ({ ...i }));
@@ -1178,6 +1183,10 @@ function updateTotals() {
   if (taxAmount > 0) {
     document.getElementById('vTax').textContent = '$' + taxAmount.toFixed(2);
     taxRow.classList.remove('hidden');
+  } else if (quoteData.taxTbd) {
+    // Account not yet approved for ordering — no tax rate on file yet
+    document.getElementById('vTax').innerHTML = '<span style="font-size:0.82rem;color:var(--muted);">Calculated at order approval</span>';
+    taxRow.classList.remove('hidden');
   } else {
     taxRow.classList.add('hidden');
   }
@@ -1319,6 +1328,29 @@ function buildActions(editable) {
         acceptBtn.textContent = 'Accept This Quote';
         acceptBtn.onclick     = openModal;
         bar.appendChild(acceptBtn);
+      } else if (portalUser.canApplyForOrdering) {
+        // Quote-only account owner — ordering requires an approved application
+        const applyBtn = document.createElement('a');
+        applyBtn.className   = 'btn btn-danger';
+        applyBtn.href        = '/apply';
+        applyBtn.target      = '_top';
+        applyBtn.style.textDecoration = 'none';
+        applyBtn.textContent = 'Apply for Ordering Access';
+        bar.appendChild(applyBtn);
+        const infoEl = document.createElement('p');
+        infoEl.style.cssText = 'color:var(--muted);font-size:0.9rem;margin-top:8px;flex-basis:100%;';
+        infoEl.textContent = 'To place this order, your account needs ordering access — approval typically takes 1–2 business days.';
+        bar.appendChild(infoEl);
+      } else if (portalUser.accountStatus === 'Registered') {
+        const infoEl = document.createElement('p');
+        infoEl.style.cssText = 'color:var(--muted);font-size:0.9rem;';
+        infoEl.textContent = 'Ordering requires approved access — ask your account owner to apply for ordering access.';
+        bar.appendChild(infoEl);
+      } else if (portalUser.accountStatus === 'Pending') {
+        const infoEl = document.createElement('p');
+        infoEl.style.cssText = 'color:var(--muted);font-size:0.9rem;';
+        infoEl.textContent = 'Your ordering-access application is under review — you can place this order once you\'re approved.';
+        bar.appendChild(infoEl);
       } else {
         const infoEl = document.createElement('p');
         infoEl.style.cssText = 'color:var(--muted);font-size:0.9rem;';

@@ -212,6 +212,9 @@
       </form>
 
       <div class="error-msg" id="signInError"></div>
+      <p class="sub" style="margin:18px 0 0;">
+        Don't have an account? <a href="/signup" style="color:var(--navy);font-weight:700;">Create one free</a>
+      </p>
     </div>
 
     <!-- ── Magic Link Card (email) ── -->
@@ -246,6 +249,16 @@
   </footer>
 
   <script>
+    // Optional ?next= deep link (same-origin relative paths only) — preserved through login
+    // so emailed quote/order links land on the right page after signing in.
+    const nextPath = (() => {
+      try {
+        const n = new URLSearchParams(location.search).get('next') || '';
+        if (n.startsWith('/') && !n.startsWith('//') && !n.includes('\\')) return n;
+      } catch (_) {}
+      return '';
+    })();
+
     // Username + Password Sign In
     document.getElementById('usernameForm').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -269,7 +282,7 @@
         });
         const data = await resp.json();
         if (data.ok) {
-          window.location.href = '/portal';
+          window.location.href = nextPath || '/portal';
         } else {
           errorEl.textContent  = data.error || 'Invalid username or password.';
           errorEl.style.display = 'block';

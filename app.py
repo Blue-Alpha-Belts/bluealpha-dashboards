@@ -388,9 +388,9 @@ def _lookup_portal_customer(username, password):
         stored_hash = f.get("Portal Hash", "")
         if not stored_hash or not _check_password(password, stored_hash):
             return None, None, None
-        # Only approved customers can log in
+        # Approved customers and self-registered (quote-only) accounts can log in
         app_status = f.get("Application Status", "")
-        if app_status and app_status != "Approved":
+        if app_status and app_status not in ("Approved", "Registered", "Pending"):
             return None, None, None
         role_raw = (f.get("Portal Role") or "").strip()
         role_map = {
@@ -428,6 +428,45 @@ def portal_can(user, action):
     if role is None:
         return True  # Legacy primary user — full admin
     return action in _PORTAL_PERMISSIONS.get(role, set())
+
+
+# Account-level status overlay: self-registered ("Registered") and under-review ("Pending")
+# accounts can log in and quote but cannot place orders until Approved.
+# Empty status = legacy/manually-created customer → treated as Approved.
+_ACCT_STATUS_CACHE: dict = {}   # customer_id -> {"ts": float, "status": str, "tax_exempt": bool}
+_ACCT_STATUS_TTL = 60           # seconds — short, so admin approval takes effect quickly
+
+def get_account_status(customer_id):
+    """Return (application_status, tax_exempt) for a customer record.
+    '' = legacy record with no status (treated as approved). None = lookup failed (fail closed)."""
+    import time as _t
+    if not customer_id:
+        return None, False
+    cached = _ACCT_STATUS_CACHE.get(customer_id)
+    if cached and (_t.time() - cached["ts"]) < _ACCT_STATUS_TTL:
+        return cached["status"], cached["tax_exempt"]
+    try:
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{customer_id}",
+            headers=at_headers(read_token),
+            params={"fields[]": ["Application Status", "Tax Exempt"]},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            f = r.json().get("fields", {})
+            status     = f.get("Application Status", "") or ""
+            tax_exempt = bool(f.get("Tax Exempt"))
+            _ACCT_STATUS_CACHE[customer_id] = {"ts": _t.time(), "status": status, "tax_exempt": tax_exempt}
+            return status, tax_exempt
+    except Exception as e:
+        print(f"[get_account_status] error: {e}")
+    return None, False
+
+def account_can_order(customer_id):
+    """True when the account has been approved for ordering (or is a legacy record with no status)."""
+    status, _ = get_account_status(customer_id)
+    return status in ("", "Approved")
 
 
 def check_admin_session(req):
@@ -560,6 +599,65 @@ def send_approval_email(to_email, to_name, company, magic_link):
         )
     except Exception as e:
         print(f"[send_approval_email] failed: {e}")
+
+
+def send_ordering_approved_email(to_email, to_name, company):
+    """Approval email for self-registered accounts that already have portal credentials —
+    ordering access is unlocked; no setup link needed."""
+    if not SENDGRID_API_KEY:
+        return
+    first_name = to_name.split()[0] if to_name else "there"
+    actual_to = TEST_EMAIL_OVERRIDE or to_email
+    portal_link = f"{QUOTE_BASE_URL}/portal"
+    html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1B2438;padding:24px 36px;">
+          <span style="font-family:Arial;font-size:20px;font-weight:800;color:#fff;letter-spacing:2px;">BLUE ALPHA</span>
+        </td></tr>
+        <tr><td style="padding:32px 36px;">
+          <p style="color:#1a2633;font-size:16px;margin:0 0 8px;">Hi {first_name},</p>
+          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0 0 20px;">
+            Great news — your ordering-access application for <strong>{company}</strong> has been approved!
+            You can now accept quotes and place orders through the Blue Alpha portal.
+          </p>
+          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0 0 24px;">
+            Log in with your existing username and password — any quotes you've already saved
+            are ready to be converted to orders.
+          </p>
+          <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+            <tr><td>
+              <a href="{portal_link}" style="display:inline-block;background:#1B2438;color:#fff;font-family:Arial;font-size:14px;font-weight:700;text-decoration:none;padding:13px 32px;border-radius:6px;">Go to the Portal →</a>
+            </td></tr>
+          </table>
+          <p style="color:#6b7a8d;font-size:12px;margin-top:16px;">
+            Questions? Contact us at <a href="mailto:orders@bluealpha.us" style="color:#1B2438;">orders@bluealpha.us</a>
+          </p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+    try:
+        req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": actual_to, "name": to_name}]}],
+                "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+                "subject": "You're Approved for Ordering — Blue Alpha Portal",
+                "content": [{"type": "text/html", "value": html_body}],
+            },
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"[send_ordering_approved_email] failed: {e}")
 
 
 def send_denial_email(to_email, to_name, company, reason):
@@ -4645,10 +4743,14 @@ def _fetch_quote_data(record_id):
         else:
             _results = []
 
+    _acct_status = ""
+    _tax_exempt  = False
     if customer_ids:
         cr = _fut_customer.result()
         if cr.status_code == 200:
             cf = cr.json().get("fields", {})
+            _acct_status = cf.get("Application Status", "") or ""
+            _tax_exempt  = bool(cf.get("Tax Exempt"))
             customer = {
                 # Use snapshot if present, fall back to customer record
                 "orgName":      _snap_org     or cf.get("Organization Name", ""),
@@ -4724,6 +4826,10 @@ def _fetch_quote_data(record_id):
         except Exception:
             pass
 
+    # Tax is TBD when the account hasn't been approved for ordering yet (no Tax Rate on file)
+    # and isn't tax-exempt — the real amount is calculated once ordering access is approved.
+    tax_tbd = (_acct_status in ("Registered", "Pending")) and not _tax_exempt and not tax_amount
+
     return {
         "recordId":      record_id,
         "orderId":       order_id,
@@ -4738,10 +4844,13 @@ def _fetch_quote_data(record_id):
         "lineItems":     line_items,
         "subtotal":      round(subtotal, 2),
         "taxAmount":     tax_amount,
+        "taxTbd":        tax_tbd,
         "shipping":      0,
         "total":         round(subtotal + tax_amount, 2),
         "invRecordId":   inv_record_id,
         "invNumber":     inv_number,
+        # Internal: linked Customer record IDs, used by callers for ownership checks
+        "_customerIds":  customer_ids,
     }
 
 
@@ -5240,8 +5349,11 @@ def create_quote():
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST"})
     c = cors()
-    # If called from a portal session, enforce create_quote permission
+    # Requires a portal session (with create_quote permission) or a staff admin session.
     _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return Response(json.dumps({"error": "Please log in to save a quote."}), status=403, headers=c, mimetype="application/json")
     if _pu is not None and not portal_can(_pu, "create_quote"):
         return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
     from datetime import date as dt_date, timedelta
@@ -5255,6 +5367,12 @@ def create_quote():
     order_type = (data.get("orderType") or "Quote").strip()
     if order_type not in ("Quote", "Sales Order"):
         order_type = "Quote"
+
+    # Direct Sales Order creation (contract portal) requires an ordering-approved account
+    if order_type == "Sales Order" and _pu is not None and not _is_staff:
+        if not account_can_order(_pu.get("customer_id", "")):
+            return Response(json.dumps({"error": "Your account is not approved for ordering yet."}),
+                            status=403, headers=c, mimetype="application/json")
 
     if not org_name or not email or not items:
         return Response(json.dumps({"error": "orgName, email, and items are required"}),
@@ -5272,6 +5390,10 @@ def create_quote():
     notes        = (data.get("notes") or "").strip()
 
     provided_cust_id = (data.get("customerId") or "").strip()
+    # Portal sessions always act as their own account — the session's customer_id wins.
+    # (Staff admin sessions keep the legacy behavior: provided ID, or find/create by email.)
+    if _pu is not None and not _is_staff:
+        provided_cust_id = _pu.get("customer_id", "") or provided_cust_id
 
     try:
         read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -5455,10 +5577,18 @@ def get_quote(record_id):
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET"})
     c = cors()
+    # Requires a portal session (own quotes only) or a staff admin session.
+    _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
     try:
         data = _fetch_quote_data(record_id)
         if not data:
             return Response(json.dumps({"error": "Quote not found"}), status=404, headers=c, mimetype="application/json")
+        if not _is_staff and _pu.get("customer_id", "") not in data.get("_customerIds", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403, headers=c, mimetype="application/json")
+        data.pop("_customerIds", None)
         return Response(json.dumps(data), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
@@ -5469,8 +5599,11 @@ def update_quote(record_id):
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST"})
     c = cors()
-    # If called from a portal session, enforce create_quote permission
+    # Requires a portal session (with create_quote permission, own quotes only) or a staff admin session.
     _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
     if _pu is not None and not portal_can(_pu, "create_quote"):
         return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
     write_token = RETURNS_WRITE_TOKEN
@@ -5489,6 +5622,8 @@ def update_quote(record_id):
         if r.status_code != 200:
             return Response(json.dumps({"error": "Quote not found"}), status=404, headers=c, mimetype="application/json")
         mo_fields = r.json().get("fields", {})
+        if not _is_staff and _pu.get("customer_id", "") not in mo_fields.get("Customer", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403, headers=c, mimetype="application/json")
         if mo_fields.get("Order Type") != "Quote":
             return Response(json.dumps({"error": "Not a quote"}), status=400, headers=c, mimetype="application/json")
         if mo_fields.get("MO Is Approved"):
@@ -5539,10 +5674,18 @@ def accept_quote(record_id):
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST"})
     c = cors()
-    # If called from a portal session, enforce accept_quote permission
+    # Requires a portal session (accept_quote permission + ordering-approved account, own quotes
+    # only) or a staff admin session. Registered/Pending accounts must be approved before ordering.
     _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
     if _pu is not None and not portal_can(_pu, "accept_quote"):
         return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
+    if _pu is not None and not _is_staff and not account_can_order(_pu.get("customer_id", "")):
+        return Response(json.dumps({"error": "Your account is not approved for ordering yet. "
+                                             "Apply for ordering access from the portal to place orders."}),
+                        status=403, headers=c, mimetype="application/json")
     from datetime import date as dt_date
     write_token = RETURNS_WRITE_TOKEN
     read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or write_token
@@ -5568,6 +5711,8 @@ def accept_quote(record_id):
             return Response(json.dumps({"error": f"Quote not found (AT {r.status_code}: {err_body})"}), status=404, headers=c, mimetype="application/json")
         mo_fields = r.json().get("fields", {})
 
+        if not _is_staff and _pu.get("customer_id", "") not in mo_fields.get("Customer", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403, headers=c, mimetype="application/json")
         if mo_fields.get("Order Type") != "Quote":
             return Response(json.dumps({"error": "Not a quote"}), status=400, headers=c, mimetype="application/json")
         if mo_fields.get("MO Is Approved"):
@@ -6209,10 +6354,17 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
 @app.route("/quote-pdf/<record_id>", methods=["GET"])
 def quote_pdf(record_id):
     c = cors()
+    _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return redirect(f"/login?next=/quote-pdf/{record_id}")
     try:
         quote = _fetch_quote_data(record_id)
         if not quote:
             return Response(json.dumps({"error": "Quote not found"}), status=404,
+                            headers=c, mimetype="application/json")
+        if not _is_staff and _pu.get("customer_id", "") not in quote.get("_customerIds", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403,
                             headers=c, mimetype="application/json")
         pdf_bytes = _build_quote_pdf_bytes(quote)
         q_number  = quote.get("quoteNumber", record_id)
@@ -6232,10 +6384,17 @@ def quote_pdf(record_id):
 @app.route("/order-pdf/<record_id>", methods=["GET"])
 def order_pdf(record_id):
     c = cors()
+    _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return redirect(f"/login?next=/order-pdf/{record_id}")
     try:
         order = _fetch_quote_data(record_id)
         if not order:
             return Response(json.dumps({"error": "Order not found"}), status=404,
+                            headers=c, mimetype="application/json")
+        if not _is_staff and _pu.get("customer_id", "") not in order.get("_customerIds", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403,
                             headers=c, mimetype="application/json")
         pdf_bytes = _build_quote_pdf_bytes(order, doc_type="order")
         so_number = order.get("quoteNumber", record_id)
@@ -6648,6 +6807,10 @@ def _build_invoice_pdf_bytes(inv):
 @app.route("/invoice-pdf/<record_id>", methods=["GET"])
 def invoice_pdf(record_id):
     c = cors()
+    _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return redirect(f"/login?next=/invoice-pdf/{record_id}")
     try:
         read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
         r = req_lib.get(
@@ -6657,6 +6820,8 @@ def invoice_pdf(record_id):
         if not r.ok:
             return Response(json.dumps({"error": "Invoice not found"}), status=404, headers=c, mimetype="application/json")
         fields = r.json().get("fields", {})
+        if not _is_staff and _pu.get("customer_id", "") not in fields.get("Customer", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403, headers=c, mimetype="application/json")
         if fields.get("Order Type") != "Invoice":
             return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
 
@@ -6808,7 +6973,46 @@ def apply_page():
         def gf(k): return (data.get(k) or "").strip()
         cert_file = None
 
+    # Upgrade mode: a logged-in self-registered (quote-only) account applying for
+    # ordering access. Updates their existing Customer record instead of creating a new one.
+    _pu = get_portal_user(request)
+    upgrade_rec_id   = None
+    upgrade_org_name = ""
+    if _pu is not None:
+        if not _pu.get("is_primary") and not portal_can(_pu, "manage_team"):
+            return Response(json.dumps({"error": "Only the account owner can apply for ordering access."}),
+                            status=403, headers=c, mimetype="application/json")
+        upgrade_rec_id = _pu.get("customer_id", "")
+        status, _ = get_account_status(upgrade_rec_id)
+        if status == "Pending":
+            return Response(json.dumps({"error": "Your ordering-access application is already under review."}),
+                            status=400, headers=c, mimetype="application/json")
+        if status in ("", "Approved"):
+            return Response(json.dumps({"error": "Your account is already approved for ordering."}),
+                            status=400, headers=c, mimetype="application/json")
+        if status is None:
+            return Response(json.dumps({"error": "Could not verify your account. Please try again."}),
+                            status=500, headers=c, mimetype="application/json")
+        # Org name is fixed at registration — fetch it so the application keeps the account's name
+        try:
+            _read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+            _own = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{upgrade_rec_id}",
+                headers=at_headers(_read_token),
+                params={"fields[]": ["Organization Name"]},
+                timeout=10,
+            )
+            if _own.status_code == 200:
+                upgrade_org_name = _own.json().get("fields", {}).get("Organization Name", "")
+        except Exception as _e:
+            print(f"[apply upgrade] org fetch failed: {_e}")
+        if not upgrade_org_name:
+            return Response(json.dumps({"error": "Could not verify your account. Please try again."}),
+                            status=500, headers=c, mimetype="application/json")
+
     company_name              = gf("companyName")
+    if upgrade_rec_id:
+        company_name = upgrade_org_name  # org name is fixed at registration
     ein                       = gf("ein")
     website                   = gf("website")
     tax_exempt_raw            = gf("taxExempt")
@@ -6850,21 +7054,23 @@ def apply_page():
                         status=400, headers=c, mimetype="application/json")
 
     # Reject duplicate company names — same name may exist for different locations,
-    # but those should be set up manually by Blue Alpha staff.
-    try:
-        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
-        dup_check = at_get_all(
-            CUSTOMERS_TABLE_ID, read_token,
-            fields=["Organization Name"],
-            formula=f"LOWER({{Organization Name}})='{company_name.lower().replace(chr(39), chr(39)+chr(39))}'",
-        )
-        if dup_check:
-            return Response(json.dumps({"error": (
-                "An account already exists with this organization name. "
-                "Please enter a different name."
-            )}), status=409, headers=c, mimetype="application/json")
-    except Exception as _dup_err:
-        print(f"[apply] duplicate check failed: {_dup_err}")  # non-fatal — proceed
+    # but those should be set up manually by Blue Alpha staff (or self-registered at /signup
+    # with a distinguishing label). Skipped in upgrade mode — the name is the account's own.
+    if not upgrade_rec_id:
+        try:
+            read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+            dup_check = at_get_all(
+                CUSTOMERS_TABLE_ID, read_token,
+                fields=["Organization Name"],
+                formula=f"LOWER({{Organization Name}})='{company_name.lower().replace(chr(39), chr(39)+chr(39))}'",
+            )
+            if dup_check:
+                return Response(json.dumps({"error": (
+                    "An account already exists with this organization name. "
+                    "Please enter a different name."
+                )}), status=409, headers=c, mimetype="application/json")
+        except Exception as _dup_err:
+            print(f"[apply] duplicate check failed: {_dup_err}")  # non-fatal — proceed
 
     # Customer Address = SHIPPING address (city/state/zip auto-parsed by Airtable formula)
     # Bill-To Address  = BILLING address (plain text)
@@ -6901,18 +7107,34 @@ def apply_page():
     }
     if website: fields["Website"] = website
 
+    if upgrade_rec_id:
+        # Keep the account's org name and login email stable — the shipping contact
+        # entered on the application may be a different person than the account owner.
+        fields.pop("Organization Name", None)
+        fields.pop("Main Contact Email", None)
+
     try:
-        r = req_lib.post(
-            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}",
-            headers={**at_headers(APPLY_WRITE_TOKEN), "Content-Type": "application/json"},
-            json={"fields": fields},
-            timeout=15,
-        )
+        if upgrade_rec_id:
+            r = req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{upgrade_rec_id}",
+                headers={**at_headers(APPLY_WRITE_TOKEN), "Content-Type": "application/json"},
+                json={"fields": fields},
+                timeout=15,
+            )
+        else:
+            r = req_lib.post(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}",
+                headers={**at_headers(APPLY_WRITE_TOKEN), "Content-Type": "application/json"},
+                json={"fields": fields},
+                timeout=15,
+            )
         if r.status_code not in (200, 201):
             return Response(json.dumps({"error": "Failed to save application. Please try again."}),
                             status=500, headers=c, mimetype="application/json")
 
         record_id = r.json().get("id")
+        if upgrade_rec_id:
+            _ACCT_STATUS_CACHE.pop(upgrade_rec_id, None)  # status changed → refresh overlay promptly
 
         # Upload tax exemption certificate to Airtable if provided (only for tax-exempt applicants)
         # Strategy: upload file to tmpfiles.org → get public URL → PATCH Airtable record
@@ -6971,7 +7193,8 @@ def login_page():
             records = at_get_all(
                 CUSTOMERS_TABLE_ID, read_token,
                 fields=["Main Contact Email", "Main Contact Name", "Application Status"],
-                formula=f"AND(LOWER({{Main Contact Email}})='{email}',{{Application Status}}='Approved')",
+                formula=(f"AND(LOWER({{Main Contact Email}})='{email}',"
+                         f"OR({{Application Status}}='Approved',{{Application Status}}='Registered',{{Application Status}}='Pending'))"),
             )
             if not records:
                 return
@@ -6986,6 +7209,194 @@ def login_page():
         threading.Thread(target=_try_send_magic_link, args=(email,), daemon=True).start()
 
     return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-serve registration (quote-only accounts — no application required)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/signup")
+def signup_page():
+    """Self-serve account creation — save quotes without applying for ordering access."""
+    if get_portal_user(request):
+        return redirect("/portal")
+    return send_from_directory("static", "signup.html")
+
+
+def send_registration_email(to_email, to_name, company, setup_link):
+    """Email verification + account-setup link for self-registered (quote-only) accounts."""
+    if not SENDGRID_API_KEY:
+        return
+    first_name = to_name.split()[0] if to_name else "there"
+    actual_to = TEST_EMAIL_OVERRIDE or to_email
+    html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1B2438;padding:24px 36px;">
+          <span style="font-family:Arial;font-size:20px;font-weight:800;color:#fff;letter-spacing:2px;">BLUE ALPHA</span>
+        </td></tr>
+        <tr><td style="padding:32px 36px;">
+          <p style="color:#1a2633;font-size:16px;margin:0 0 8px;">Hi {first_name},</p>
+          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0 0 20px;">
+            You're almost done creating your Blue Alpha portal account for <strong>{company}</strong>.
+            Click the button below to verify your email and choose your username and password.
+          </p>
+          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0 0 24px;">
+            Your account lets you build and save quotes. When you're ready to place orders,
+            you can apply for ordering access from inside the portal.
+          </p>
+          <table cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+            <tr><td>
+              <a href="{setup_link}" style="display:inline-block;background:#1B2438;color:#fff;font-family:Arial;font-size:14px;font-weight:700;text-decoration:none;padding:13px 32px;border-radius:6px;">Verify Email &amp; Set Up Account →</a>
+            </td></tr>
+          </table>
+          <p style="color:#6b7a8d;font-size:12px;line-height:1.5;">
+            This link is valid for 48 hours. If you have trouble with the button, copy and paste this link:<br>
+            <a href="{setup_link}" style="color:#1B2438;">{setup_link}</a>
+          </p>
+          <p style="color:#6b7a8d;font-size:12px;margin-top:16px;">
+            Didn't create this account? You can safely ignore this email.
+          </p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+    try:
+        req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": actual_to, "name": to_name}]}],
+                "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+                "subject": "Verify your email — Blue Alpha Portal",
+                "content": [{"type": "text/html", "value": html_body}],
+            },
+            timeout=15,
+        )
+    except Exception as e:
+        print(f"[send_registration_email] failed: {e}")
+
+
+# Simple in-memory per-IP throttle for registration (10 attempts per hour)
+_REGISTER_ATTEMPTS: dict = {}  # ip -> [timestamps]
+
+def _register_throttled(ip):
+    import time as _t
+    now = _t.time()
+    attempts = [t for t in _REGISTER_ATTEMPTS.get(ip, []) if now - t < 3600]
+    if len(attempts) >= 10:
+        _REGISTER_ATTEMPTS[ip] = attempts
+        return True
+    attempts.append(now)
+    _REGISTER_ATTEMPTS[ip] = attempts
+    return False
+
+
+@app.route("/api/portal/register", methods=["POST", "OPTIONS"])
+def portal_register():
+    """Create a self-serve quote-only account (Application Status = 'Registered').
+    Sends an email-verification/setup link; the account can log in once credentials are set.
+    Ordering access still requires the /apply application + admin approval."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    from datetime import datetime, timezone
+
+    ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+    if _register_throttled(ip):
+        return Response(json.dumps({"error": "Too many attempts. Please try again later."}),
+                        status=429, headers=c, mimetype="application/json")
+
+    data         = request.get_json() or {}
+    org_name     = (data.get("orgName") or "").strip()
+    contact_name = (data.get("contactName") or "").strip()
+    email        = (data.get("email") or "").strip().lower()
+
+    if not org_name or not contact_name or not email:
+        return Response(json.dumps({"error": "Organization name, contact name, and email are required."}),
+                        status=400, headers=c, mimetype="application/json")
+    if len(org_name) > 120:
+        return Response(json.dumps({"error": "Organization name is too long."}),
+                        status=400, headers=c, mimetype="application/json")
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return Response(json.dumps({"error": "Please enter a valid email address."}),
+                        status=400, headers=c, mimetype="application/json")
+
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = APPLY_WRITE_TOKEN or RETURNS_WRITE_TOKEN
+    _esc = lambda s: s.replace("'", "\\'")
+
+    try:
+        # One account per email — check across all Customers records
+        email_matches = at_get_all(
+            CUSTOMERS_TABLE_ID, read_token,
+            fields=["Main Contact Email", "Portal Username", "Application Status", "Main Contact Name", "Organization Name"],
+            formula=f"LOWER({{Main Contact Email}})='{_esc(email)}'",
+        )
+        if email_matches:
+            rec = email_matches[0]
+            f   = rec.get("fields", {})
+            if (f.get("Portal Username") or "").strip():
+                return Response(json.dumps({"error": "An account with this email already exists. Please log in instead.",
+                                            "emailTaken": True}),
+                                status=409, headers=c, mimetype="application/json")
+            if f.get("Application Status") == "Registered":
+                # Registered earlier but never finished setup — resend the verification link
+                setup_link = _generate_portal_invite(rec["id"], write_token, expiry_hours=48)
+                send_registration_email(email, f.get("Main Contact Name", contact_name),
+                                        f.get("Organization Name", org_name), setup_link)
+                return Response(json.dumps({"ok": True, "resent": True}), headers=c, mimetype="application/json")
+            return Response(json.dumps({"error": "This email is already associated with a Blue Alpha customer. "
+                                                 "Use the login page to request a login link, or contact orders@bluealpha.us.",
+                                        "emailTaken": True}),
+                            status=409, headers=c, mimetype="application/json")
+
+        # Organization name must be distinct from every existing customer (case-insensitive).
+        # Two same-named orgs are separate customers — the registrant must add a distinguishing label.
+        name_matches = at_get_all(
+            CUSTOMERS_TABLE_ID, read_token,
+            fields=["Organization Name"],
+            formula=f"LOWER({{Organization Name}})='{_esc(org_name.lower())}'",
+        )
+        if name_matches:
+            return Response(json.dumps({
+                "error": ("An account already exists under this organization name. If your organization has "
+                          "multiple locations or departments, please add something that identifies yours — "
+                          "for example a city, building, division, or unit."),
+                "nameTaken": True,
+            }), status=409, headers=c, mimetype="application/json")
+
+        # Create the quote-only customer record
+        cr = req_lib.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {
+                "Organization Name":  org_name,
+                "Main Contact Name":  contact_name,
+                "Main Contact Email": email,
+                "Application Status": "Registered",
+                "Registered Date":    datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            }},
+            timeout=15,
+        )
+        cr.raise_for_status()
+        rec_id = cr.json()["id"]
+
+        setup_link = _generate_portal_invite(rec_id, write_token, expiry_hours=48)
+        send_registration_email(email, contact_name, org_name, setup_link)
+
+        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        print(f"[portal_register] error: {e}")
+        return Response(json.dumps({"error": "Registration failed. Please try again or contact orders@bluealpha.us."}),
+                        status=500, headers=c, mimetype="application/json")
 
 
 @app.route("/setup-account/<token>")
@@ -7160,8 +7571,8 @@ def auth_magic_link(token):
         if not expiry_str:
             return send_from_directory("static", "auth-error.html"), 401
 
-        # Check Application Status
-        if uf.get("Application Status") != "Approved":
+        # Check Application Status (Registered/Pending = self-serve quote-only accounts)
+        if uf.get("Application Status") not in ("Approved", "Registered", "Pending"):
             return send_from_directory("static", "auth-error.html"), 401
 
         # Check expiry
@@ -7563,6 +7974,14 @@ def portal_me(user):
     can_view_orders  = portal_can(user, "view_orders")
     can_view_invoices= portal_can(user, "view_invoices")
 
+    # Account-level overlay: quote-only accounts (Registered/Pending) can't order until Approved.
+    # Legacy records with no Application Status are treated as approved — no change for existing customers.
+    account_status, _tax_exempt = get_account_status(customer_id)
+    _can_order = account_status in ("", "Approved")
+    can_accept_quote  = can_accept_quote  and _can_order
+    can_view_orders   = can_view_orders   and _can_order
+    can_view_invoices = can_view_invoices and _can_order
+
     # Use cached agency name if fresh
     _me_cached = _ME_CACHE.get(customer_id)
     if _me_cached and (_time_mod.time() - _me_cached["ts"]) < _ME_CACHE_TTL:
@@ -7616,6 +8035,11 @@ def portal_me(user):
         "canViewOrders":   can_view_orders,
         "canViewInvoices": can_view_invoices,
         "hasCredentials":  has_credentials,
+        # Account status: "Approved" (or legacy "") = full ordering; "Registered" = quote-only,
+        # may apply for ordering access; "Pending" = ordering application under review.
+        "accountStatus":       account_status if account_status is not None else "",
+        "canOrder":            _can_order,
+        "canApplyForOrdering": (account_status == "Registered") and is_primary,
     }), headers=c, mimetype="application/json")
 
 
@@ -7957,7 +8381,8 @@ def portal_request_magic_link():
             records = at_get_all(
                 CUSTOMERS_TABLE_ID, read_token,
                 fields=["Main Contact Email", "Application Status"],
-                formula=f"AND(LOWER({{Main Contact Email}})='{email}',{{Application Status}}='Approved')",
+                formula=(f"AND(LOWER({{Main Contact Email}})='{email}',"
+                         f"OR({{Application Status}}='Approved',{{Application Status}}='Registered',{{Application Status}}='Pending'))"),
             )
             if records:
                 link = generate_magic_link(records[0]["id"])
@@ -9066,27 +9491,41 @@ def admin_approve(app_id):
         company_name  = f.get("Organization Name", "")
         contact_name  = f.get("Main Contact Name", "")
         contact_email = f.get("Main Contact Email", "")
+        tax_exempt    = bool(f.get("Tax Exempt"))
+        has_account   = bool((f.get("Portal Username") or "").strip())
+
+        # Non-exempt customers must have a sales tax rate on file before they can order
+        parsed_tax_rate = None
+        if tax_rate_pct is not None and str(tax_rate_pct).strip() != "":
+            try:
+                parsed_tax_rate = round(float(tax_rate_pct) / 100, 6)
+            except (TypeError, ValueError):
+                return Response(json.dumps({"error": "Invalid tax rate."}), status=400, headers=c, mimetype="application/json")
+        if not tax_exempt and parsed_tax_rate is None:
+            return Response(json.dumps({"error": "This applicant is not tax exempt — enter their sales tax rate before approving."}),
+                            status=400, headers=c, mimetype="application/json")
 
         # Update Application Status to Approved; save tax rate if provided
         approve_fields = {"Application Status": "Approved"}
-        if tax_rate_pct is not None:
-            try:
-                approve_fields["Tax Rate"] = round(float(tax_rate_pct) / 100, 6)
-            except (TypeError, ValueError):
-                pass
+        if parsed_tax_rate is not None:
+            approve_fields["Tax Rate"] = parsed_tax_rate
         req_lib.patch(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{app_id}",
             headers={**at_headers(write_token), "Content-Type": "application/json"},
             json={"fields": approve_fields},
             timeout=10,
         )
+        _ACCT_STATUS_CACHE.pop(app_id, None)  # unlock ordering promptly for logged-in sessions
 
-        # Generate setup-account link (7 days) so user can create username + password
-        write_token = APPLY_WRITE_TOKEN or RETURNS_WRITE_TOKEN
-        magic_link = _generate_portal_invite(app_id, write_token, expiry_hours=168)
-
-        # Send approval email
-        send_approval_email(contact_email, contact_name, company_name, magic_link)
+        if has_account:
+            # Self-registered account upgrading to ordering access — they already have
+            # credentials, so no setup link; just tell them ordering is unlocked.
+            send_ordering_approved_email(contact_email, contact_name, company_name)
+        else:
+            # New applicant — generate setup-account link (7 days) to create username + password
+            write_token = APPLY_WRITE_TOKEN or RETURNS_WRITE_TOKEN
+            magic_link = _generate_portal_invite(app_id, write_token, expiry_hours=168)
+            send_approval_email(contact_email, contact_name, company_name, magic_link)
 
         return Response(json.dumps({"success": True, "customerId": app_id}),
                         headers=c, mimetype="application/json")
@@ -9122,13 +9561,19 @@ def admin_deny(app_id):
         contact_email = f.get("Main Contact Email", "")
         company_name  = f.get("Organization Name", "")
 
-        # Update Application Status to Denied on the Customer record
+        # Self-registered accounts keep their quote-only portal access when an ordering
+        # application is denied — revert to "Registered" instead of "Denied" (which blocks login).
+        has_account = bool((f.get("Portal Username") or "").strip())
+        denied_status = "Registered" if has_account else "Denied"
+
+        # Update Application Status on the Customer record
         req_lib.patch(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{app_id}",
             headers={**at_headers(write_token), "Content-Type": "application/json"},
-            json={"fields": {"Application Status": "Denied", "Denial Reason": reason}},
+            json={"fields": {"Application Status": denied_status, "Denial Reason": reason}},
             timeout=10,
         )
+        _ACCT_STATUS_CACHE.pop(app_id, None)
 
         # Send denial email
         if contact_email:
@@ -10914,6 +11359,11 @@ def invoice_detail(record_id):
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type"})
     c = cors()
+    # Requires a portal session (own invoices only) or a staff admin session.
+    _pu = get_portal_user(request)
+    _is_staff = check_admin_session(request)
+    if _pu is None and not _is_staff:
+        return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
     try:
         read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
 
@@ -10925,6 +11375,8 @@ def invoice_detail(record_id):
         if not r.ok:
             return Response(json.dumps({"error": "Invoice not found"}), status=404, headers=c, mimetype="application/json")
         fields = r.json().get("fields", {})
+        if not _is_staff and _pu.get("customer_id", "") not in fields.get("Customer", []):
+            return Response(json.dumps({"error": "Not authorized"}), status=403, headers=c, mimetype="application/json")
         if fields.get("Order Type") != "Invoice":
             return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
 

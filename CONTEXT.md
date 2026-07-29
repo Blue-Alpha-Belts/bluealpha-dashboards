@@ -100,6 +100,7 @@ Service ID: `c8521da4-abc9-47df-a665-ce1bdb26f02d`
 |------|--------|-----|
 | 2026-03-11 | Calendar cells increased from 90px → 130px on all dashboards | Maverick |
 | 2026-03-11 | CONTEXT.md created | Maverick |
+| 2026-07-29 | Quote portal three-tier access: guest quote building (print-only, nothing saved), self-serve registration (`/signup`, saves quotes, `Application Status="Registered"`), and approval-gated ordering (existing `/apply` doubles as the ordering-access upgrade for registered accounts). Quote/PDF/invoice APIs locked down to session + ownership (or staff admin session). Tax rate now required to approve non-exempt applicants. Airtable Customers table: added "Registered" select option + "Registered Date" field. | Patty's assistant |
 
 ---
 

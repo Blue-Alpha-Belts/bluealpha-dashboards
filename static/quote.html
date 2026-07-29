@@ -436,6 +436,58 @@
       .item-row { grid-template-columns: 1fr 70px 80px 32px; }
       .item-price { display: none; }
     }
+
+    /* ── Guest mode ─────────────────────────────────────────────────────── */
+    .guest-banner {
+      max-width: 760px;
+      margin: 20px auto 0;
+      background: #fff8ec;
+      border: 1px solid #f0d9a8;
+      border-radius: 10px;
+      padding: 14px 18px;
+      color: #6b4e12;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    .guest-banner strong { color: #55400f; }
+    .guest-banner a { color: var(--navy); font-weight: 700; }
+    .restore-notice {
+      max-width: 760px;
+      margin: 16px auto 0;
+      background: #eefaf0;
+      border: 1px solid #bfe3c8;
+      border-radius: 10px;
+      padding: 12px 18px;
+      color: #175c2a;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    /* ── Print (guest quote printout) ───────────────────────────────────── */
+    #printArea { display: none; }
+    @media print {
+      body > *:not(#printArea) { display: none !important; }
+      #printArea { display: block !important; }
+      body { background: #fff; }
+    }
+    #printArea { font-family: 'Lato', Arial, sans-serif; color: #1a2633; padding: 24px; }
+    #printArea .p-head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #1B2438; padding-bottom: 14px; margin-bottom: 6px; }
+    #printArea .p-brand { font-family: 'Montserrat', Arial, sans-serif; font-size: 22px; font-weight: 800; letter-spacing: 2px; color: #1B2438; }
+    #printArea .p-brand-sub { font-size: 11px; color: #6b7a8d; margin-top: 3px; }
+    #printArea .p-doc { text-align: right; }
+    #printArea .p-doc-title { font-family: 'Montserrat', Arial, sans-serif; font-size: 16px; font-weight: 800; color: #7B2318; letter-spacing: 1px; }
+    #printArea .p-doc-date { font-size: 12px; color: #6b7a8d; margin-top: 4px; }
+    #printArea .p-warn { background: #fff8ec; border: 1px solid #e8cf9a; border-radius: 6px; padding: 9px 12px; font-size: 11px; color: #6b4e12; line-height: 1.5; margin: 12px 0 18px; }
+    #printArea .p-for { font-size: 12px; line-height: 1.6; margin-bottom: 18px; }
+    #printArea .p-for-label { font-family: 'Montserrat', Arial, sans-serif; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; color: #6b7a8d; margin-bottom: 4px; }
+    #printArea table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    #printArea th { text-align: left; font-family: 'Montserrat', Arial, sans-serif; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #fff; background: #1B2438; padding: 8px 10px; }
+    #printArea th.num, #printArea td.num { text-align: right; }
+    #printArea td { padding: 8px 10px; border-bottom: 1px solid #dde3ea; }
+    #printArea .p-totals { margin-top: 10px; margin-left: auto; width: 260px; font-size: 12px; }
+    #printArea .p-totals .row { display: flex; justify-content: space-between; padding: 4px 10px; }
+    #printArea .p-totals .row.grand { border-top: 2px solid #1B2438; margin-top: 4px; padding-top: 8px; font-weight: 700; font-size: 14px; }
+    #printArea .p-foot { margin-top: 28px; font-size: 10px; color: #6b7a8d; line-height: 1.6; border-top: 1px solid #dde3ea; padding-top: 12px; }
   </style>
 </head>
 <body>
@@ -469,6 +521,14 @@ if (window.self !== window.top) {
   new MutationObserver(_notifyHeight).observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
 }
 </script>
+
+<div class="guest-banner hidden" id="guestBanner">
+  <strong>You're building a quote as a guest.</strong> This quote will <strong>not be saved</strong> and has no
+  reference number — we won't be able to look it up if you call, and if you want to place an order later
+  you'll have to re-enter these items. You can print it for your records.
+  <a href="/signup">Create a free account</a> to save this quote, or <a href="/login">log in</a>.
+</div>
+<div class="restore-notice hidden" id="restoreNotice"></div>
 
 <div class="container">
 
@@ -601,8 +661,14 @@ if (window.self !== window.top) {
         <button class="btn btn-secondary" onclick="goStep1()">← Back</button>
         <button class="btn btn-primary" id="btnSubmit" onclick="submitQuote()">Create Quote</button>
       </div>
+      <div class="field-note hidden" id="guestPrintNote" style="margin-top:12px;text-align:center;">
+        Printing does not save this quote. <a href="/signup" style="color:var(--navy);font-weight:700;">Create a free account</a> to save it.
+      </div>
     </div>
   </div>
+
+  <!-- Guest print view (rendered on demand, shown only via @media print) -->
+  <div id="printArea" aria-hidden="true"></div>
 
   <!-- ────────────────────────────────────────────────────────────────────── -->
   <!-- Step 3: Success                                                       -->
@@ -629,9 +695,88 @@ let catalog      = null;   // { parents, skus }
 let items        = [];     // { skuRecordId, name, qty, unitPrice }
 let isIntl       = false;
 let activeParent = null;   // currently-expanded parent product id
+let isGuest      = false;  // standalone + not logged in → print-only quote building
+const isEmbedded = window.self !== window.top;
+const GUEST_CART_KEY = 'ba_guest_cart';
+const GUEST_CART_MAX_AGE = 14 * 24 * 3600 * 1000; // 14 days
+
+// ─── Guest cart persistence ──────────────────────────────────────────────────
+function saveGuestCart() {
+  if (!isGuest) return;
+  try {
+    if (items.length) localStorage.setItem(GUEST_CART_KEY, JSON.stringify({ items, ts: Date.now() }));
+    else localStorage.removeItem(GUEST_CART_KEY);
+  } catch (_) {}
+}
+
+function loadSavedCart() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GUEST_CART_KEY) || 'null');
+    if (!saved || !Array.isArray(saved.items) || !saved.items.length) return null;
+    if (saved.ts && (Date.now() - saved.ts) > GUEST_CART_MAX_AGE) {
+      localStorage.removeItem(GUEST_CART_KEY);
+      return null;
+    }
+    return saved.items;
+  } catch (_) { return null; }
+}
+
+// Restore a saved guest cart. For logged-in users, re-price items from the current
+// catalog and hand the cart over (then clear it — it now lives in their account flow).
+function restoreSavedCart() {
+  const saved = loadSavedCart();
+  if (!saved) return;
+  const priceMap = {};
+  (catalog.skus || []).forEach(s => { priceMap[s.recordId] = s.price; });
+  const restored = [];
+  let dropped = 0;
+  for (const it of saved) {
+    if (!it || !it.skuRecordId || !priceMap.hasOwnProperty(it.skuRecordId)) { dropped++; continue; }
+    restored.push({
+      skuRecordId: it.skuRecordId,
+      name:        it.name || '',
+      qty:         Math.max(1, parseInt(it.qty) || 1),
+      unitPrice:   priceMap[it.skuRecordId],   // always current price
+      sizeNote:    it.sizeNote || '',
+    });
+  }
+  if (!restored.length) { try { localStorage.removeItem(GUEST_CART_KEY); } catch (_) {} return; }
+  items = restored;
+  renderItems();
+  const note = document.getElementById('restoreNotice');
+  note.innerHTML = isGuest
+    ? 'We restored the quote you were building.' + (dropped ? ' Some items are no longer available and were removed.' : '')
+    : '<strong>Welcome back!</strong> We restored the quote you built before creating your account — review it and click Continue to save it.' + (dropped ? ' Some items are no longer available and were removed.' : '');
+  note.classList.remove('hidden');
+  if (!isGuest) { try { localStorage.removeItem(GUEST_CART_KEY); } catch (_) {} }
+}
+
+// ─── Guest mode UI ───────────────────────────────────────────────────────────
+function activateGuestMode() {
+  isGuest = true;
+  document.getElementById('guestBanner').classList.remove('hidden');
+  document.getElementById('guestPrintNote').classList.remove('hidden');
+  document.getElementById('btnSubmit').textContent = 'Print Quote';
+  document.getElementById('btnContinue').textContent = 'Continue →';
+  // Step 2 collects optional info for the printout only
+  const t = document.querySelector('#step2 .page-title');
+  if (t) t.textContent = 'Your Information (Optional)';
+  const ct = document.querySelector('#step2 .card-title');
+  if (ct) ct.textContent = 'Step 2 — Your Information (appears on the printed quote)';
+  document.querySelectorAll('#step2 .req').forEach(el => el.style.display = 'none');
+}
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 (async function init() {
+  // Guest detection: standalone page + no portal session. (Embedded builders are
+  // always inside the logged-in portal, which redirects to /login itself.)
+  if (!isEmbedded) {
+    try {
+      const me = await fetch('/api/portal/me', { credentials: 'same-origin' });
+      if (!me.ok) activateGuestMode();
+    } catch (_) { activateGuestMode(); }
+  }
+
   const wrap = document.getElementById('catalogWrap');
   let attempts = 0;
   while (true) {
@@ -649,6 +794,7 @@ let activeParent = null;   // currently-expanded parent product id
       catalog = data;
       buildCatalogUI();
       document.getElementById('catalogSearchWrap').style.display = '';
+      restoreSavedCart();
       return;
     } catch (e) {
       wrap.innerHTML = `<div class="message message-error show"><strong>Catalog unavailable.</strong> Please try refreshing. If the issue persists, contact us at orders@bluealpha.us</div>`;
@@ -1443,6 +1589,7 @@ function renderItems() {
   }
 
   updateTotals();
+  saveGuestCart();
 }
 
 function updateQty(el) {
@@ -1453,6 +1600,7 @@ function updateQty(el) {
   const lt = document.getElementById(`lineTotal_${idx}`);
   if (lt) lt.textContent = '$' + (items[idx].qty * items[idx].unitPrice).toFixed(2);
   updateTotals();
+  saveGuestCart();
 }
 
 function removeItem(idx) {
@@ -1531,6 +1679,63 @@ function goStep1() {
   window.scrollTo(0,0);
 }
 
+// ─── Guest print ─────────────────────────────────────────────────────────────
+function printGuestQuote() {
+  const gv = id => document.getElementById(id).value.trim();
+  const esc = escHtml;
+  const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const subtotal = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
+  const shipping = isIntl ? 25 : 0;
+
+  const forLines = [gv('f_org'), gv('f_name'), gv('f_email'), gv('f_phone'),
+                    gv('f_addr1'), gv('f_addr2'),
+                    [gv('f_city'), gv('f_state'), gv('f_zip')].filter(Boolean).join(', ')]
+                   .filter(Boolean);
+  const notes = gv('f_notes');
+
+  document.getElementById('printArea').innerHTML = `
+    <div class="p-head">
+      <div>
+        <div class="p-brand">BLUE ALPHA</div>
+        <div class="p-brand-sub">bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</div>
+      </div>
+      <div class="p-doc">
+        <div class="p-doc-title">PRELIMINARY QUOTE</div>
+        <div class="p-doc-date">${esc(today)}</div>
+      </div>
+    </div>
+    <div class="p-warn">
+      <strong>This quote has not been saved with Blue Alpha</strong> and has no reference number.
+      Pricing is subject to change. Sales tax and final shipping are calculated when an order is placed.
+      To save quotes and place orders, create a free account at quote.bluealphabelts.com.
+    </div>
+    ${forLines.length ? `<div class="p-for"><div class="p-for-label">Prepared For</div>${forLines.map(esc).join('<br>')}</div>` : ''}
+    <table>
+      <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Total</th></tr></thead>
+      <tbody>
+        ${items.map(it => `<tr>
+          <td>${esc(it.name)}${it.sizeNote ? `<br><span style="color:#6b7a8d;font-size:11px;">Size note: ${esc(it.sizeNote)}</span>` : ''}</td>
+          <td class="num">${it.qty}</td>
+          <td class="num">$${it.unitPrice.toFixed(2)}</td>
+          <td class="num">$${(it.qty * it.unitPrice).toFixed(2)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="p-totals">
+      <div class="row"><span>Subtotal</span><span>$${subtotal.toFixed(2)}</span></div>
+      ${shipping ? `<div class="row"><span>Intl. Shipping</span><span>$${shipping.toFixed(2)}</span></div>` : ''}
+      <div class="row"><span>Sales Tax</span><span>Calculated at order</span></div>
+      <div class="row grand"><span>Total (excl. tax)</span><span>$${(subtotal + shipping).toFixed(2)}</span></div>
+    </div>
+    ${notes ? `<div class="p-for" style="margin-top:16px;"><div class="p-for-label">Notes</div>${esc(notes)}</div>` : ''}
+    <div class="p-foot">
+      Blue Alpha &bull; Newnan, GA &bull; This preliminary quote is for estimation purposes only and does not
+      constitute an order or a binding offer. Government agencies may apply for ordering access with Net-30
+      terms at quote.bluealphabelts.com.
+    </div>`;
+  window.print();
+}
+
 // ─── Submit ───────────────────────────────────────────────────────────────────
 async function submitQuote() {
   const errEl  = document.getElementById('submitError');
@@ -1539,6 +1744,14 @@ async function submitQuote() {
   errEl.className = 'message';
   errEl.textContent = '';
 
+  if (items.length === 0) { showError('Please add at least one item.'); return; }
+
+  // Guest mode — nothing is saved; render the printable view instead
+  if (isGuest) {
+    printGuestQuote();
+    return;
+  }
+
   const org   = document.getElementById('f_org').value.trim();
   const name  = document.getElementById('f_name').value.trim();
   const email = document.getElementById('f_email').value.trim();
@@ -1546,7 +1759,6 @@ async function submitQuote() {
   if (!org)   { showError('Organization Name is required.'); return; }
   if (!name)  { showError('Contact Name is required.'); return; }
   if (!email) { showError('Email Address is required.'); return; }
-  if (items.length === 0) { showError('Please add at least one item.'); return; }
 
   btnEl.disabled = true;
   btnEl.innerHTML = '<span class="spinner"></span>Submitting…';

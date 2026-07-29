@@ -504,7 +504,9 @@
         const data = await resp.json();
         if (data.success) {
           form.style.display = 'none';
-          alertArea.innerHTML = '<div class="alert alert-success"><strong>Application Received!</strong><br>Thank you — we\'ll review your application and be in touch within 2 business days.</div>';
+          alertArea.innerHTML = window.isUpgradeApplication
+            ? '<div class="alert alert-success"><strong>Application Received!</strong><br>We\'ll review your ordering-access application and be in touch within 2 business days. In the meantime you can keep creating and saving quotes. <a href="/portal">Back to the portal →</a></div>'
+            : '<div class="alert alert-success"><strong>Application Received!</strong><br>Thank you — we\'ll review your application and be in touch within 2 business days.</div>';
         } else {
           alertArea.innerHTML = `<div class="alert alert-error">${data.error || 'An error occurred. Please try again.'}</div>`;
           btn.disabled = false;
@@ -561,6 +563,70 @@
       document.getElementById('certifyError').style.display = 'none';
       document.getElementById('certifyRow').classList.remove('error');
     });
+
+    // ── Upgrade mode: logged-in quote-only account applying for ordering access ──
+    window.isUpgradeApplication = false;
+    (async () => {
+      let me = null;
+      try {
+        const r = await fetch('/api/portal/me', { credentials: 'same-origin' });
+        if (r.ok) me = await r.json();
+      } catch (_) {}
+      if (!me) return;  // not logged in — normal application
+
+      if (me.accountStatus === 'Pending') {
+        form.style.display = 'none';
+        alertArea.innerHTML = '<div class="alert alert-success"><strong>Application already under review.</strong><br>You can keep creating and saving quotes — we\'ll email you as soon as you\'re approved to place orders. <a href="/portal">Back to the portal →</a></div>';
+        return;
+      }
+      if (me.accountStatus !== 'Registered') {
+        // Approved (or legacy) account — nothing to apply for
+        window.location.href = '/portal';
+        return;
+      }
+
+      window.isUpgradeApplication = true;
+
+      // Explain what's happening + lock the org name to the account
+      document.querySelector('.page-title').textContent = 'Apply for Ordering Access';
+      document.querySelector('.page-sub').innerHTML =
+        'You\'re applying for ordering access for <strong>' + (me.agencyName || 'your account').replace(/</g,'&lt;') +
+        '</strong>. Once approved, you can convert your saved quotes into orders on Net-30 terms. ' +
+        'We\'ll review your application and respond within 2 business days.';
+
+      const companyEl = form.querySelector('[name="companyName"]');
+      if (companyEl) {
+        companyEl.value = me.agencyName || '';
+        companyEl.readOnly = true;
+        companyEl.style.background = '#f0f3f8';
+        companyEl.title = 'Your organization name is fixed at registration. Contact orders@bluealpha.us to change it.';
+      }
+
+      // Prefill contact + address details from the account where available
+      try {
+        const r = await fetch('/api/portal/account-info', { credentials: 'same-origin' });
+        if (r.ok) {
+          const { info } = await r.json();
+          if (info) {
+            const set = (name, val) => {
+              const el = form.querySelector(`[name="${name}"]`);
+              if (el && val && !el.value) el.value = val;
+            };
+            set('shippingContactName',  info.shipName);
+            set('shippingContactEmail', info.shipEmail);
+            set('shippingContactPhone', info.shipPhone);
+            set('shippingAddr1',        info.shipAddr1);
+            set('shippingCity',         info.shipCity);
+            set('shippingState',        info.shipState);
+            set('shippingZip',          info.shipZip);
+            set('billingContactName',   info.billName);
+            set('billingContactEmail',  info.billEmail);
+            set('billingContactPhone',  info.billPhone);
+            set('billingAddr1',         info.billAddr1);
+          }
+        }
+      } catch (_) {}
+    })();
   </script>
 </body>
 </html>

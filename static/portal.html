@@ -319,6 +319,18 @@
     </div>
   </div>
 
+  <!-- Ordering-access banner — shown for quote-only (Registered) and under-review (Pending) accounts -->
+  <div id="orderingBanner" style="display:none; background:#eef4ff; border-bottom:2px solid #3b82c4; padding:12px 24px;">
+    <div style="max-width:900px; margin:0 auto; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+      <span style="font-size:1.1rem;">📦</span>
+      <div style="flex:1; min-width:200px;">
+        <strong style="color:#1a3a6c; font-size:0.92rem;" id="orderingBannerTitle">Your account can create and save quotes.</strong>
+        <span style="color:#33455e; font-size:0.88rem; margin-left:8px;" id="orderingBannerText">To place orders on Net-30 terms, apply for ordering access.</span>
+      </div>
+      <a href="/apply" id="orderingBannerBtn" style="background:#1B2438; color:#fff; border:none; border-radius:6px; padding:8px 18px; font-weight:700; font-size:0.88rem; cursor:pointer; white-space:nowrap; text-decoration:none;">Apply for Ordering Access</a>
+    </div>
+  </div>
+
   <div class="container">
     <div class="tabs" id="tabNav">
       <div class="tab active" data-tab="new-quote" id="newQuoteTab">New Quote</div>
@@ -664,7 +676,11 @@
     (async () => {
       try {
         const resp = await fetch('/api/portal/me');
-        if (!resp.ok) { window.location = '/login'; return; }
+        if (!resp.ok) {
+          // Preserve the destination (e.g. emailed quote links) through the login page
+          window.location = '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search);
+          return;
+        }
         portalMe = await resp.json();
         document.getElementById('agencyName').textContent = portalMe.agencyName || 'Government Agency Portal';
         document.title = `Blue Alpha — ${portalMe.agencyName || 'Portal'}`;
@@ -672,6 +688,20 @@
         // Show credentials banner if user has no username/password set up
         if (!portalMe.hasCredentials) {
           document.getElementById('credentialsBanner').style.display = '';
+        }
+
+        // Ordering-access banner for quote-only / under-review accounts
+        if (portalMe.accountStatus === 'Registered') {
+          if (!portalMe.canApplyForOrdering) {
+            document.getElementById('orderingBannerText').textContent = 'To place orders, ask your account owner to apply for ordering access.';
+            document.getElementById('orderingBannerBtn').style.display = 'none';
+          }
+          document.getElementById('orderingBanner').style.display = '';
+        } else if (portalMe.accountStatus === 'Pending') {
+          document.getElementById('orderingBannerTitle').textContent = 'Your ordering-access application is under review.';
+          document.getElementById('orderingBannerText').textContent = 'You can keep creating and saving quotes — we\'ll email you as soon as you\'re approved to place orders.';
+          document.getElementById('orderingBannerBtn').style.display = 'none';
+          document.getElementById('orderingBanner').style.display = '';
         }
 
         // Show/hide tabs based on role permissions

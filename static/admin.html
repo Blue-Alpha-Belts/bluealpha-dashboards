@@ -707,7 +707,8 @@
           }
         }
         html += `<tr class="app-row">
-          <td><strong>${esc(a.company_name)}</strong></td>
+          <td><strong>${esc(a.company_name)}</strong>${a.portal_setup && a.status === 'Pending' ? ' <span style="background:#eef4ff;color:#1a3a6c;font-size:0.7rem;font-weight:700;border-radius:4px;padding:1px 6px;vertical-align:middle;">SELF-REGISTERED</span>' : ''}<br>
+            <span style="color:#6b7a8d;font-size:0.78rem;">${esc([a.shipping_contact_email, [a.shipping_city, a.shipping_state].filter(Boolean).join(', ')].filter(Boolean).join(' · ') || '')}</span></td>
           <td>${fmt(a.applied_date)}</td>
           <td><span class="badge ${badge}">${esc(a.status)}</span></td>
           ${portalCell}
@@ -802,16 +803,23 @@
     function renderDenied()   { renderTable(allApps.filter(a => a.status === 'Denied'),   'deniedContent',   false); }
 
     async function approveApp(appId, btn) {
-      if (!confirm('Approve this application? A portal user will be created and an approval email sent.')) return;
-      btn.disabled = true;
-      btn.textContent = 'Processing…';
-      // Collect tax rate if the input exists (non-exempt applicants)
+      // Non-exempt applicants must have a tax rate entered before approval
       const taxRateInput = document.getElementById(`taxRateInput-${appId}`);
       const body = {};
       if (taxRateInput) {
         const pct = parseFloat(taxRateInput.value);
-        if (!isNaN(pct)) body.taxRate = pct;
+        if (isNaN(pct)) {
+          alert('This applicant is not tax exempt — enter their sales tax rate (in the Details section) before approving.');
+          const detailRow = document.getElementById(`detail-${appId}`);
+          if (detailRow && !detailRow.classList.contains('show')) detailRow.classList.add('show');
+          taxRateInput.focus();
+          return;
+        }
+        body.taxRate = pct;
       }
+      if (!confirm('Approve this application? The customer will be notified by email and can then place orders.')) return;
+      btn.disabled = true;
+      btn.textContent = 'Processing…';
       try {
         const resp = await fetch(`/api/admin/approve/${appId}`, {
           method: 'POST',
