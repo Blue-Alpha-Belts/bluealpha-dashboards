@@ -688,7 +688,7 @@
       const isApproved = !showActions; // approved tab has no approve/deny actions
       let html = '<table><thead><tr><th>Company</th><th>Applied</th><th>Status</th>' +
         (isApproved ? '<th>Portal Account</th>' : '') +
-        (showActions ? '<th>Actions</th>' : '') + '<th></th></tr></thead><tbody>';
+        '<th></th></tr></thead><tbody>';
 
       apps.forEach((a) => {
         const badge = a.status === 'Approved' ? 'badge-approved' : a.status === 'Denied' ? 'badge-denied' : 'badge-pending';
@@ -712,14 +712,10 @@
           <td>${fmt(a.applied_date)}</td>
           <td><span class="badge ${badge}">${esc(a.status)}</span></td>
           ${portalCell}
-          ${showActions ? `<td class="action-btns">
-            <button class="btn btn-success" onclick="approveApp('${a.id}', this)">Approve</button>
-            <button class="btn btn-danger" onclick="openDenyModal('${a.id}')">Deny</button>
-          </td>` : ''}
           <td><span class="detail-toggle" onclick="toggleDetail('detail-${a.id}')">Details</span></td>
         </tr>
         <tr class="detail-row" id="detail-${a.id}">
-          <td colspan="${showActions ? 5 : 4}" class="detail-cell">
+          <td colspan="${isApproved ? 5 : 4}" class="detail-cell">
             <div class="detail-grid">
               <div class="detail-section-label">Company</div>
               <div style="grid-column:1/-1; display:flex; flex-direction:column; gap:8px;">
@@ -760,6 +756,11 @@
                 </div>
               </div>
               ${a.denial_reason ? `<div class="detail-section-label">Notes</div><div class="kv"><span class="k">Denial Reason</span><span class="v">${esc(a.denial_reason)}</span></div><div></div>` : ''}
+              ${showActions ? `
+              <div class="action-btns" style="grid-column:1/-1; display:flex; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid #dde3ea;">
+                <button class="btn btn-success" onclick="approveApp('${a.id}', this)">Approve</button>
+                <button class="btn btn-danger" onclick="openDenyModal('${a.id}')">Deny</button>
+              </div>` : ''}
             </div>
           </td>
         </tr>`;
