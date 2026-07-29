@@ -3345,6 +3345,44 @@ def resend_return_label(record_id):
                         status=500, mimetype="application/json")
 
 
+@app.route("/api/resend-warranty-label/<record_id>", methods=["POST"])
+def resend_warranty_label(record_id):
+    """Re-send the warranty return-label email (CS app button). Label PDFs are
+    stored on the record since 2026-07-29; older requests have none."""
+    if not WARRANTY_TABLE_ID or not WARRANTY_WRITE_TOKEN:
+        return Response(json.dumps({"ok": False, "error": "Not configured"}),
+                        status=500, mimetype="application/json")
+    try:
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
+            params={"fields[]": ["Email", "First Name", "Label PDF Data"]},
+            headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return Response(json.dumps({"ok": False, "error": "Warranty request not found"}),
+                            status=404, mimetype="application/json")
+        f = r.json().get("fields", {})
+        email = (f.get("Email") or "").strip()
+        pdf_b64 = f.get("Label PDF Data") or ""
+        if not email:
+            return Response(json.dumps({"ok": False, "error": "No customer email on the request"}),
+                            status=400, mimetype="application/json")
+        if not pdf_b64:
+            return Response(json.dumps({"ok": False, "error": "No label PDF stored on this request (labels are only stored since 2026-07-29)"}),
+                            status=400, mimetype="application/json")
+        sent, err = _send_warranty_approval_email(email, (f.get("First Name") or "").strip(), pdf_b64)
+        if not sent:
+            return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
+                            status=500, mimetype="application/json")
+        print(f"[resend-warranty-label] label re-sent to {email} for {record_id}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 _ONTIME_CACHE = {"ts": 0, "data": None}  # reset on every deploy
 _ONTIME_REFRESHING = False
 _ONTIME_LAST_ERROR = {"msg": None, "ts": 0}
@@ -13109,10 +13147,11 @@ def _search_ss_order(order_number):
 
 
 def _send_warranty_approval_email(to_email, first_name, label_pdf_b64):
-    """Send approval email with return label attached. FROM: info@bluealpha.us"""
+    """Send approval email with return label attached. FROM: info@bluealpha.us
+    Returns (success, error_message)."""
     if not SENDGRID_API_KEY:
         print("[warranty_email] SendGrid not configured")
-        return
+        return False, "SendGrid not configured"
     actual_to = TEST_EMAIL_OVERRIDE or to_email
     html_body = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -13170,8 +13209,11 @@ def _send_warranty_approval_email(to_email, first_name, label_pdf_b64):
         )
         if r.status_code != 202:
             print(f"[warranty_email] SendGrid approval returned {r.status_code}: {r.text}")
+            return False, f"SendGrid {r.status_code}"
+        return True, None
     except Exception as e:
         print(f"[warranty_email] Exception sending approval email: {e}")
+        return False, str(e)
 
 
 def _send_warranty_ineligible_email(to_email, first_name, ineligibility_reason, denial_explanation=""):
@@ -13496,6 +13538,9 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     "Warranty Order #":  order_ref,
                     "USPS Tracking":     tracking_url,
                     "Tracking #":        label_tracking,
+                    # Stored so the CS app can re-send the label email later
+                    # (same pattern as the Returns table).
+                    "Label PDF Data":    label_pdf_b64,
                 }
                 req_lib.patch(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
@@ -13661,7 +13706,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 req_lib.patch(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
                     headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}", "Content-Type": "application/json"},
-                    json={"fields": {"Warranty Order #": order_ref, "USPS Tracking": tracking_url, "Tracking #": label_tracking}},
+                    json={"fields": {"Warranty Order #": order_ref, "USPS Tracking": tracking_url,
+                                     "Tracking #": label_tracking, "Label PDF Data": label_pdf_b64}},
                     timeout=10,
                 )
                 print(f"[warranty_webhook] sending replace email to {email}, label_len={len(label_pdf_b64)}", flush=True)
