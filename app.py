@@ -3299,6 +3299,52 @@ def return_label_pdf(record_id):
         return Response(f"Error: {e}", status=500)
 
 
+@app.route("/api/resend-return-label/<record_id>", methods=["POST"])
+def resend_return_label(record_id):
+    """Re-send the return-label email to the customer on file (CS app button).
+
+    Same record-id-as-capability model as /api/return-label — worst case a
+    caller re-sends a customer their own label."""
+    if not RETURNS_TABLE_ID or not RETURNS_WRITE_TOKEN:
+        return Response(json.dumps({"ok": False, "error": "Not configured"}),
+                        status=500, mimetype="application/json")
+    try:
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
+            params={"fields[]": ["Email Address", "Customer Name from Shipstation",
+                                 "Order Number", "Label PDF Data"]},
+            headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return Response(json.dumps({"ok": False, "error": "Return not found"}),
+                            status=404, mimetype="application/json")
+        f = r.json().get("fields", {})
+        email = (f.get("Email Address") or "").strip()
+        pdf_b64 = f.get("Label PDF Data") or ""
+        if not email:
+            return Response(json.dumps({"ok": False, "error": "No customer email on the return"}),
+                            status=400, mimetype="application/json")
+        if not pdf_b64:
+            return Response(json.dumps({"ok": False, "error": "No label PDF on the return"}),
+                            status=400, mimetype="application/json")
+        sent, err = send_return_label_email(
+            to_email=email,
+            customer_name=f.get("Customer Name from Shipstation", ""),
+            order_number=f.get("Order Number", ""),
+            label_pdf_b64=pdf_b64,
+        )
+        if not sent:
+            return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
+                            status=500, mimetype="application/json")
+        print(f"[resend-return-label] label re-sent to {email} for {record_id}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 _ONTIME_CACHE = {"ts": 0, "data": None}  # reset on every deploy
 _ONTIME_REFRESHING = False
 _ONTIME_LAST_ERROR = {"msg": None, "ts": 0}
