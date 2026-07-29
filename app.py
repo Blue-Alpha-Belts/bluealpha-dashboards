@@ -9472,7 +9472,8 @@ def admin_applications():
                 "tax_exemption_number":  f.get("State Tax Exemption #", ""),
                 "tax_cert_url":          (f.get("Tax Exemption Certificate") or [{}])[0].get("url", ""),
                 "tax_cert_filename":     (f.get("Tax Exemption Certificate") or [{}])[0].get("filename", ""),
-                "tax_exempt":            bool(f.get("Tax Exempt", True)),
+                # Airtable omits unchecked checkboxes — absent means NOT exempt
+                "tax_exempt":            bool(f.get("Tax Exempt")),
                 "tax_rate":              float(f.get("Tax Rate") or 0),
                 "status":                f.get("Application Status", "Pending"),
                 "denial_reason":         f.get("Denial Reason", ""),
