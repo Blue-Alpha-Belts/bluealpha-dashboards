@@ -190,7 +190,15 @@
 
           <!-- Shown only when tax exempt -->
           <div id="exemptFields">
-            <div class="form-row">
+            <div class="form-row full">
+              <div class="form-group">
+                <label style="display:flex; align-items:flex-start; gap:8px; font-weight:400; cursor:pointer;">
+                  <input type="checkbox" id="federalEntity" name="federalEntity" style="margin-top:3px; accent-color:var(--navy); flex-shrink:0;">
+                  <span>We are a <strong>federal government entity</strong> (e.g. USMS, DoD, FBI). Federal agencies are exempt from state sales tax by federal law and are not issued state exemption certificates.</span>
+                </label>
+              </div>
+            </div>
+            <div class="form-row" id="stateExemptNumRow">
               <div class="form-group">
                 <label>State Tax Exemption Number <span class="req">*</span></label>
                 <input type="text" name="taxExemptionNumber" placeholder="e.g. TX-98-00123">
@@ -202,7 +210,7 @@
                 <input type="url" name="website" placeholder="https://">
               </div>
             </div>
-            <div class="form-row full">
+            <div class="form-row full" id="certUploadRow">
               <div class="form-group">
                 <label>Tax Exemption Certificate <span style="color:var(--error)">*</span> <span style="font-weight:400;color:var(--muted)">(PDF recommended)</span></label>
                 <div class="upload-area" id="uploadArea" onclick="document.getElementById('exemptionCert').click()">
@@ -396,8 +404,31 @@
           document.getElementById('exemptionCert').value = '';
           document.getElementById('uploadArea').classList.remove('has-file');
           document.getElementById('uploadText').textContent = 'Click to upload your exemption certificate';
+          document.getElementById('federalEntity').checked = false;
+          document.getElementById('federalEntity').dispatchEvent(new Event('change'));
         }
       });
+    });
+
+    // Federal entity: exempt by federal law, no state certificate exists —
+    // hide + waive the state exemption number and certificate upload (EIN stays required)
+    function isFederalEntity() {
+      return isTaxExempt() && document.getElementById('federalEntity').checked;
+    }
+    document.getElementById('federalEntity').addEventListener('change', () => {
+      const fed = document.getElementById('federalEntity').checked;
+      document.getElementById('stateExemptNumRow').style.display = fed ? 'none' : '';
+      document.getElementById('certUploadRow').style.display     = fed ? 'none' : '';
+      if (fed) {
+        const numEl = document.querySelector('[name="taxExemptionNumber"]');
+        numEl.value = '';
+        numEl.classList.remove('error');
+        document.getElementById('exemptionCert').value = '';
+        document.getElementById('uploadArea').classList.remove('has-file');
+        document.getElementById('uploadText').textContent = 'Click to upload your exemption certificate';
+        document.getElementById('uploadArea').style.outline = '';
+        document.getElementById('uploadArea').style.background = '';
+      }
     });
 
     document.getElementById('applyForm').addEventListener('submit', async (e) => {
@@ -464,10 +495,10 @@
         if (!checkPhone(form.querySelector('[name="billingContactPhone"]'))) valid = false;
       }
 
-      // Exemption fields required only when tax exempt
+      // Exemption fields required only when tax exempt — waived for federal entities
       const certFile = document.getElementById('exemptionCert');
       const uploadArea = document.getElementById('uploadArea');
-      if (isTaxExempt()) {
+      if (isTaxExempt() && !isFederalEntity()) {
         if (!checkField(form.querySelector('[name="taxExemptionNumber"]'))) valid = false;
         if (!certFile.files || certFile.files.length === 0) {
           uploadArea.style.outline = '2px solid var(--error)';
@@ -500,7 +531,7 @@
         const scrollTarget = firstErrorEl || certifyRow;
         scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
         if (firstErrorEl) firstErrorEl.focus({ preventScroll: true });
-        const certMsg = isTaxExempt() ? ', upload your tax exemption certificate,' : '';
+        const certMsg = (isTaxExempt() && !isFederalEntity()) ? ', upload your tax exemption certificate,' : '';
         alertArea.innerHTML = `<div class="alert alert-error">Please fill in all highlighted fields${certMsg} and check the confirmation box before submitting.</div>`;
         return;
       }
@@ -508,6 +539,11 @@
       const fd = new FormData(form);
       fd.set('billingSameAsShipping', sameAsShippingCb.checked ? 'true' : 'false');
       fd.set('taxExempt', isTaxExempt() ? 'true' : 'false');
+      // Federal entities have no state certificate — record why none is attached
+      // so the admin approval queue shows it explicitly
+      if (isFederalEntity()) {
+        fd.set('taxExemptionNumber', 'Federal entity — exempt by federal law (no state certificate)');
+      }
       // Merge website from whichever field is visible
       if (!isTaxExempt()) {
         const nonExemptWebsite = (form.querySelector('[name="websiteNonExempt"]') || {}).value || '';
