@@ -5822,7 +5822,8 @@ def accept_quote(record_id):
         customer_id  = customer_ids[0] if customer_ids else None
         po_number    = po_override or mo_fields.get("Purchase Order #", "")
         notes        = mo_fields.get("Notes from Customer", "")
-        date_str     = mo_fields.get("Date", _today_utc().isoformat())
+        # SO Date = the day the quote was accepted, not the quote's original date
+        date_str     = _today_utc().isoformat()
 
         # Create SO record
         # Note: Document ID, MO Is Approved, Ready for ShipStation (SOs), Origin Quote are all
