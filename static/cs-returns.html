@@ -1401,13 +1401,14 @@ async function csSubmitCancellation() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        orderNumber:  orderNum,
-        orderId:      orderData.orderId,
-        customerName: orderData.customerName,
-        items:        selectedItems,
-        reason:       reason,
-        csNotes:      csNotes,
-        csPassword:   csPassword,
+        orderNumber:   orderNum,
+        orderId:       orderData.orderId,
+        customerName:  orderData.customerName,
+        customerEmail: orderData.email || '',
+        items:         selectedItems,
+        reason:        reason,
+        csNotes:       csNotes,
+        csPassword:    csPassword,
       })
     });
     const data = await res.json();
@@ -1454,11 +1455,12 @@ async function csSubmitReshipment() {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-          password:    csPassword,
-          orderNumber: orderNum,
-          items:       items,
-          customerName: (orderData && orderData.customerName) || '',
-          csNotes:     document.getElementById('cs-notes').value.trim(),
+          password:      csPassword,
+          orderNumber:   orderNum,
+          items:         items,
+          customerName:  (orderData && orderData.customerName) || '',
+          customerEmail: (orderData && orderData.email) || '',
+          csNotes:       document.getElementById('cs-notes').value.trim(),
         })
       });
       const result = await res.json();
@@ -1567,11 +1569,13 @@ async function csSubmitShippingRefund() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        csPassword:   csPassword,
-        orderNumber:  orderNum,
-        customerName: orderData ? orderData.customerName : '',
-        reason:       reason,
-        csNotes:      csNotes,
+        csPassword:     csPassword,
+        orderNumber:    orderNum,
+        customerName:   orderData ? orderData.customerName : '',
+        customerEmail:  (orderData && orderData.email) || '',
+        shippingAmount: (orderData && orderData.shippingAmount) || 0,
+        reason:         reason,
+        csNotes:        csNotes,
       })
     });
     const data = await res.json();

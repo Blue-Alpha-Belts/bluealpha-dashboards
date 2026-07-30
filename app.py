@@ -1218,6 +1218,49 @@ def cs_lookup_order():
                         status=500, headers=c, mimetype="application/json")
 
 
+def _send_cs_email(to_email, subject, body):
+    """Plain-text customer notification from the CS portal. Returns True on success."""
+    if not SENDGRID_API_KEY or not to_email:
+        return False
+    try:
+        r = req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": TEST_EMAIL_OVERRIDE or to_email}]}],
+                "from":     {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                "reply_to": {"email": CS_FROM_EMAIL},
+                "subject":  subject,
+                "content":  [{"type": "text/plain", "value": body}],
+            },
+            timeout=15,
+        )
+        return r.status_code in (200, 202)
+    except Exception as e:
+        print(f"[cs-email] send failed: {e}")
+        return False
+
+
+def _first_name(customer_name):
+    return customer_name.split()[0] if (customer_name or "").strip() else "there"
+
+
+def _addr_block(addr):
+    """Format a shipTo/address dict as display lines for customer emails."""
+    lines = [
+        addr.get("name", ""),
+        addr.get("street1", ""),
+        addr.get("street2", ""),
+        f"{addr.get('city', '')}, {addr.get('state', '')} {addr.get('postalCode', '')}".strip(", "),
+    ]
+    return "\n".join(l for l in lines if l and l.strip())
+
+
+def _friendly_date(dt):
+    """Format a datetime as e.g. 'August 28, 2026' (cross-platform, no %-d)."""
+    return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+
+
 def _cs_reship_submit(mode, data, c):
     """Shared logic for cs-missing-submit and cs-incorrect-submit."""
     from datetime import datetime, timezone
@@ -1342,6 +1385,38 @@ def _cs_reship_submit(mode, data, c):
                 )
             except Exception:
                 pass  # tag failure is non-fatal
+
+        # 5. Customer notification
+        item_lines = "\n".join(
+            [f"  • {int(i['qty'])}x {i['name']}" for i in selected_items]
+            + [f"  • {ci['quantity']}x {ci['name']}" for ci in custom_items]
+        )
+        first_name = _first_name(address.get("name", ""))
+        if mode == "missing":
+            subject = f"Your Missing Items Are On the Way — Order #{order_number}"
+            body = (
+                f"Hi {first_name},\n\n"
+                f"Sorry about that! We've confirmed that part of your order #{order_number} was missing "
+                f"from your shipment, and we've created an expedited reshipment to make it right.\n\n"
+                f"On its way to you (order #{new_order_number}):\n{item_lines}\n\n"
+                f"It will ship to:\n{_addr_block(address)}\n\n"
+                f"You'll receive tracking as soon as it ships — and we've flagged it to leave our shop "
+                f"as quickly as possible.\n\n"
+                f"— Blue Alpha"
+            )
+        else:
+            subject = f"Your Replacement Items Are On the Way — Order #{order_number}"
+            body = (
+                f"Hi {first_name},\n\n"
+                f"Sorry about the mix-up! We've confirmed that your order #{order_number} included an "
+                f"incorrect item, and we've created an expedited reshipment with the correct one(s).\n\n"
+                f"On its way to you (order #{new_order_number}):\n{item_lines}\n\n"
+                f"It will ship to:\n{_addr_block(address)}\n\n"
+                f"You'll receive tracking as soon as it ships.\n\n"
+                f"We'll include a prepaid label to return the incorrect item.\n\n"
+                f"— Blue Alpha"
+            )
+        _send_cs_email(customer_email, subject, body)
 
         return Response(json.dumps({"status": "ok", "newOrderNumber": new_order_number}),
                         headers=c, mimetype="application/json")
@@ -1871,7 +1946,6 @@ def cs_intl_exchange_submit():
                     f"Our customer service team has submitted a size exchange for your order #{cs_order_number}.\n\n"
                     f"We'll begin preparing your new belt(s) once we see movement on your shipment.\n\n"
                     f"Please allow 2-4 weeks for delivery.\n\n"
-                    f"Questions? Reply to this email.\n\n"
                     f"— Blue Alpha"
                 )
                 send_resp = req_lib.post(
@@ -1939,7 +2013,6 @@ def cs_intl_exchange_submit():
                     f"{checkout_url}\n\n"
                     f"This link expires in 24 hours. Once payment is received, we'll begin preparing your new belt(s) "
                     f"and ship it once we see movement on your return shipment.\n\n"
-                    f"Questions? Reply to this email.\n\n"
                     f"— Blue Alpha"
                 )
                 send_resp = req_lib.post(
@@ -2014,6 +2087,25 @@ def submit_lost_refund():
         )
         if r.status_code not in (200, 201):
             return Response(json.dumps({"status": "error", "message": r.text}), status=500, headers=c, mimetype="application/json")
+
+        # Customer notification
+        customer_email = data.get("customerEmail", "").strip()
+        if customer_email:
+            _send_cs_email(
+                customer_email,
+                f"Your Blue Alpha Refund — Order #{order_number}",
+                (
+                    f"Hi {_first_name(customer_name)},\n\n"
+                    f"We're sorry your order #{order_number} didn't make it to you — that's frustrating, "
+                    f"and we appreciate your patience while we looked into it.\n\n"
+                    f"We're issuing a full refund to your original payment method. "
+                    f"Please allow 3-5 business days for it to appear on your statement.\n\n"
+                    f"If the package turns up, please reply to this email and we will send you a "
+                    f"prepaid shipping label to use to send it back.\n\n"
+                    f"— Blue Alpha"
+                ),
+            )
+
         return Response(json.dumps({"status": "ok"}), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"status": "error", "message": str(e)}), status=500, headers=c, mimetype="application/json")
@@ -2068,6 +2160,28 @@ def submit_shipping_refund():
         if r.status_code not in (200, 201):
             return Response(json.dumps({"success": False, "error": r.text}),
                             status=500, headers=c, mimetype="application/json")
+
+        # Customer notification
+        customer_email = data.get("customerEmail", "").strip()
+        if customer_email:
+            try:
+                amt = float(data.get("shippingAmount") or 0)
+            except (TypeError, ValueError):
+                amt = 0
+            refund_phrase = (f"a refund of ${amt:.2f} for the UPS shipping fee"
+                             if amt > 0 else "a refund for the UPS shipping fee")
+            _send_cs_email(
+                customer_email,
+                f"Your Blue Alpha Shipping Refund — Order #{order_number}",
+                (
+                    f"Hi {_first_name(customer_name)},\n\n"
+                    f"We've issued {refund_phrase} on your order #{order_number}.\n\n"
+                    f"The refund will go back to your original payment method — "
+                    f"please allow 3-5 business days for it to appear on your statement.\n\n"
+                    f"— Blue Alpha"
+                ),
+            )
+
         return Response(json.dumps({"success": True}), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"success": False, "error": str(e)}),
@@ -2204,6 +2318,25 @@ def submit_reshipment():
         new_order_id = result.get("orderId")
         if not new_order_id:
             return Response(json.dumps({"status": "error", "message": f"ShipStation error: {result}"}), headers=c, mimetype="application/json")
+
+        # Customer notification
+        if customer_email:
+            item_lines = "\n".join(f"  • {i.get('quantity', 1)}x {i.get('name') or i.get('sku', '')}" for i in items)
+            _send_cs_email(
+                customer_email,
+                f"Your Blue Alpha Replacement Order — Order #{original_order_number}",
+                (
+                    f"Hi {_first_name(ship_to.get('name', ''))},\n\n"
+                    f"We're sorry your order #{original_order_number} didn't make it to you. "
+                    f"The good news: a replacement is on the way.\n\n"
+                    f"We've created replacement order #{reship_number} with the following item(s):\n{item_lines}\n\n"
+                    f"It will ship to:\n{_addr_block(ship_to)}\n\n"
+                    f"You'll receive tracking as soon as it ships. If the original package shows up "
+                    f"in the meantime, reply to this email and we will send you a prepaid shipping "
+                    f"label to use to send it back.\n\n"
+                    f"— Blue Alpha"
+                ),
+            )
 
         return Response(json.dumps({
             "status": "ok",
@@ -2402,6 +2535,23 @@ def submit_cancellation():
 
     threading.Thread(target=process_cancellation, args=(record_id, order_id, items), daemon=True).start()
 
+    # Customer notification
+    customer_email = data.get("customerEmail", "").strip()
+    if customer_email:
+        item_lines = "\n".join(f"  • {i.get('quantity', 1)}x {i.get('name') or i.get('sku', '')}" for i in items)
+        _send_cs_email(
+            customer_email,
+            f"Your Blue Alpha Order Cancellation — Order #{order_number}",
+            (
+                f"Hi {_first_name(customer_name)},\n\n"
+                f"We've received your cancellation request for order #{order_number}.\n\n"
+                f"Cancelled item(s):\n{item_lines}\n\n"
+                f"Your refund will be issued to your original payment method. "
+                f"Please allow 3-5 business days for it to appear on your statement.\n\n"
+                f"— Blue Alpha"
+            ),
+        )
+
     return Response(json.dumps({"success": True, "recordId": record_id}),
                     headers=c, mimetype="application/json")
 
@@ -2522,6 +2672,8 @@ def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64
     if not SENDGRID_API_KEY:
         return False, "SendGrid not configured"
     try:
+        from datetime import datetime, timezone, timedelta
+        expire_date = _friendly_date(datetime.now(timezone.utc) + timedelta(days=29))
         first_name = customer_name.split()[0] if customer_name else "there"
         payload = {
             "personalizations": [{"to": [{"email": to_email}]}],
@@ -2530,9 +2682,8 @@ def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64
             "content": [{"type": "text/plain", "value": (
                 f"Hi {first_name},\n\n"
                 "Your return label is attached. Print it, attach it to your package, and drop it off at any USPS location.\n\n"
-                "Please note: this label will expire 30 days from today. Be sure to ship your return before then.\n\n"
+                f"Please note: this label will expire on {expire_date}. Be sure to ship your return before then.\n\n"
                 "Once we receive your return, we'll process it within 3 business days.\n\n"
-                "Questions? Reply to this email and our team will help you out.\n\n"
                 "— Blue Alpha"
             )}],
             "attachments": [{
@@ -4059,7 +4210,7 @@ def submit_exchange():
     c = cors()
     data = request.get_json() or {}
 
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
 
     original_order_id     = data.get("originalOrderId")
     original_order_number = data.get("originalOrderNumber", "")
@@ -4352,15 +4503,19 @@ def submit_exchange():
         if SENDGRID_API_KEY and customer_email:
             first_name = customer_name.split()[0] if customer_name else "there"
             belt_lines = "\n".join(f"  • {i['selectedName']}" for i in items_payload)
+            return_by  = _friendly_date(datetime.now(timezone.utc) + timedelta(days=29))
+            ship_addr  = _addr_block(ship_to)
+            ship_para  = (f"We'll ship your new belt(s) to:\n{ship_addr}\n\n"
+                          if ship_addr else
+                          "We'll ship your new belt(s) to the address on your original order.\n\n")
             email_body = (
                 f"Hi {first_name},\n\n"
-                f"Your size exchange request has been received!\n\n"
+                f"Your size exchange request has been received.\n\n"
                 f"Original Order: #{original_order_number}\n"
                 f"New Belt(s):\n{belt_lines}\n\n"
-                f"We'll ship your new belt(s) to the address on your original order. "
+                f"{ship_para}"
                 f"Your package will include a prepaid return label — please use it to send back "
-                f"your original belt(s) within 30 days.\n\n"
-                f"Questions? Reply to this email and our team will help you out.\n\n"
+                f"your original belt(s) before {return_by}.\n\n"
                 f"— Blue Alpha"
             )
             try:
@@ -10241,7 +10396,6 @@ def submit_apo_exchange():
                 f"We've received your size exchange request for order #{order_number}.\n\n"
                 f"We'll begin preparing your new belt(s) once we see movement on your shipment.\n\n"
                 f"Please allow 2-4 weeks for delivery.\n\n"
-                f"Questions? Reply to this email.\n\n"
                 f"— Blue Alpha"
             )
             req_lib.post(
@@ -10358,7 +10512,6 @@ def international_success():
                 f"We've received your size exchange request for order #{order_number}.\n\n"
                 f"We'll begin preparing your new belt(s) once we see movement on your shipment.\n\n"
                 f"Please allow 2-4 weeks for international delivery.\n\n"
-                f"Questions? Reply to this email.\n\n"
                 f"— Blue Alpha"
             )
             req_lib.post(
