@@ -2667,13 +2667,24 @@ def create_return_items(return_record_id, items_to_return_text):
             print(f"[create_return_items] Failed to create item record for {item_sku}: {e}")
 
 
-def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64):
-    """Send return label PDF to customer via SendGrid. Returns (success, error_message)."""
+def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64, label_date=None):
+    """Send return label PDF to customer via SendGrid. Returns (success, error_message).
+
+    label_date: ISO date the label was created (pass on RE-sends so the
+    deadline stays true to the original label). Defaults to today. The +26
+    matches the CS app's day-27 auto-void — the customer's date is always one
+    day inside the void."""
     if not SENDGRID_API_KEY:
         return False, "SendGrid not configured"
     try:
         from datetime import datetime, timezone, timedelta
-        expire_date = _friendly_date(datetime.now(timezone.utc) + timedelta(days=29))
+        base = datetime.now(timezone.utc)
+        if label_date:
+            try:
+                base = datetime.fromisoformat(str(label_date)[:10]).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
+        expire_date = _friendly_date(base + timedelta(days=26))
         first_name = customer_name.split()[0] if customer_name else "there"
         payload = {
             "personalizations": [{"to": [{"email": TEST_EMAIL_OVERRIDE or to_email}]}],
@@ -3475,7 +3486,7 @@ def resend_return_label(record_id):
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
             params={"fields[]": ["Email Address", "Customer Name from Shipstation",
-                                 "Order Number", "Label PDF Data"]},
+                                 "Order Number", "Label PDF Data", "Submission Date"]},
             headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
             timeout=10,
         )
@@ -3496,6 +3507,7 @@ def resend_return_label(record_id):
             customer_name=f.get("Customer Name from Shipstation", ""),
             order_number=f.get("Order Number", ""),
             label_pdf_b64=pdf_b64,
+            label_date=f.get("Submission Date"),
         )
         if not sent:
             return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
@@ -3518,7 +3530,7 @@ def resend_warranty_label(record_id):
     try:
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
-            params={"fields[]": ["Email", "First Name", "Label PDF Data"]},
+            params={"fields[]": ["Email", "First Name", "Label PDF Data", "Request Date"]},
             headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}"},
             timeout=10,
         )
@@ -3534,7 +3546,8 @@ def resend_warranty_label(record_id):
         if not pdf_b64:
             return Response(json.dumps({"ok": False, "error": "No label PDF stored on this request (labels are only stored since 2026-07-29)"}),
                             status=400, mimetype="application/json")
-        sent, err = _send_warranty_approval_email(email, (f.get("First Name") or "").strip(), pdf_b64)
+        sent, err = _send_warranty_approval_email(email, (f.get("First Name") or "").strip(), pdf_b64,
+                                                  label_date=f.get("Request Date"))
         if not sent:
             return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
                             status=500, mimetype="application/json")
@@ -13327,12 +13340,24 @@ def _search_ss_order(order_number):
         return None
 
 
-def _send_warranty_approval_email(to_email, first_name, label_pdf_b64):
+def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_date=None):
     """Send approval email with return label attached. FROM: info@bluealpha.us
-    Returns (success, error_message)."""
+    Returns (success, error_message).
+
+    label_date: ISO date the label was created (pass on RE-sends). Defaults to
+    today. +26 keeps the customer's deadline one day inside the CS app's
+    day-27 auto-void."""
     if not SENDGRID_API_KEY:
         print("[warranty_email] SendGrid not configured")
         return False, "SendGrid not configured"
+    from datetime import datetime, timezone, timedelta
+    ship_by_base = datetime.now(timezone.utc)
+    if label_date:
+        try:
+            ship_by_base = datetime.fromisoformat(str(label_date)[:10]).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    ship_by = _friendly_date(ship_by_base + timedelta(days=26))
     actual_to = TEST_EMAIL_OVERRIDE or to_email
     html_body = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -13349,7 +13374,10 @@ def _send_warranty_approval_email(to_email, first_name, label_pdf_b64):
             Great news — your warranty request has been approved for repair! Attached is a prepaid return label.
           </p>
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
-            Please print the label, attach it to your package, and drop it off at any USPS location at your earliest convenience. Once we receive your item, we'll get it repaired and back to you as quickly as possible.
+            Please print the label, attach it to your package, and drop it off at any USPS location. Once we receive your item, we'll get it repaired and back to you as quickly as possible.
+          </p>
+          <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
+            Please note: this label will expire on {ship_by}. Be sure to ship your item before then.
           </p>
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0;">
             Questions? Reply to this email and we'll be happy to help.
