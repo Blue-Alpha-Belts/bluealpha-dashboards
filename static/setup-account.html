@@ -124,8 +124,17 @@
         const r = await fetch(`/api/portal/setup-account?token=${encodeURIComponent(_token)}`);
         const d = await r.json();
         if (!d.ok) {
-          document.getElementById('msg').className = 'msg error';
-          document.getElementById('msg').textContent = d.error || 'Invalid or expired link.';
+          const msgEl = document.getElementById('msg');
+          msgEl.className = 'msg error';
+          msgEl.textContent = d.error || 'Invalid or expired link.';
+          if (d.alreadySetup) {
+            const a = document.createElement('a');
+            a.href = '/login';
+            a.textContent = 'Go to Login →';
+            a.style.cssText = 'display:inline-block;margin-top:10px;font-weight:700;color:#1B2438;';
+            msgEl.appendChild(document.createElement('br'));
+            msgEl.appendChild(a);
+          }
           document.getElementById('formWrap').style.display = 'none';
           return;
         }

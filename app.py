@@ -7739,6 +7739,12 @@ def portal_setup_account_info():
                 if exp_dt.tzinfo is None:
                     exp_dt = exp_dt.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) > exp_dt:
+                    if f.get("Portal Hash") and (f.get("Portal Username") or "").strip():
+                        return Response(json.dumps({
+                            "error": "This account is already set up — log in with your username and password. "
+                                     "Forgot them? Request a new link from the login page.",
+                            "alreadySetup": True,
+                        }), status=400, headers=c, mimetype="application/json")
                     return Response(json.dumps({"error": "This link has expired. Use the login page to request a new one."}),
                                     status=400, headers=c, mimetype="application/json")
             except Exception:
@@ -7792,6 +7798,12 @@ def portal_setup_account():
                 if exp_dt.tzinfo is None:
                     exp_dt = exp_dt.replace(tzinfo=timezone.utc)
                 if datetime.now(timezone.utc) > exp_dt:
+                    if f.get("Portal Hash") and (f.get("Portal Username") or "").strip():
+                        return Response(json.dumps({
+                            "error": "This account is already set up — log in with your username and password. "
+                                     "Forgot them? Request a new link from the login page.",
+                            "alreadySetup": True,
+                        }), status=400, headers=c, mimetype="application/json")
                     return Response(json.dumps({"error": "This link has expired. Go back to the login page and request a new one — it will be sent to your email."}),
                                     status=400, headers=c, mimetype="application/json")
             except Exception:
@@ -7807,17 +7819,19 @@ def portal_setup_account():
                 return Response(json.dumps({"error": "Username already taken — please choose another"}),
                                 status=400, headers=c, mimetype="application/json")
 
-        # Set username + password, clear invite token
+        # Set username + password. Expire the invite token rather than deleting it,
+        # so a second click on the same link is recognized as "already set up"
+        # instead of a generic invalid-link error.
         pw_hash = _hash_password(password)
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         req_lib.patch(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{rec['id']}",
             headers={**at_headers(write_token), "Content-Type": "application/json"},
             json={"fields": {
                 "Portal Username": username,
                 "Portal Hash":   pw_hash,
-                "Magic Token":     "",
-                "Token Expiry":    None,
-                "Last Login":      datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                "Token Expiry":    now_iso,
+                "Last Login":      now_iso,
             }},
             timeout=10,
         )
