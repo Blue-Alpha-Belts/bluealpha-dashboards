@@ -2676,7 +2676,7 @@ def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64
         expire_date = _friendly_date(datetime.now(timezone.utc) + timedelta(days=29))
         first_name = customer_name.split()[0] if customer_name else "there"
         payload = {
-            "personalizations": [{"to": [{"email": to_email}]}],
+            "personalizations": [{"to": [{"email": TEST_EMAIL_OVERRIDE or to_email}]}],
             "from": {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
             "subject": f"Your Blue Alpha Return Label — Order #{order_number}",
             "content": [{"type": "text/plain", "value": (
