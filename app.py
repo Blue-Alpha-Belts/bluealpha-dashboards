@@ -1231,7 +1231,19 @@ def _cs_reship_submit(mode, data, c):
     selected_items = data.get("selectedItems", [])
     notes          = data.get("notes", "").strip()
 
-    if not order_number or not selected_items:
+    # Description-only extras (no SKU) added by CS — name + quantity only
+    custom_items = []
+    for ci in data.get("customItems", []) or []:
+        name = str(ci.get("name", "")).strip()
+        if not name:
+            continue
+        try:
+            qty = max(1, int(ci.get("qty", 1)))
+        except (TypeError, ValueError):
+            qty = 1
+        custom_items.append({"name": name[:200], "quantity": qty, "unitPrice": 0})
+
+    if not order_number or (not selected_items and not custom_items):
         return Response(json.dumps({"status": "error", "error": "Missing required fields"}),
                         status=400, headers=c, mimetype="application/json")
 
@@ -1299,7 +1311,7 @@ def _cs_reship_submit(mode, data, c):
             "items": [
                 {"sku": i["sku"], "name": i["name"], "quantity": int(i["qty"]), "unitPrice": 0}
                 for i in selected_items
-            ],
+            ] + custom_items,
             "carrierCode":  "stamps_com",
             "serviceCode":  "usps_ground_advantage",
             "packageCode":  "package",

@@ -614,6 +614,13 @@
       <!-- Missing/Incorrect item selection panel -->
       <div id="reship-panel" class="hidden">
         <div id="reship-groups"></div>
+        <!-- Additional description-only items (Incorrect mode only) -->
+        <div id="reship-custom-section" class="hidden" style="margin-top:14px;">
+          <div style="font-weight:600;font-size:0.875rem;margin-bottom:4px;color:#1b2438;">Additional Items</div>
+          <div style="font-size:0.8rem;color:#66707f;margin-bottom:8px;">Description-only items (no SKU) to include on the reshipment order.</div>
+          <div id="reship-custom-items"></div>
+          <button type="button" class="btn btn-sm" onclick="addCustomReshipItem()" style="background:#eef2f7;border:1px solid #dde3ea;color:#1b2438;">+ Add Item</button>
+        </div>
         <!-- Notes — always available; the size/color warning appears only for special SKUs -->
         <div id="reship-notes-section" style="margin-top:14px;">
           <div id="reship-notes-warning" class="hidden" style="background:#fff8e1;border:1px solid #f9c73a;border-radius:6px;padding:10px 14px;margin-bottom:10px;font-size:0.875rem;color:#7a5800;">
@@ -2131,6 +2138,32 @@ function buildReshipGroups(orderGroups) {
   if (notesWarn) notesWarn.classList.toggle('hidden', !hasSpecialSku);
   const notesReq = document.getElementById('reship-notes-req');
   if (notesReq) notesReq.classList.toggle('hidden', !hasSpecialSku);
+
+  // Additional description-only items — Incorrect mode only
+  document.getElementById('reship-custom-section').classList.toggle('hidden', currentMode !== 'incorrect');
+  document.getElementById('reship-custom-items').innerHTML = '';
+}
+
+function addCustomReshipItem() {
+  const list = document.getElementById('reship-custom-items');
+  const row = document.createElement('div');
+  row.className = 'reship-custom-row';
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px;';
+  row.innerHTML =
+    '<input type="text" class="custom-item-desc" placeholder="Item description" style="flex:1;padding:7px 10px;border:1px solid #dde3ea;border-radius:6px;font-size:0.875rem;">' +
+    '<input type="number" class="custom-item-qty" value="1" min="1" style="width:55px;padding:3px 6px;border:1px solid #dde3ea;border-radius:4px;font-size:0.875rem;">' +
+    '<button type="button" onclick="this.parentElement.remove()" title="Remove" style="background:none;border:none;color:#c0392b;font-size:1.05rem;cursor:pointer;padding:2px 6px;line-height:1;">&#10005;</button>';
+  list.appendChild(row);
+  row.querySelector('.custom-item-desc').focus();
+}
+
+function getCustomReshipItems() {
+  return Array.from(document.querySelectorAll('#reship-custom-items .reship-custom-row')).map(function(row) {
+    return {
+      name: row.querySelector('.custom-item-desc').value.trim(),
+      qty:  parseInt(row.querySelector('.custom-item-qty').value) || 1,
+    };
+  }).filter(function(i) { return i.name; });
 }
 
 async function submitReship(evt) {
@@ -2144,7 +2177,8 @@ async function submitReship(evt) {
       }
     });
   });
-  if (selectedItems.length === 0) {
+  const customItems = currentMode === 'incorrect' ? getCustomReshipItems() : [];
+  if (selectedItems.length === 0 && customItems.length === 0) {
     document.getElementById('msg-reship-none').classList.add('show');
     return;
   }
@@ -2180,6 +2214,7 @@ async function submitReship(evt) {
         customerEmail: orderData.email || '',
         address,
         selectedItems,
+        customItems,
         notes:         reshipNotes,
       }),
     });
@@ -2250,6 +2285,8 @@ function resetForm() {
   intlVerifyData = null;
   intlOptionsCache = {};
   document.getElementById('reship-groups').innerHTML = '';
+  document.getElementById('reship-custom-items').innerHTML = '';
+  document.getElementById('reship-custom-section').classList.add('hidden');
   document.getElementById('reship-name').value    = '';
   document.getElementById('reship-street1').value = '';
   document.getElementById('reship-street2').value = '';
