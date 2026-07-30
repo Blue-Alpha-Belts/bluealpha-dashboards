@@ -13283,6 +13283,21 @@ def warranty_submit():
             except Exception as photo_err:
                 print(f"[warranty_submit] Photo patch error: {photo_err}")
 
+        # Submission confirmation — only for plain customer submissions.
+        # CS submissions arrive with Approval pre-set and get a decision email instead.
+        if not approval:
+            _send_cs_email(
+                email,
+                "We've Received Your Warranty Request",
+                (
+                    f"Hi {first_name},\n\n"
+                    f"We've received your warranty request and our team is reviewing it.\n\n"
+                    f"We'll follow up at this email address once we've had a chance to review — "
+                    f"typically within 2 business days.\n\n"
+                    f"— Blue Alpha"
+                ),
+            )
+
         return Response(
             json.dumps({"success": True}),
             status=200, headers=c, mimetype="application/json",
