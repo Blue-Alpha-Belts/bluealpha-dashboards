@@ -9724,7 +9724,7 @@ def admin_applications():
                     "Bill-To Address (Line 1)", "Bill-To Address (Line 2)",
                     "State Tax Exemption #", "Tax Exempt", "Tax Exemption Certificate", "Tax Rate",
                     "Application Status", "Denial Reason", "Applied Date",
-                    "Portal Hash", "Portal Role"],
+                    "Registered Date", "Portal Hash", "Portal Role", "Portal Username"],
             formula="NOT({Application Status}='')",
         )
         apps = []
@@ -9757,8 +9757,10 @@ def admin_applications():
                 "status":                f.get("Application Status", "Pending"),
                 "denial_reason":         f.get("Denial Reason", ""),
                 "applied_date":          f.get("Applied Date", ""),
+                "registered_date":       f.get("Registered Date", ""),
                 "portal_setup":          bool(f.get("Portal Hash", "")),
                 "portal_role":           f.get("Portal Role", ""),
+                "portal_username":       f.get("Portal Username", ""),
             })
         # Sort most recent first
         apps.sort(key=lambda x: x.get("applied_date", ""), reverse=True)

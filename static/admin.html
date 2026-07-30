@@ -316,6 +316,7 @@
       <div class="tabs" id="tabBar">
         <!-- Admin tabs -->
         <div class="tab admin-only active" data-tab="pending">Pending</div>
+        <div class="tab admin-only" data-tab="registered">Registered</div>
         <div class="tab admin-only" data-tab="approved">Approved</div>
         <div class="tab admin-only" data-tab="denied">Denied</div>
         <!-- CS-only tab -->
@@ -334,6 +335,12 @@
       <div class="tab-panel active" id="tab-pending">
         <div class="card">
           <div id="pendingContent" class="loading">Loading…</div>
+        </div>
+      </div>
+      <!-- Admin: Registered (accounts that haven't applied for ordering) -->
+      <div class="tab-panel" id="tab-registered">
+        <div class="card">
+          <div id="registeredContent" class="loading">Loading…</div>
         </div>
       </div>
       <!-- Admin: Approved -->
@@ -654,6 +661,7 @@
       allApps = data.applications || [];
       if (currentRole === 'admin') {
         renderPending();
+        renderRegistered();
         renderApproved();
         renderDenied();
       } else {
@@ -803,6 +811,36 @@
     function renderPending()  { renderTable(allApps.filter(a => a.status === 'Pending'),  'pendingContent',  true); }
     function renderApproved() { renderTable(allApps.filter(a => a.status === 'Approved'), 'approvedContent', false); }
     function renderDenied()   { renderTable(allApps.filter(a => a.status === 'Denied'),   'deniedContent',   false); }
+
+    // Registered = self-registered portal accounts (quote-only) that haven't applied for ordering access
+    function renderRegistered() {
+      const apps = allApps.filter(a => a.status === 'Registered')
+        .sort((x, y) => (y.registered_date || '').localeCompare(x.registered_date || ''));
+      const el = document.getElementById('registeredContent');
+      if (!apps.length) {
+        el.innerHTML = '<div class="empty-state">No registered accounts awaiting an ordering application.</div>';
+        return;
+      }
+      let html = '<div style="color:#6b7a8d;font-size:0.85rem;margin-bottom:12px;">' +
+        'These organizations created portal accounts (quote-only) but haven\'t applied for ordering access yet. ' +
+        'They can build quotes but cannot place orders until they apply and are approved.</div>' +
+        '<table><thead><tr><th>Company</th><th>Contact</th><th>Registered</th><th>Portal Account</th></tr></thead><tbody>';
+      apps.forEach(a => {
+        const acct = a.portal_setup
+          ? `<span style="color:#155724;font-size:0.82rem;">✅ Active${a.portal_username ? ' — ' + esc(a.portal_username) : ''}</span>`
+          : `<span style="color:#856404;font-size:0.82rem;">⚠ Setup not finished</span>
+             <button class="btn btn-outline btn-sm" style="margin-left:8px;font-size:0.75rem;padding:2px 8px;"
+               onclick="sendPortalInvite('${a.id}','${esc(a.shipping_contact_email || '')}','${esc(a.company_name)}',this)">📧 Resend Link</button>`;
+        html += `<tr>
+          <td><strong>${esc(a.company_name)}</strong></td>
+          <td>${esc(a.shipping_contact_name || '')}<br><span style="color:var(--muted);font-size:0.82rem;">${esc(a.shipping_contact_email || '')}</span></td>
+          <td>${fmt(a.registered_date)}</td>
+          <td>${acct}</td>
+        </tr>`;
+      });
+      html += '</tbody></table>';
+      el.innerHTML = html;
+    }
 
     async function approveApp(appId, btn) {
       // Non-exempt applicants must have a tax rate entered before approval
