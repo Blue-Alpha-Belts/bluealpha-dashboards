@@ -3675,6 +3675,59 @@ def resend_cancellation_email(record_id):
                         status=500, mimetype="application/json")
 
 
+@app.route("/api/send-warranty-clarification/<record_id>", methods=["POST"])
+def send_warranty_clarification(record_id):
+    """CS can't decide a warranty request yet — email the customer why (CS app
+    'Clarification needed' decision). Body: {"reason": "..."}, CS-written,
+    dropped into the template below. Deliberately NOT part of the warranty
+    scan: no label, no order, just the email."""
+    if not WARRANTY_TABLE_ID or not WARRANTY_WRITE_TOKEN:
+        return Response(json.dumps({"ok": False, "error": "Not configured"}),
+                        status=500, mimetype="application/json")
+    try:
+        data = request.get_json(silent=True) or {}
+        reason = (data.get("reason") or "").strip()[:500]
+        if not reason:
+            return Response(json.dumps({"ok": False, "error": "No reason given"}),
+                            status=400, mimetype="application/json")
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or WARRANTY_WRITE_TOKEN
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
+            headers={"Authorization": f"Bearer {read_token}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return Response(json.dumps({"ok": False, "error": "Warranty request not found"}),
+                            status=404, mimetype="application/json")
+        f = r.json().get("fields", {})
+        email = (f.get("Email") or "").strip()
+        if not email:
+            return Response(json.dumps({"ok": False, "error": "No customer email on the request"}),
+                            status=400, mimetype="application/json")
+        sent = _send_cs_email(
+            email,
+            "Your Blue Alpha Warranty Request — We Need More Info",
+            (
+                f"Hi {(f.get('First Name') or '').strip()},\n\n"
+                f"Thanks for your warranty request. We aren't able to make a decision on it "
+                f"yet due to the following:\n\n"
+                f"{reason}\n\n"
+                f"Just reply to this email with the missing info and we'll take another "
+                f"look right away.\n\n"
+                f"— Blue Alpha"
+            ),
+        )
+        if not sent:
+            return Response(json.dumps({"ok": False, "error": "Email failed"}),
+                            status=500, mimetype="application/json")
+        print(f"[send-warranty-clarification] sent to {email} for {record_id}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 _ONTIME_CACHE = {"ts": 0, "data": None}  # reset on every deploy
 _ONTIME_REFRESHING = False
 _ONTIME_LAST_ERROR = {"msg": None, "ts": 0}
