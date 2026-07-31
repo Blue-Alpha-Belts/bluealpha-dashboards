@@ -3560,6 +3560,115 @@ def resend_warranty_label(record_id):
                         status=500, mimetype="application/json")
 
 
+@app.route("/api/resend-warranty-confirmation/<record_id>", methods=["POST"])
+def resend_warranty_confirmation(record_id):
+    """Re-send the we-received-your-request confirmation for a warranty request.
+    Same body as the one warranty_submit sends on plain customer submissions."""
+    if not WARRANTY_TABLE_ID or not WARRANTY_WRITE_TOKEN:
+        return Response(json.dumps({"ok": False, "error": "Not configured"}),
+                        status=500, mimetype="application/json")
+    try:
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
+            headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return Response(json.dumps({"ok": False, "error": "Warranty request not found"}),
+                            status=404, mimetype="application/json")
+        f = r.json().get("fields", {})
+        email = (f.get("Email") or "").strip()
+        if not email:
+            return Response(json.dumps({"ok": False, "error": "No customer email on the request"}),
+                            status=400, mimetype="application/json")
+        sent = _send_cs_email(
+            email,
+            "We've Received Your Warranty Request",
+            (
+                f"Hi {(f.get('First Name') or '').strip()},\n\n"
+                f"We've received your warranty request and our team is reviewing it.\n\n"
+                f"We'll follow up at this email address once we've had a chance to review — "
+                f"typically within 2 business days.\n\n"
+                f"— Blue Alpha"
+            ),
+        )
+        if not sent:
+            return Response(json.dumps({"ok": False, "error": "Email failed"}),
+                            status=500, mimetype="application/json")
+        print(f"[resend-warranty-confirmation] confirmation re-sent to {email} for {record_id}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
+@app.route("/api/resend-cancellation-email/<record_id>", methods=["POST"])
+def resend_cancellation_email(record_id):
+    """Re-send the cancellation confirmation for a Returns record of Type
+    Cancellation. The record stores no email (the submit flow emails the
+    address from the ShipStation lookup and never saves it), so fall back to
+    the order's ShipStation customerEmail."""
+    if not RETURNS_TABLE_ID or not RETURNS_WRITE_TOKEN:
+        return Response(json.dumps({"ok": False, "error": "Not configured"}),
+                        status=500, mimetype="application/json")
+    try:
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
+            headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return Response(json.dumps({"ok": False, "error": "Return not found"}),
+                            status=404, mimetype="application/json")
+        f = r.json().get("fields", {})
+        if (f.get("Type") or "") != "Cancellation":
+            return Response(json.dumps({"ok": False, "error": "Not a cancellation record"}),
+                            status=400, mimetype="application/json")
+        order_number = (f.get("Order Number") or "").strip()
+        email = (f.get("Email Address") or "").strip()
+        if not email and order_number:
+            ss_order = _search_ss_order(order_number)
+            email = ((ss_order or {}).get("customerEmail") or "").strip()
+        if not email:
+            return Response(json.dumps({"ok": False, "error": "No customer email on the return or its ShipStation order"}),
+                            status=400, mimetype="application/json")
+        # "Items to Return" lines look like "1x SKU — Name"; the original email
+        # showed "  • 1x Name".
+        item_lines = []
+        for raw in (f.get("Items to Return") or "").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            if " — " in raw:
+                left, name = raw.split(" — ", 1)
+                qty = left.split("x", 1)[0].strip() or "1"
+                item_lines.append(f"  • {qty}x {name.strip()}")
+            else:
+                item_lines.append(f"  • {raw}")
+        sent = _send_cs_email(
+            email,
+            f"Your Blue Alpha Order Cancellation — Order #{order_number}",
+            (
+                f"Hi {_first_name(f.get('Customer Name from Shipstation', ''))},\n\n"
+                f"We've received your cancellation request for order #{order_number}.\n\n"
+                f"Cancelled item(s):\n" + "\n".join(item_lines) + "\n\n"
+                f"Your refund will be issued to your original payment method. "
+                f"Please allow 3-5 business days for it to appear on your statement.\n\n"
+                f"— Blue Alpha"
+            ),
+        )
+        if not sent:
+            return Response(json.dumps({"ok": False, "error": "Email failed"}),
+                            status=500, mimetype="application/json")
+        print(f"[resend-cancellation-email] confirmation re-sent to {email} for {record_id}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 _ONTIME_CACHE = {"ts": 0, "data": None}  # reset on every deploy
 _ONTIME_REFRESHING = False
 _ONTIME_LAST_ERROR = {"msg": None, "ts": 0}
