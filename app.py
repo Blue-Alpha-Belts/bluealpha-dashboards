@@ -3485,10 +3485,13 @@ def resend_return_label(record_id):
     try:
         # Single-record GET: Airtable rejects the fields[] param here (422,
         # "parameter validation failed") — it's list-endpoint only. Fetch the
-        # whole record; we read the fields we need off it.
+        # whole record; we read the fields we need off it. Read with the same
+        # token chain the rest of the app reads with — the write tokens are
+        # write-scoped and 403 on GETs.
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
-            headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
+            headers={"Authorization": f"Bearer {read_token}"},
             timeout=10,
         )
         if r.status_code != 200:
@@ -3529,10 +3532,11 @@ def resend_warranty_label(record_id):
         return Response(json.dumps({"ok": False, "error": "Not configured"}),
                         status=500, mimetype="application/json")
     try:
-        # Same fields[]-on-record-GET fix as resend_return_label above.
+        # Same fields[]-on-record-GET and read-token fixes as resend_return_label.
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or WARRANTY_WRITE_TOKEN
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
-            headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}"},
+            headers={"Authorization": f"Bearer {read_token}"},
             timeout=10,
         )
         if r.status_code != 200:
@@ -3568,9 +3572,10 @@ def resend_warranty_confirmation(record_id):
         return Response(json.dumps({"ok": False, "error": "Not configured"}),
                         status=500, mimetype="application/json")
     try:
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or WARRANTY_WRITE_TOKEN
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
-            headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}"},
+            headers={"Authorization": f"Bearer {read_token}"},
             timeout=10,
         )
         if r.status_code != 200:
@@ -3613,9 +3618,10 @@ def resend_cancellation_email(record_id):
         return Response(json.dumps({"ok": False, "error": "Not configured"}),
                         status=500, mimetype="application/json")
     try:
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
-            headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
+            headers={"Authorization": f"Bearer {read_token}"},
             timeout=10,
         )
         if r.status_code != 200:
