@@ -13798,7 +13798,32 @@ def warranty_webhook():
                         status=500, headers=cors(), mimetype="application/json")
 
 
+def _clear_warranty_lock(record_id, order_ref):
+    """Best-effort undo of the Warranty Order # idempotency lock after a
+    failure partway through processing. Without this, one timeout mid-flow
+    left the lock in place and the record permanently skipped as
+    already-processed with no label/order/email (the 2026-07-31 Guffey
+    strand). Clearing the lock lets the next scan retry the record."""
+    try:
+        resp = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
+            headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}", "Content-Type": "application/json"},
+            json={"fields": {"Warranty Order #": ""}}, timeout=15,
+        )
+        if resp.ok:
+            print(f"[warranty_webhook] cleared Warranty Order # lock ({order_ref}) for {record_id} after failure — next scan retries it", flush=True)
+        else:
+            print(f"[warranty_webhook] STRANDED: could not clear lock ({order_ref}) for {record_id}: {resp.text[:200]} — clear Warranty Order # by hand to retry", flush=True)
+    except Exception as clear_err:
+        print(f"[warranty_webhook] STRANDED: lock clear failed for {record_id}: {clear_err} — clear Warranty Order # by hand to retry", flush=True)
+
+
 def _warranty_webhook_inner(record_id, trigger, c):
+    # Lock-undo bookkeeping: set when the Warranty Order # lock is written,
+    # cleared again once the durable work (label/order + Airtable update) is
+    # done. If an error escapes in between, the except below removes the lock
+    # so the record isn't silently stranded as "already processed".
+    _pending_lock = {"ref": None}
     try:
         # ── Fetch full Airtable record (use read token — write token lacks read scope) ──
         _read_tok = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or WARRANTY_WRITE_TOKEN
@@ -13868,6 +13893,7 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     print(f"[warranty_webhook] ABORT — could not write Warranty Order # lock for {record_id}: {_lock_resp.text[:200]}", flush=True)
                     return Response(json.dumps({"success": False, "error": "Failed to write idempotency lock — aborting to prevent duplicate"}),
                                     status=500, headers=c, mimetype="application/json")
+                _pending_lock["ref"] = order_ref
 
                 # ── Look up original SS order if we have an order number ──
                 orig_ss_order_id = None
@@ -13915,6 +13941,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     timeout=20,
                 )
                 if not label_resp.ok:
+                    _clear_warranty_lock(record_id, order_ref)
+                    _pending_lock["ref"] = None
                     return Response(
                         json.dumps({"success": False, "error": f"SS createlabel failed: {label_resp.text[:300]}"}),
                         status=500, headers=c, mimetype="application/json",
@@ -13945,6 +13973,10 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     json={"fields": at_update_fields},
                     timeout=15,
                 )
+                # Durable work done (label exists, Tracking # written) — an
+                # email failure past this point must NOT clear the lock, or a
+                # retry would create a second label.
+                _pending_lock["ref"] = None
 
                 # ── Send approval email ──
                 print(f"[warranty_webhook] sending approval email to {email}, label_data_len={len(label_pdf_b64)}", flush=True)
@@ -13994,6 +14026,7 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     print(f"[warranty_webhook] ABORT — could not write Warranty Order # lock for {record_id}: {_lock_resp.text[:200]}", flush=True)
                     return Response(json.dumps({"success": False, "error": "Failed to write idempotency lock — aborting to prevent duplicate"}),
                                     status=500, headers=c, mimetype="application/json")
+                _pending_lock["ref"] = order_ref
                 today_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000")
                 _caddr = {"name": f"{first_name} {last_name}".strip(), "street1": address,
                           "city": city, "state": state, "postalCode": zip_code, "country": "US", "phone": phone}
@@ -14014,6 +14047,10 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 )
                 if not order_resp.ok:
                     print(f"[warranty_webhook] replace_wo_return SS order warning: {order_resp.text[:300]}", flush=True)
+                # Durable work done (SS order exists; createorder with the
+                # same orderKey is a replace, so a retry wouldn't duplicate,
+                # but the email would re-send) — keep the lock from here on.
+                _pending_lock["ref"] = None
                 req_lib.patch(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
                     headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}", "Content-Type": "application/json"},
@@ -14048,6 +14085,7 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     print(f"[warranty_webhook] ABORT — could not write Warranty Order # lock for {record_id}: {_lock_resp.text[:200]}", flush=True)
                     return Response(json.dumps({"success": False, "error": "Failed to write idempotency lock — aborting to prevent duplicate"}),
                                     status=500, headers=c, mimetype="application/json")
+                _pending_lock["ref"] = order_ref
 
                 # Create return label
                 label_resp = req_lib.post(
@@ -14064,6 +14102,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     timeout=20,
                 )
                 if not label_resp.ok:
+                    _clear_warranty_lock(record_id, order_ref)
+                    _pending_lock["ref"] = None
                     return Response(json.dumps({"success": False, "error": f"SS createlabel failed: {label_resp.text[:300]}"}),
                                     status=500, headers=c, mimetype="application/json")
                 label_result   = label_resp.json()
@@ -14104,6 +14144,9 @@ def _warranty_webhook_inner(record_id, trigger, c):
                                      "Tracking #": label_tracking, "Label PDF Data": label_pdf_b64}},
                     timeout=10,
                 )
+                # Durable work done (label + SS order exist, Tracking #
+                # written) — keep the lock from here on.
+                _pending_lock["ref"] = None
                 print(f"[warranty_webhook] sending replace email to {email}, label_len={len(label_pdf_b64)}", flush=True)
                 _send_warranty_replace_email(email, first_name, replacement_item, label_pdf_b64)
                 return Response(json.dumps({"success": True, "action": "replace", "orderRef": order_ref}),
@@ -14216,7 +14259,12 @@ def _warranty_webhook_inner(record_id, trigger, c):
             )
 
     except Exception as e:
-        print(f"[warranty_webhook] Unexpected error: {e}")
+        print(f"[warranty_webhook] Unexpected error for {record_id}: {e}", flush=True)
+        # Undo the idempotency lock if we failed between writing it and
+        # finishing the durable work — otherwise the record is stranded as
+        # "already processed" with no label, order, or email.
+        if _pending_lock["ref"]:
+            _clear_warranty_lock(record_id, _pending_lock["ref"])
         return Response(
             json.dumps({"success": False, "error": str(e)}),
             status=500, headers=c, mimetype="application/json",
