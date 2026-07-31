@@ -3483,10 +3483,11 @@ def resend_return_label(record_id):
         return Response(json.dumps({"ok": False, "error": "Not configured"}),
                         status=500, mimetype="application/json")
     try:
+        # Single-record GET: Airtable rejects the fields[] param here (422,
+        # "parameter validation failed") — it's list-endpoint only. Fetch the
+        # whole record; we read the fields we need off it.
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
-            params={"fields[]": ["Email Address", "Customer Name from Shipstation",
-                                 "Order Number", "Label PDF Data", "Submission Date"]},
             headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
             timeout=10,
         )
@@ -3528,9 +3529,9 @@ def resend_warranty_label(record_id):
         return Response(json.dumps({"ok": False, "error": "Not configured"}),
                         status=500, mimetype="application/json")
     try:
+        # Same fields[]-on-record-GET fix as resend_return_label above.
         r = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
-            params={"fields[]": ["Email", "First Name", "Label PDF Data", "Request Date"]},
             headers={"Authorization": f"Bearer {WARRANTY_WRITE_TOKEN}"},
             timeout=10,
         )
