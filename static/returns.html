@@ -395,6 +395,12 @@
       <textarea id="reason-other" placeholder="Tell us more…"></textarea>
     </div>
 
+    <div class="field">
+      <label>Notes <span style="font-weight:400; color:#6b6b5e; font-size:0.85rem;">(optional)</span></label>
+      <textarea id="customer-notes" placeholder="Anything else we should know?"></textarea>
+      <div class="address-note">Only sending back part of an item? Let us know here — for example, "keeping the belt, returning just the buckle."</div>
+    </div>
+
     <div class="message message-error hidden" id="msg-submit-error">
       <strong>Submission failed</strong>
       Something went wrong. Please try again or contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a>.
@@ -733,6 +739,7 @@ async function submitReturn() {
         address:          orderData.address,
         itemsToReturn:    itemsSummary,
         reasonForReturn:  finalReason,
+        customerNotes:    document.getElementById('customer-notes').value.trim(),
         shipDate:         orderData.shipDate,
         eligibleUntil:    orderData.eligibleUntil,
         orderId:          orderData.orderId,

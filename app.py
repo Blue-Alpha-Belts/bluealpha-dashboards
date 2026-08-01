@@ -2818,6 +2818,7 @@ def submit_return():
     # the dedicated Status Notes field (2026-07-28, Patty: notes need to show
     # as notes in the cs.bluealphaops portal, not buried in the reason text).
     reason_for_return = data.get("reasonForReturn", "")
+    customer_notes = data.get("customerNotes", "").strip()
     cs_notes = ""
     if data.get("csException"):
         cs_notes = data.get("csNotes", "").strip()
@@ -2831,6 +2832,7 @@ def submit_return():
         "Confirmed Shipping Address":     address_str,
         "Items to Return":                data.get("itemsToReturn", ""),
         "Reason for Return":              reason_for_return,
+        "Customer Notes":                 customer_notes,
         "Status Notes":                   cs_notes,
         "Submission Date":                datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "Ship Date from Shipstation":     data.get("shipDate", "")[:10] if data.get("shipDate") else "",
@@ -2915,7 +2917,9 @@ def submit_return():
         if existing_nr_ids:
             # Reuse the first existing record; delete any extras
             record_id = existing_nr_ids[0]
-            patch_fields = {**fields, "Status": "New", "Status Notes": ""}
+            # Explicitly reset fields that the empty-value filter above may have
+            # dropped, so a retry doesn't inherit stale values from the old record
+            patch_fields = {**fields, "Status": "New", "Status Notes": "", "Customer Notes": customer_notes}
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
                 headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}", "Content-Type": "application/json"},
