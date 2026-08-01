@@ -7805,8 +7805,12 @@ def portal_register():
                 return Response(json.dumps({"error": "An account with this email already exists. Please log in instead.",
                                             "emailTaken": True}),
                                 status=409, headers=c, mimetype="application/json")
-            if f.get("Application Status") == "Registered":
-                # Registered earlier but never finished setup — resend the verification link
+            # No credentials yet on a loginable record (Registered = never finished
+            # setup; blank = legacy/pre-registration customer; Pending/Approved =
+            # applied or invited but never set up) — send a setup link rather than
+            # bouncing them to a login page that can't help. Only denied/blocked
+            # statuses keep the hard 409.
+            if f.get("Application Status", "") in ("", "Registered", "Pending", "Approved"):
                 setup_link = _generate_portal_invite(rec["id"], write_token, expiry_hours=48)
                 send_registration_email(email, f.get("Main Contact Name", contact_name),
                                         f.get("Organization Name", org_name), setup_link)
@@ -8043,8 +8047,10 @@ def auth_magic_link(token):
         if not expiry_str:
             return send_from_directory("static", "auth-error.html"), 401
 
-        # Check Application Status (Registered/Pending = self-serve quote-only accounts)
-        if uf.get("Application Status") not in ("Approved", "Registered", "Pending"):
+        # Check Application Status (Registered/Pending = self-serve quote-only accounts;
+        # blank = legacy customer, allowed — matches password login in _lookup_portal_customer)
+        _app_status = uf.get("Application Status", "")
+        if _app_status and _app_status not in ("Approved", "Registered", "Pending"):
             return send_from_directory("static", "auth-error.html"), 401
 
         # Check expiry
@@ -8852,11 +8858,14 @@ def portal_request_magic_link():
     def _send(email):
         try:
             read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+            # Blank status = legacy/pre-registration customer — those can log in
+            # (password login already allows them), so the magic link must send too.
             records = at_get_all(
                 CUSTOMERS_TABLE_ID, read_token,
                 fields=["Main Contact Email", "Application Status"],
                 formula=(f"AND(LOWER({{Main Contact Email}})='{email}',"
-                         f"OR({{Application Status}}='Approved',{{Application Status}}='Registered',{{Application Status}}='Pending'))"),
+                         f"OR({{Application Status}}='Approved',{{Application Status}}='Registered',"
+                         f"{{Application Status}}='Pending',{{Application Status}}=''))"),
             )
             if records:
                 link = generate_magic_link(records[0]["id"])
