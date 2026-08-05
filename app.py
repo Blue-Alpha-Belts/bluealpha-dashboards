@@ -2052,6 +2052,8 @@ def submit_lost_refund():
     if not CS_ADMIN_PASSWORD or data.get("password", "") != CS_ADMIN_PASSWORD:
         return Response(json.dumps({"status": "unauthorized"}), status=401, headers=c, mimetype="application/json")
 
+    from datetime import datetime, timezone
+
     order_number  = data.get("orderNumber", "").strip()
     items         = data.get("items", [])
     customer_name = data.get("customerName", "").strip()
