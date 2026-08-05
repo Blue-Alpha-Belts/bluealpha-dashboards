@@ -1133,7 +1133,28 @@ function computeRefundGuards() {
 
   const isRefundFlow = currentMode === 'return' || currentMode === 'shipping' ||
                        (currentMode === 'lost' && lostAction === 'refund');
-  if (!orderData || !isRefundFlow) { btn.disabled = false; return; }
+  const isLostReship = currentMode === 'lost' && lostAction === 'reship';
+  if (!orderData || (!isRefundFlow && !isLostReship)) { btn.disabled = false; return; }
+
+  const wc = orderData.wcRefund;
+  const wcDetail = (wc && wc.refunds || []).map(function(f) {
+    return '$' + f.amount.toFixed(2) + (f.date ? ' on ' + fmtDateMDY(f.date) : '') + (f.reason ? ' — ' + f.reason : '');
+  }).join('; ');
+  const wcAmounts = wc ? '$' + wc.refundedTotal.toFixed(2) + ' of $' + wc.orderTotal.toFixed(2) + ' refunded' +
+                         (wcDetail ? ' (' + wcDetail + ')' : '') : '';
+
+  // Lost reship: any refund at all (partial or full) blocks creating a reshipment
+  if (isLostReship) {
+    if (wc && wc.refundedTotal > 0) {
+      refundBlocked = true;
+      blockEl.innerHTML = '<strong>🚫 This order has already been ' + (wc.fullyRefunded ? 'fully' : 'partially') +
+        ' refunded in WooCommerce.</strong>' + wcAmounts + '. A reshipment cannot be created for a refunded order.';
+      blockEl.classList.add('show');
+    }
+    btn.disabled = refundBlocked;
+    document.getElementById('order-info-block').classList.toggle('refund-blocked', refundBlocked);
+    return;
+  }
 
   // Prior refund requests logged in Airtable → warn, but allow submitting
   const typeLabels = { 'Return': 'Return refund', 'Lost': 'lost-order refund', 'UPS Shipping Refund': 'UPS shipping refund' };
@@ -1143,20 +1164,14 @@ function computeRefundGuards() {
   });
 
   // Refunds already issued in WooCommerce → warn on partial, block on full
-  const wc = orderData.wcRefund;
   if (wc && wc.refundedTotal > 0) {
-    const detail = (wc.refunds || []).map(function(f) {
-      return '$' + f.amount.toFixed(2) + (f.date ? ' on ' + fmtDateMDY(f.date) : '') + (f.reason ? ' — ' + f.reason : '');
-    }).join('; ');
     if (wc.fullyRefunded) {
       refundBlocked = true;
       blockEl.innerHTML = '<strong>🚫 This order has already been fully refunded in WooCommerce.</strong>' +
-        '$' + wc.refundedTotal.toFixed(2) + ' of $' + wc.orderTotal.toFixed(2) + ' refunded' +
-        (detail ? ' (' + detail + ')' : '') + '. Another refund request cannot be submitted.';
+        wcAmounts + '. Another refund request cannot be submitted.';
       blockEl.classList.add('show');
     } else {
-      refundWarnings.push('WooCommerce shows a partial refund already issued: $' + wc.refundedTotal.toFixed(2) +
-        ' of $' + wc.orderTotal.toFixed(2) + (detail ? ' (' + detail + ')' : '') + '.');
+      refundWarnings.push('WooCommerce shows a partial refund already issued: ' + wcAmounts + '.');
     }
   }
 
@@ -1567,6 +1582,7 @@ async function csSubmitReshipment() {
   }
 
   // ── Reship path ──────────────────────────────────────────────────────────
+  if (!refundGuardAllowsSubmit()) return;
   document.getElementById('msg-lost-address').style.display = 'none';
   const name    = document.getElementById('lost-name').value.trim();
   const street1 = document.getElementById('lost-street1').value.trim();
