@@ -55,6 +55,11 @@ QUOTE_CS_PASSWORD        = os.environ.get("QUOTE_CS_PASSWORD", "")
 QUOTE_SECRET_KEY         = os.environ.get("QUOTE_SECRET_KEY", "change-me-ba-portal-2024")
 
 STRIPE_SECRET_KEY        = os.environ.get("STRIPE_SECRET_KEY", "")
+
+# WooCommerce REST API (read-only key; used to warn/block on already-refunded orders)
+WC_API_URL          = os.environ.get("WC_API_URL", "https://www.bluealphabelts.com")
+WC_CONSUMER_KEY     = os.environ.get("WC_CONSUMER_KEY", "")
+WC_CONSUMER_SECRET  = os.environ.get("WC_CONSUMER_SECRET", "")
 INT_EXCHANGE_TABLE_ID    = os.environ.get("INT_EXCHANGE_TABLE_ID", "")
 RETURN_ADDRESS_INTL      = "35 Andrew St., Newnan, GA 30263 USA"
 
@@ -1014,6 +1019,59 @@ def verify_order():
                         status=500, headers=c, mimetype="application/json")
 
 
+def wc_refund_summary(order_number):
+    """Best-effort WooCommerce refund lookup for an order.
+
+    Returns None when the WC API is unconfigured or unreachable (callers must
+    treat that as "unknown", never as "no refunds"). Otherwise returns:
+    {orderTotal, refundedTotal, fullyRefunded, refunds: [{amount, date, reason}]}
+    """
+    if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
+        return None
+    try:
+        r = req_lib.get(
+            f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
+            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return None
+        o = r.json()
+        total    = float(o.get("total") or 0)
+        refunded = sum(abs(float(rf.get("total") or 0)) for rf in (o.get("refunds") or []))
+        fully    = o.get("status") == "refunded" or (total > 0 and refunded >= total - 0.01)
+
+        refunds = []
+        if refunded > 0:
+            # Second call only when needed — the order payload has no refund dates
+            try:
+                r2 = req_lib.get(
+                    f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}/refunds",
+                    auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                    timeout=8,
+                )
+                if r2.status_code == 200:
+                    refunds = [{
+                        "amount": abs(float(rf.get("amount") or 0)),
+                        "date":   (rf.get("date_created") or "")[:10],
+                        "reason": rf.get("reason") or "",
+                    } for rf in r2.json()]
+            except Exception:
+                pass
+            if not refunds:
+                refunds = [{"amount": abs(float(rf.get("total") or 0)), "date": "", "reason": ""}
+                           for rf in (o.get("refunds") or [])]
+
+        return {
+            "orderTotal":    round(total, 2),
+            "refundedTotal": round(refunded, 2),
+            "fullyRefunded": fully,
+            "refunds":       refunds,
+        }
+    except Exception:
+        return None
+
+
 @app.route("/api/cs-lookup-order", methods=["POST", "OPTIONS"])
 def cs_lookup_order():
     if request.method == "OPTIONS":
@@ -1125,22 +1183,33 @@ def cs_lookup_order():
                 except Exception:
                     pass
 
-        # Check for existing UPS Shipping Refund request for this order
+        # Check for existing refund-type requests (Return / Lost / UPS Shipping
+        # Refund) so the portal can warn CS about possible duplicates, plus
+        # WooCommerce refund state so it can warn on partial / block on full.
         # (skipped for missing/incorrect modes)
-        existing_shipping_refund = False
+        existing_refund_requests = []
+        wc_refund = None
         if mode not in ("missing", "incorrect"):
             try:
-                _sr_r = req_lib.get(
+                _er_r = req_lib.get(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}",
-                    params={"filterByFormula": f"AND({{Order Number}}='{order_number}',{{Type}}='UPS Shipping Refund')",
-                            "maxRecords": 1, "fields[]": ["Order Number"]},
+                    params={"filterByFormula": (f"AND({{Order Number}}='{order_number}',"
+                                                f"OR({{Type}}='Return',{{Type}}='Lost',{{Type}}='UPS Shipping Refund'))"),
+                            "maxRecords": 10, "fields[]": ["Type", "Status", "Submission Date"]},
                     headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
                     timeout=10,
                 )
-                if _sr_r.status_code == 200 and _sr_r.json().get("records"):
-                    existing_shipping_refund = True
+                if _er_r.status_code == 200:
+                    for _rec in _er_r.json().get("records", []):
+                        _f = _rec.get("fields", {})
+                        existing_refund_requests.append({
+                            "type":   _f.get("Type", ""),
+                            "status": _f.get("Status", ""),
+                            "date":   _f.get("Submission Date", ""),
+                        })
             except Exception:
                 pass
+            wc_refund = wc_refund_summary(order_number)
 
         # Build orderGroups (combo expansion) for missing/incorrect modes
         order_groups = []
@@ -1209,7 +1278,8 @@ def cs_lookup_order():
             "alreadyReturnedQtys":  cs_already_returned,
             "alreadyReshippedSkus": already_reshipped,
             "shippingAmount":       float(order.get("shippingAmount") or 0),
-            "existingShippingRefund": existing_shipping_refund,
+            "existingRefundRequests": existing_refund_requests,
+            "wcRefund":             wc_refund,
         }), headers=c, mimetype="application/json")
 
     except Exception as e:

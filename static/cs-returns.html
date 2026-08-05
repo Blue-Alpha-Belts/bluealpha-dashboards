@@ -215,6 +215,7 @@
     }
     .message.show { display: block; }
     .message-error   { background: #fff0f0; border: 1px solid #f5c2c2; color: #7a1515; }
+    .message-warn    { background: #fff8e6; border: 1px solid #f0d48a; color: #7a5b00; }
     .message strong  { display: block; margin-bottom: 4px; }
 
     .lookup-bar { display: flex; gap: 10px; margin-bottom: 8px; }
@@ -509,6 +510,10 @@
         </div>
 
         <div class="order-info" id="order-info-text"></div>
+
+        <!-- Refund guards: duplicate-request warning / already-refunded block -->
+        <div class="message message-warn" id="msg-refund-warning"></div>
+        <div class="message message-error" id="msg-refund-blocked"></div>
 
         <!-- Items (shared, label changes by mode) -->
         <div class="field">
@@ -1064,6 +1069,11 @@ function setMode(mode) {
   orderData = null;
   orderBlocked = false;
   reshipOrderGroups = null;
+  refundWarnings = [];
+  refundBlocked = false;
+  document.getElementById('btn-cs-submit').disabled = false;
+  document.getElementById('msg-refund-warning').classList.remove('show');
+  document.getElementById('msg-refund-blocked').classList.remove('show');
   if (!isExchange) {
     exchangeVerifyData = null;
     exchangeOptionsCache = {};
@@ -1090,6 +1100,71 @@ function setLostAction(action) {
   document.getElementById('section-lost-address').classList.toggle('hidden', action === 'refund');
   // Update submit button label
   document.getElementById('btn-cs-submit').innerHTML = action === 'refund' ? 'Log Refund Request' : 'Create Reshipment';
+  computeRefundGuards();
+}
+
+// ── Refund guards: duplicate requests (Airtable) + prior refunds (WooCommerce)
+let refundWarnings = [];
+let refundBlocked  = false;
+
+function fmtDateMDY(d) {
+  if (!d) return '';
+  const p = d.slice(0, 10).split('-');
+  return p.length === 3 ? p[1] + '-' + p[2] + '-' + p[0] : d;
+}
+
+function computeRefundGuards() {
+  refundWarnings = [];
+  refundBlocked  = false;
+  const warnEl  = document.getElementById('msg-refund-warning');
+  const blockEl = document.getElementById('msg-refund-blocked');
+  const btn     = document.getElementById('btn-cs-submit');
+  warnEl.classList.remove('show');
+  blockEl.classList.remove('show');
+
+  const isRefundFlow = currentMode === 'return' || currentMode === 'shipping' ||
+                       (currentMode === 'lost' && lostAction === 'refund');
+  if (!orderData || !isRefundFlow) { btn.disabled = false; return; }
+
+  // Prior refund requests logged in Airtable → warn, but allow submitting
+  const typeLabels = { 'Return': 'Return refund', 'Lost': 'lost-order refund', 'UPS Shipping Refund': 'UPS shipping refund' };
+  (orderData.existingRefundRequests || []).forEach(function(r) {
+    refundWarnings.push('A ' + (typeLabels[r.type] || r.type) + ' request was already submitted for this order' +
+      (r.date ? ' on ' + fmtDateMDY(r.date) : '') + (r.status ? ' (status: ' + r.status + ')' : '') + '.');
+  });
+
+  // Refunds already issued in WooCommerce → warn on partial, block on full
+  const wc = orderData.wcRefund;
+  if (wc && wc.refundedTotal > 0) {
+    const detail = (wc.refunds || []).map(function(f) {
+      return '$' + f.amount.toFixed(2) + (f.date ? ' on ' + fmtDateMDY(f.date) : '') + (f.reason ? ' — ' + f.reason : '');
+    }).join('; ');
+    if (wc.fullyRefunded) {
+      refundBlocked = true;
+      blockEl.innerHTML = '<strong>🚫 This order has already been fully refunded in WooCommerce.</strong>' +
+        '$' + wc.refundedTotal.toFixed(2) + ' of $' + wc.orderTotal.toFixed(2) + ' refunded' +
+        (detail ? ' (' + detail + ')' : '') + '. Another refund request cannot be submitted.';
+      blockEl.classList.add('show');
+    } else {
+      refundWarnings.push('WooCommerce shows a partial refund already issued: $' + wc.refundedTotal.toFixed(2) +
+        ' of $' + wc.orderTotal.toFixed(2) + (detail ? ' (' + detail + ')' : '') + '.');
+    }
+  }
+
+  if (refundWarnings.length && !refundBlocked) {
+    warnEl.innerHTML = '<strong>⚠ Check before submitting a refund</strong>' +
+      refundWarnings.map(function(w) { return '• ' + w; }).join('<br>');
+    warnEl.classList.add('show');
+  }
+  btn.disabled = refundBlocked;
+}
+
+function refundGuardAllowsSubmit() {
+  if (refundBlocked) return false;
+  if (refundWarnings.length) {
+    return confirm('⚠ WARNING\n\n' + refundWarnings.join('\n\n') + '\n\nSubmit this refund request anyway?');
+  }
+  return true;
 }
 
 // ── Order lookup ───────────────────────────────────────────────────────────
@@ -1176,12 +1251,6 @@ function populateOrderInfo(data) {
       errEl.classList.add('show');
       return;
     }
-    if (data.existingShippingRefund) {
-      const errEl = document.getElementById('msg-lookup-error');
-      errEl.textContent = 'A shipping refund request has already been submitted for this order.';
-      errEl.classList.add('show');
-      return;
-    }
   }
 
   const trackingHtml = data.trackingNumber
@@ -1219,6 +1288,7 @@ function populateOrderInfo(data) {
   const canCancel = !data.orderStatus || CANCELLABLE_STATUSES.indexOf(data.orderStatus) !== -1;
   orderBlocked = (currentMode === 'cancel' && !canCancel);
   _applyBlockState();
+  computeRefundGuards();
 
   document.getElementById('order-info-block').classList.remove('hidden');
 }
@@ -1331,6 +1401,8 @@ async function csSubmitReturn() {
   document.getElementById('msg-no-item').style.display         = 'none';
   document.getElementById('msg-no-email').style.display        = 'none';
   document.getElementById('msg-no-reason-return').style.display = 'none';
+
+  if (!refundGuardAllowsSubmit()) return;
 
   const itemsSummary = selectedItems.map(i => i.quantity + 'x ' + i.sku + ' — ' + i.name).join('\n');
   const csNotes  = document.getElementById('cs-notes').value.trim();
@@ -1448,6 +1520,7 @@ async function csSubmitReshipment() {
 
   // ── Refund path ──────────────────────────────────────────────────────────
   if (lostAction === 'refund') {
+    if (!refundGuardAllowsSubmit()) return;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>Logging refund…';
     try {
@@ -1559,6 +1632,8 @@ async function csSubmitShippingRefund() {
     return;
   }
   document.getElementById('msg-no-reason-shipping').style.display = 'none';
+
+  if (!refundGuardAllowsSubmit()) return;
 
   const csNotes = document.getElementById('cs-notes').value.trim();
 
