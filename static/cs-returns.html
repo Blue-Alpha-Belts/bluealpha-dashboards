@@ -217,6 +217,15 @@
     .message-error   { background: #fff0f0; border: 1px solid #f5c2c2; color: #7a1515; }
     .message-warn    { background: #fff8e6; border: 1px solid #f0d48a; color: #7a5b00; }
     .btn:disabled    { opacity: 0.5; cursor: not-allowed; }
+    #update-banner {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      background: var(--navy, #16305e); color: #fff; text-align: center;
+      padding: 10px 16px; font-size: 0.92rem; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    }
+    #update-banner button {
+      margin: 0 6px; padding: 4px 14px; border: none; border-radius: 5px;
+      background: #fff; color: var(--navy, #16305e); font-weight: 700; cursor: pointer;
+    }
     /* Fully-refunded block: gray out everything below the banner (keep order
        info and the banners themselves readable) */
     #order-info-block.refund-blocked > *:not(.order-info):not(#msg-refund-blocked):not(#msg-refund-warning):not(#already-shipped-warning) {
@@ -376,6 +385,13 @@
   </style>
 </head>
 <body>
+
+<!-- New-version notice (shown when a newer portal version has been deployed) -->
+<div id="update-banner" class="hidden">
+  🔄 The portal has been updated.
+  <button onclick="location.reload()">Refresh now</button>
+  <span style="opacity:.8;">— you'll stay logged in.</span>
+</div>
 
 <header>
   <a href="https://www.bluealphabelts.com" target="_blank"><img src="https://www.bluealphabelts.com/wp-content/uploads/2024/04/logo-1.png" alt="Blue Alpha"></a>
@@ -979,6 +995,7 @@ async function csLogin() {
       return;
     }
     csPassword = pw;
+    try { sessionStorage.setItem('csPortalPw', pw); } catch (e) {}
     document.getElementById('screen-login').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
   } catch (e) {
@@ -986,9 +1003,70 @@ async function csLogin() {
   }
 }
 
+// Auto-login from the same tab's previous session (survives the auto-refresh
+// below and manual reloads; cleared when the tab is closed)
+async function csResumeSession() {
+  let pw = '';
+  try { pw = sessionStorage.getItem('csPortalPw') || ''; } catch (e) {}
+  if (!pw) return;
+  try {
+    const res = await fetch(API_BASE + '/api/cs-lookup-order', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ password: pw, orderNumber: '__validate__' })
+    });
+    if (res.status === 401) {  // password was changed — require a fresh login
+      try { sessionStorage.removeItem('csPortalPw'); } catch (e) {}
+      return;
+    }
+    csPassword = pw;
+    document.getElementById('screen-login').classList.add('hidden');
+    document.getElementById('screen-main').classList.remove('hidden');
+  } catch (e) {}
+}
+
+// ── Auto-refresh when a new portal version is deployed ─────────────────────
+// Compares the page's ETag every few minutes (and when the tab regains
+// focus). If it changed: reload immediately while idle, otherwise show the
+// update banner so work in progress isn't lost.
+let portalEtag = null;
+
+async function fetchPortalEtag() {
+  try {
+    const r = await fetch(window.location.href, { method: 'HEAD', cache: 'no-store' });
+    return r.ok ? r.headers.get('ETag') : null;
+  } catch (e) { return null; }
+}
+
+function portalIsIdle() {
+  // A finished submission (success screen) is safe to reload
+  if (!document.getElementById('screen-success').classList.contains('hidden')) return true;
+  // Mid-task states we must not blow away: a looked-up order, an exchange or
+  // intl verification in progress, or warranty mode (its form has no lookup)
+  return !orderData && !exchangeVerifyData && !intlVerifyData &&
+         currentMode !== 'warranty' &&
+         !document.getElementById('cs-order-number').value.trim();
+}
+
+async function checkPortalVersion() {
+  const tag = await fetchPortalEtag();
+  if (!tag) return;
+  if (portalEtag === null) { portalEtag = tag; return; }
+  if (tag === portalEtag) return;
+  if (portalIsIdle()) { location.reload(); return; }
+  document.getElementById('update-banner').classList.remove('hidden');
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('cs-password').addEventListener('keydown', e => { if (e.key === 'Enter') csLogin(); });
   document.getElementById('cs-order-number').addEventListener('keydown', e => { if (e.key === 'Enter') lookupOrder(); });
+
+  csResumeSession();
+  checkPortalVersion();                                   // records the current version
+  setInterval(checkPortalVersion, 5 * 60 * 1000);         // re-check every 5 minutes
+  document.addEventListener('visibilitychange', () => {   // …and when the tab regains focus
+    if (document.visibilityState === 'visible') checkPortalVersion();
+  });
 
   // Equalize mode toggle row heights
   const toggleBtns = document.querySelectorAll('.mode-toggle .mode-btn');
