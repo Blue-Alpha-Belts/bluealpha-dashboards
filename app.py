@@ -1021,8 +1021,14 @@ def verify_order():
                         status=500, headers=c, mimetype="application/json")
 
 
-def wc_refund_summary(order_number):
+def wc_refund_summary(order_number, order_date=None):
     """Best-effort WooCommerce refund lookup for an order.
+
+    The store uses sequential order numbers (the customer-facing number, e.g.
+    286189) that do NOT match WooCommerce's internal order IDs (e.g. 383119),
+    and the WC REST API can't search by that number. We resolve the real order
+    by scanning orders created around order_date (from ShipStation) and
+    matching the `number` field exactly.
 
     Returns None when the WC API is unconfigured or unreachable (callers must
     treat that as "unknown", never as "no refunds"). Otherwise returns:
@@ -1035,26 +1041,44 @@ def wc_refund_summary(order_number):
     wc_headers = {"User-Agent": "BlueAlpha-CS-Portal/1.0 (+https://bluealpha.us)"}
     if WC_CF_BYPASS_TOKEN:
         wc_headers["X-BA-CS-Portal"] = WC_CF_BYPASS_TOKEN
+    wc_auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
     try:
-        r = req_lib.get(
-            f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
-            auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
-            headers=wc_headers,
-            timeout=8,
-        )
-        if r.status_code == 401:
-            # Some hosts strip the Authorization header; WC officially supports
-            # query-param auth over HTTPS as the fallback.
+        from datetime import datetime, timedelta
+
+        o = None
+        if order_date:
+            day    = str(order_date)[:10]
+            d0     = datetime.strptime(day, "%Y-%m-%d")
+            after  = (d0 - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+            before = (d0 + timedelta(days=2)).strftime("%Y-%m-%dT00:00:00")
+            for page in (1, 2, 3, 4):
+                pr = req_lib.get(
+                    f"{WC_API_URL}/wp-json/wc/v3/orders",
+                    params={"after": after, "before": before, "per_page": 100,
+                            "page": page, "order": "asc"},
+                    auth=wc_auth, headers=wc_headers, timeout=8,
+                )
+                if pr.status_code != 200:
+                    print(f"[wc-refund] order {order_number}: WC scan returned {pr.status_code}: {pr.text[:200]}")
+                    return None
+                batch = pr.json()
+                o = next((c for c in batch if str(c.get("number")) == str(order_number)), None)
+                if o is not None or len(batch) < 100:
+                    break
+        else:
+            # No date available — try the number as a direct ID, but only trust
+            # the result if its customer-facing number actually matches.
             r = req_lib.get(
                 f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
-                params={"consumer_key": WC_CONSUMER_KEY, "consumer_secret": WC_CONSUMER_SECRET},
-                headers=wc_headers,
-                timeout=8,
+                auth=wc_auth, headers=wc_headers, timeout=8,
             )
-        if r.status_code != 200:
-            print(f"[wc-refund] order {order_number}: WC API returned {r.status_code}: {r.text[:200]}")
+            if r.status_code == 200 and str(r.json().get("number")) == str(order_number):
+                o = r.json()
+
+        if o is None:
+            print(f"[wc-refund] order {order_number}: no matching WC order found (date={order_date})")
             return None
-        o = r.json()
+
         total    = float(o.get("total") or 0)
         refunded = sum(abs(float(rf.get("total") or 0)) for rf in (o.get("refunds") or []))
         fully    = o.get("status") == "refunded" or (total > 0 and refunded >= total - 0.01)
@@ -1064,8 +1088,8 @@ def wc_refund_summary(order_number):
             # Second call only when needed — the order payload has no refund dates
             try:
                 r2 = req_lib.get(
-                    f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}/refunds",
-                    auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                    f"{WC_API_URL}/wp-json/wc/v3/orders/{o['id']}/refunds",
+                    auth=wc_auth,
                     headers=wc_headers,
                     timeout=8,
                 )
@@ -1081,7 +1105,7 @@ def wc_refund_summary(order_number):
                 refunds = [{"amount": abs(float(rf.get("total") or 0)), "date": "", "reason": ""}
                            for rf in (o.get("refunds") or [])]
 
-        print(f"[wc-refund] order {order_number}: status={o.get('status')} total={total} refunded={refunded} fully={fully}")
+        print(f"[wc-refund] order {order_number}: wc_id={o.get('id')} status={o.get('status')} total={total} refunded={refunded} fully={fully}")
         return {
             "orderTotal":    round(total, 2),
             "refundedTotal": round(refunded, 2),
@@ -1230,7 +1254,7 @@ def cs_lookup_order():
                         })
             except Exception:
                 pass
-            wc_refund = wc_refund_summary(order_number)
+            wc_refund = wc_refund_summary(order_number, order.get("orderDate"))
 
         # Build orderGroups (combo expansion) for missing/incorrect modes
         order_groups = []
