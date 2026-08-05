@@ -60,6 +60,8 @@ STRIPE_SECRET_KEY        = os.environ.get("STRIPE_SECRET_KEY", "")
 WC_API_URL          = os.environ.get("WC_API_URL", "https://www.bluealphabelts.com")
 WC_CONSUMER_KEY     = os.environ.get("WC_CONSUMER_KEY", "")
 WC_CONSUMER_SECRET  = os.environ.get("WC_CONSUMER_SECRET", "")
+# Optional shared secret for a Cloudflare WAF "skip" rule (sent as X-BA-CS-Portal)
+WC_CF_BYPASS_TOKEN  = os.environ.get("WC_CF_BYPASS_TOKEN", "")
 INT_EXCHANGE_TABLE_ID    = os.environ.get("INT_EXCHANGE_TABLE_ID", "")
 RETURN_ADDRESS_INTL      = "35 Andrew St., Newnan, GA 30263 USA"
 
@@ -1028,10 +1030,16 @@ def wc_refund_summary(order_number):
     """
     if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
         return None
+    # Cloudflare's bot protection blocks the default python-requests UA from
+    # datacenter IPs; identify ourselves, and carry the WAF skip-rule token if set.
+    wc_headers = {"User-Agent": "BlueAlpha-CS-Portal/1.0 (+https://bluealpha.us)"}
+    if WC_CF_BYPASS_TOKEN:
+        wc_headers["X-BA-CS-Portal"] = WC_CF_BYPASS_TOKEN
     try:
         r = req_lib.get(
             f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
             auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+            headers=wc_headers,
             timeout=8,
         )
         if r.status_code == 401:
@@ -1040,6 +1048,7 @@ def wc_refund_summary(order_number):
             r = req_lib.get(
                 f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
                 params={"consumer_key": WC_CONSUMER_KEY, "consumer_secret": WC_CONSUMER_SECRET},
+                headers=wc_headers,
                 timeout=8,
             )
         if r.status_code != 200:
@@ -1057,6 +1066,7 @@ def wc_refund_summary(order_number):
                 r2 = req_lib.get(
                     f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}/refunds",
                     auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
+                    headers=wc_headers,
                     timeout=8,
                 )
                 if r2.status_code == 200:
