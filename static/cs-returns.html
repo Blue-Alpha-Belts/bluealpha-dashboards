@@ -216,6 +216,13 @@
     .message.show { display: block; }
     .message-error   { background: #fff0f0; border: 1px solid #f5c2c2; color: #7a1515; }
     .message-warn    { background: #fff8e6; border: 1px solid #f0d48a; color: #7a5b00; }
+    .btn:disabled    { opacity: 0.5; cursor: not-allowed; }
+    /* Fully-refunded block: gray out everything below the banner (keep order
+       info and the banners themselves readable) */
+    #order-info-block.refund-blocked > *:not(.order-info):not(#msg-refund-blocked):not(#msg-refund-warning):not(#already-shipped-warning) {
+      opacity: 0.35;
+      pointer-events: none;
+    }
     .message strong  { display: block; margin-bottom: 4px; }
 
     .lookup-bar { display: flex; gap: 10px; margin-bottom: 8px; }
@@ -1074,6 +1081,7 @@ function setMode(mode) {
   document.getElementById('btn-cs-submit').disabled = false;
   document.getElementById('msg-refund-warning').classList.remove('show');
   document.getElementById('msg-refund-blocked').classList.remove('show');
+  document.getElementById('order-info-block').classList.remove('refund-blocked');
   if (!isExchange) {
     exchangeVerifyData = null;
     exchangeOptionsCache = {};
@@ -1121,6 +1129,7 @@ function computeRefundGuards() {
   const btn     = document.getElementById('btn-cs-submit');
   warnEl.classList.remove('show');
   blockEl.classList.remove('show');
+  document.getElementById('order-info-block').classList.remove('refund-blocked');
 
   const isRefundFlow = currentMode === 'return' || currentMode === 'shipping' ||
                        (currentMode === 'lost' && lostAction === 'refund');
@@ -1157,6 +1166,7 @@ function computeRefundGuards() {
     warnEl.classList.add('show');
   }
   btn.disabled = refundBlocked;
+  document.getElementById('order-info-block').classList.toggle('refund-blocked', refundBlocked);
 }
 
 function refundGuardAllowsSubmit() {
