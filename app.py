@@ -1034,7 +1034,16 @@ def wc_refund_summary(order_number):
             auth=(WC_CONSUMER_KEY, WC_CONSUMER_SECRET),
             timeout=8,
         )
+        if r.status_code == 401:
+            # Some hosts strip the Authorization header; WC officially supports
+            # query-param auth over HTTPS as the fallback.
+            r = req_lib.get(
+                f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
+                params={"consumer_key": WC_CONSUMER_KEY, "consumer_secret": WC_CONSUMER_SECRET},
+                timeout=8,
+            )
         if r.status_code != 200:
+            print(f"[wc-refund] order {order_number}: WC API returned {r.status_code}: {r.text[:200]}")
             return None
         o = r.json()
         total    = float(o.get("total") or 0)
@@ -1062,13 +1071,15 @@ def wc_refund_summary(order_number):
                 refunds = [{"amount": abs(float(rf.get("total") or 0)), "date": "", "reason": ""}
                            for rf in (o.get("refunds") or [])]
 
+        print(f"[wc-refund] order {order_number}: status={o.get('status')} total={total} refunded={refunded} fully={fully}")
         return {
             "orderTotal":    round(total, 2),
             "refundedTotal": round(refunded, 2),
             "fullyRefunded": fully,
             "refunds":       refunds,
         }
-    except Exception:
+    except Exception as e:
+        print(f"[wc-refund] order {order_number}: lookup failed: {e}")
         return None
 
 
