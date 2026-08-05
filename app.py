@@ -1132,6 +1132,10 @@ def cs_lookup_order():
     if not order_number:
         return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
 
+    # Password-only validation (login / session resume) — skip the real lookup
+    if order_number == "__validate__":
+        return Response(json.dumps({"status": "ok"}), headers=c, mimetype="application/json")
+
     mode = data.get("mode", "").strip()  # 'missing' | 'incorrect' | '' (default)
 
     try:

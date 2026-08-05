@@ -402,6 +402,11 @@
 
 <div class="container">
 
+  <!-- Session restore (shown instead of login while revalidating a saved session) -->
+  <div id="screen-restoring" class="hidden" style="text-align:center; padding:70px 0; color:var(--muted, #667);">
+    <span class="spinner" style="border-color:rgba(22,48,94,0.25); border-top-color:var(--navy, #16305e); vertical-align:-3px; margin-right:6px;"></span> Restoring session…
+  </div>
+
   <!-- LOGIN -->
   <div id="screen-login">
     <h1 class="page-title">CS Portal</h1>
@@ -1009,6 +1014,11 @@ async function csResumeSession() {
   let pw = '';
   try { pw = sessionStorage.getItem('csPortalPw') || ''; } catch (e) {}
   if (!pw) return;
+  const loginEl     = document.getElementById('screen-login');
+  const restoringEl = document.getElementById('screen-restoring');
+  loginEl.classList.add('hidden');
+  restoringEl.classList.remove('hidden');
+  let ok = false;
   try {
     const res = await fetch(API_BASE + '/api/cs-lookup-order', {
       method: 'POST',
@@ -1017,12 +1027,17 @@ async function csResumeSession() {
     });
     if (res.status === 401) {  // password was changed — require a fresh login
       try { sessionStorage.removeItem('csPortalPw'); } catch (e) {}
-      return;
+    } else if (res.ok) {
+      ok = true;
     }
+  } catch (e) {}  // network hiccup — fall back to the login screen, keep the saved pw
+  restoringEl.classList.add('hidden');
+  if (ok) {
     csPassword = pw;
-    document.getElementById('screen-login').classList.add('hidden');
     document.getElementById('screen-main').classList.remove('hidden');
-  } catch (e) {}
+  } else {
+    loginEl.classList.remove('hidden');
+  }
 }
 
 // ── Auto-refresh when a new portal version is deployed ─────────────────────
