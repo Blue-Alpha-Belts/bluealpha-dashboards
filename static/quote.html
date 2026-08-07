@@ -827,6 +827,7 @@ function activateGuestMode() {
 
   const wrap = document.getElementById('catalogWrap');
   let attempts = 0;
+  let failures = 0;
   while (true) {
     try {
       const r = await fetch('/api/quote-catalog?_=' + Date.now());
@@ -845,8 +846,16 @@ function activateGuestMode() {
       restoreSavedCart();
       return;
     } catch (e) {
-      wrap.innerHTML = `<div class="message message-error show"><strong>Catalog unavailable.</strong> Please try refreshing. If the issue persists, contact us at orders@bluealpha.us</div>`;
-      return;
+      // Transient network failures (flaky wifi, corporate proxies that drop the
+      // occasional request) get a few automatic retries before we give up.
+      failures++;
+      if (failures > 3) {
+        wrap.innerHTML = `<div class="message message-error show"><strong>Catalog unavailable.</strong> Please try refreshing. If the issue persists, contact us at orders@bluealpha.us</div>`;
+        return;
+      }
+      const secs = failures * 2;
+      wrap.innerHTML = `<div class="catalog-loading">⏳ Having trouble loading products — retrying in ${secs}s… (attempt ${failures} of 3)</div>`;
+      await new Promise(res => setTimeout(res, secs * 1000));
     }
   }
 })();
