@@ -13659,6 +13659,49 @@ def _search_ss_order(order_number):
         return None
 
 
+def _order_name_matches(ss_order, *last_names):
+    """Loose last-name check against a ShipStation order's ship-to/bill-to
+    names: case-insensitive, letters-only, so 'Gamage II' matches 'GamageII'.
+    True when any given last name appears in any of the order's names — and
+    vacuously True when no last names were given (nothing to verify with)."""
+    import re as _re
+    def _norm(s):
+        return _re.sub(r"[^a-z]", "", (s or "").lower())
+    wanted = [_norm(n) for n in last_names if n and _norm(n)]
+    if not wanted:
+        return True
+    cands = []
+    for k in ("shipTo", "billTo"):
+        n = ((ss_order or {}).get(k) or {}).get("name")
+        if n:
+            cands.append(_norm(n))
+    return any(w in c for w in wanted for c in cands)
+
+
+def _warranty_order_ref(original_order_num, last_name, purchaser_last_name, record_id):
+    """The -W order reference, plus the ShipStation order it was verified
+    against (None when there isn't one). A customer-typed order number names
+    the warranty order ONLY when ShipStation's record of that order carries
+    the requester's (or original purchaser's) last name — 2026-08-10,
+    'GamageII' typed 19290, an order belonging to a different customer, and
+    everything downstream (the label attach, Warranty Order # 19290-W, the
+    eventual repair order) hung off the wrong customer's order. A mismatch
+    falls back to LastName-W exactly as if no number had been given. A number
+    ShipStation can't find (very old order, or SS briefly down) keeps the
+    number: most are genuine, and a wrong-but-nonexistent -W ref collides
+    with nobody's order."""
+    if not original_order_num:
+        return f"{last_name}-W", None
+    ss_order = _search_ss_order(original_order_num)
+    if ss_order is None:
+        return f"{original_order_num}-W", None
+    if _order_name_matches(ss_order, last_name, purchaser_last_name):
+        return f"{original_order_num}-W", ss_order
+    _order_name = ((ss_order.get("shipTo") or {}).get("name")) or ((ss_order.get("billTo") or {}).get("name")) or "?"
+    print(f"[warranty_webhook] name mismatch for {record_id}: order {original_order_num} is under '{_order_name}', requester is '{last_name}' — using {last_name}-W and leaving that order untouched", flush=True)
+    return f"{last_name}-W", None
+
+
 def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_date=None):
     """Send approval email with return label attached. FROM: info@bluealpha.us
     Returns (success, error_message).
@@ -13995,6 +14038,7 @@ def _warranty_webhook_inner(record_id, trigger, c):
             state              = (fields.get("State") or "").strip()
             zip_code           = (fields.get("Zip") or "").strip()
             original_order_num = (fields.get("Original Order #") or "").strip()
+            purchaser_last_name = (fields.get("Original Purchaser's Last Name") or "").strip()
             ineligibility_reason = (fields.get("Ineligibility Reason") or "").strip()
 
             _DENIAL_OPTIONS = ("Outside warranty window", "Not a Blue Alpha product", "Repair not deemed necessary")
@@ -14011,11 +14055,9 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 repair_info = _WARRANTY_REPAIR_MAP[approval]
                 from datetime import datetime, timezone
 
-                # ── Order reference ──
-                if original_order_num:
-                    order_ref = f"{original_order_num}-W"
-                else:
-                    order_ref = f"{last_name}-W"
+                # ── Order reference (number used only if its SS order matches the name) ──
+                order_ref, orig_ss_order = _warranty_order_ref(
+                    original_order_num, last_name, purchaser_last_name, record_id)
 
                 # ── Write order ref immediately to block duplicate webhook calls ──
                 _lock_resp = req_lib.patch(
@@ -14029,12 +14071,9 @@ def _warranty_webhook_inner(record_id, trigger, c):
                                     status=500, headers=c, mimetype="application/json")
                 _pending_lock["ref"] = order_ref
 
-                # ── Look up original SS order if we have an order number ──
-                orig_ss_order_id = None
-                if original_order_num:
-                    orig_order = _search_ss_order(original_order_num)
-                    if orig_order:
-                        orig_ss_order_id = orig_order.get("orderId")
+                # Attach the return label to the original SS order only when
+                # the name check above verified it belongs to this customer.
+                orig_ss_order_id = orig_ss_order.get("orderId") if orig_ss_order else None
 
                 # ── Create return label ──
                 label_payload = {
@@ -14146,10 +14185,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     return Response(json.dumps({"success": True, "action": "already_processed"}),
                                     status=200, headers=c, mimetype="application/json")
                 from datetime import datetime, timezone
-                if original_order_num:
-                    order_ref = f"{original_order_num}-W"
-                else:
-                    order_ref = f"{last_name}-W"
+                order_ref, _ = _warranty_order_ref(
+                    original_order_num, last_name, purchaser_last_name, record_id)
                 # ── Write order ref immediately to block duplicate webhook calls ──
                 _lock_resp = req_lib.patch(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
@@ -14205,10 +14242,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     return Response(json.dumps({"success": True, "action": "already_processed"}),
                                     status=200, headers=c, mimetype="application/json")
                 from datetime import datetime, timezone
-                if original_order_num:
-                    order_ref = f"{original_order_num}-W"
-                else:
-                    order_ref = f"{last_name}-W"
+                order_ref, _ = _warranty_order_ref(
+                    original_order_num, last_name, purchaser_last_name, record_id)
                 # ── Write order ref immediately to block duplicate webhook calls ──
                 _lock_resp = req_lib.patch(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}/{record_id}",
