@@ -13659,6 +13659,64 @@ def _search_ss_order(order_number):
         return None
 
 
+def _ss_order_exact(order_number):
+    """The SS order whose number is EXACTLY order_number, or None. The
+    orderNumber search param is a substring match — searching 'Bush-W' also
+    returns 'Bush-W-2' — so anything deciding "is this number taken?" must
+    compare the results exactly."""
+    try:
+        r = req_lib.get(
+            "https://ssapi.shipstation.com/orders",
+            params={"orderNumber": order_number, "pageSize": 100},
+            headers=ss_headers(),
+            timeout=15,
+        )
+        for o in r.json().get("orders", []):
+            if (o.get("orderNumber") or "").strip().lower() == order_number.strip().lower():
+                return o
+        return None
+    except Exception as e:
+        print(f"[_ss_order_exact] Error: {e}")
+        return None
+
+
+def _warranty_ref_taken(ref, record_id):
+    """True when ref already names a ShipStation order, or when a DIFFERENT
+    warranty request has already reserved it (its SS order may not exist
+    until its item is received)."""
+    if _ss_order_exact(ref) is not None:
+        return True
+    try:
+        _read_tok = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or WARRANTY_WRITE_TOKEN
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}",
+            headers={"Authorization": f"Bearer {_read_tok}"},
+            params={"filterByFormula": '{Warranty Order #}="' + ref.replace('"', '') + '"',
+                    "maxRecords": 3},
+            timeout=15,
+        )
+        for rec in r.json().get("records", []):
+            if rec.get("id") != record_id:
+                return True
+    except Exception as e:
+        print(f"[_warranty_ref_taken] Airtable check error: {e}")
+    return False
+
+
+def _dedupe_warranty_ref(base, record_id):
+    """A repeat customer's ref can collide with their OLD warranty order —
+    Dennis Bush's 2024 'Bush-W' blocked his 2026 repair order from ever being
+    created, because the item-received step saw the number as already used
+    (Patty 2026-08-11). Collisions get -2, -3, … appended until free."""
+    ref = base
+    for n in range(2, 21):
+        if not _warranty_ref_taken(ref, record_id):
+            return ref
+        print(f"[warranty_webhook] order ref {ref} is already taken — trying {base}-{n}", flush=True)
+        ref = f"{base}-{n}"
+    return ref
+
+
 def _order_name_matches(ss_order, *last_names):
     """Loose last-name check against a ShipStation order's ship-to/bill-to
     names: case-insensitive, letters-only, so 'Gamage II' matches 'GamageII'.
@@ -13689,17 +13747,19 @@ def _warranty_order_ref(original_order_num, last_name, purchaser_last_name, reco
     falls back to LastName-W exactly as if no number had been given. A number
     ShipStation can't find (very old order, or SS briefly down) keeps the
     number: most are genuine, and a wrong-but-nonexistent -W ref collides
-    with nobody's order."""
+    with nobody's order. Every ref passes through _dedupe_warranty_ref, so a
+    repeat customer's second warranty gets -2, -3, … instead of silently
+    colliding with their old order."""
     if not original_order_num:
-        return f"{last_name}-W", None
+        return _dedupe_warranty_ref(f"{last_name}-W", record_id), None
     ss_order = _search_ss_order(original_order_num)
     if ss_order is None:
-        return f"{original_order_num}-W", None
+        return _dedupe_warranty_ref(f"{original_order_num}-W", record_id), None
     if _order_name_matches(ss_order, last_name, purchaser_last_name):
-        return f"{original_order_num}-W", ss_order
+        return _dedupe_warranty_ref(f"{original_order_num}-W", record_id), ss_order
     _order_name = ((ss_order.get("shipTo") or {}).get("name")) or ((ss_order.get("billTo") or {}).get("name")) or "?"
     print(f"[warranty_webhook] name mismatch for {record_id}: order {original_order_num} is under '{_order_name}', requester is '{last_name}' — using {last_name}-W and leaving that order untouched", flush=True)
-    return f"{last_name}-W", None
+    return _dedupe_warranty_ref(f"{last_name}-W", record_id), None
 
 
 def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_date=None):
@@ -14356,8 +14416,9 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     status=400, headers=c, mimetype="application/json",
                 )
 
-            # ── Idempotency: skip if SS order already exists ──
-            existing = _search_ss_order(warranty_order_num)
+            # ── Idempotency: skip if SS order already exists (exact match —
+            # refs are unique now, so an exact hit means THIS record's order) ──
+            existing = _ss_order_exact(warranty_order_num)
             if existing:
                 print(f"[warranty_webhook] received_changed skipped — SS order {warranty_order_num} already exists", flush=True)
                 return Response(
@@ -14531,8 +14592,12 @@ def _warranty_scan():
                                 timeout=10,
                             )
                             if ship_resp.ok:
+                                # Exact orderNumber match — the shipments search is a
+                                # substring match, so 'Bush-W' also returns 'Bush-W-2'
+                                # shipments (and vice versa would mis-date the record).
                                 shipments = [s for s in ship_resp.json().get("shipments", [])
-                                             if not s.get("voided", False)]
+                                             if not s.get("voided", False)
+                                             and (s.get("orderNumber") or "").strip().lower() == order_ref.lower()]
                                 if shipments:
                                     latest = sorted(shipments, key=lambda s: s.get("shipDate",""), reverse=True)[0]
                                     ship_date = (latest.get("shipDate") or "")[:10]
@@ -14595,7 +14660,7 @@ def _warranty_scan():
 
                     # Needs SS order but order doesn't exist yet (repairs only — replacements handled above)
                     elif item_rcvd and order_ref and approval in ("Rig Repair", "EDC Repair"):
-                        existing = _search_ss_order(order_ref)
+                        existing = _ss_order_exact(order_ref)
                         if not existing:
                             print(f"[warranty-scan] queuing received_changed for {rid}", flush=True)
                             try:
