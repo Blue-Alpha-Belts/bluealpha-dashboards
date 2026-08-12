@@ -12513,6 +12513,13 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
 
     cc_id = cc_url = ach_id = ach_url = due_date_str = ""
 
+    # Subtotal as billed — basis for the 3% credit-card surcharge
+    _surcharge_subtotal = sum(
+        float(i["line_total"]) if i.get("line_total") is not None
+        else float(i.get("unit_price") or 0) * int(i.get("qty") or 0)
+        for i in li_items
+    )
+
     for method in ["card", "us_bank_account"]:
         # 2. Create draft invoice first
         inv_data = {
@@ -12555,6 +12562,23 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
                 auth=ss_auth, timeout=15)
             if not ii_r.ok:
                 print(f"[stripe] invoice item warn ({method}): {ii_r.status_code} {ii_r.text[:200]}")
+
+        # 3% processing fee on the card invoice only (the invoice email already
+        # tells customers CC payments carry this fee; ACH stays at base price)
+        if method == "card" and _surcharge_subtotal > 0:
+            fee_cents = round(_surcharge_subtotal * 0.03 * 100)
+            if fee_cents > 0:
+                fee_r = req_lib.post("https://api.stripe.com/v1/invoiceitems",
+                    data={
+                        "customer":    customer_id,
+                        "invoice":     stripe_inv_id,
+                        "amount":      str(fee_cents),
+                        "currency":    "usd",
+                        "description": "Credit Card Processing Fee (3%)",
+                    },
+                    auth=ss_auth, timeout=15)
+                if not fee_r.ok:
+                    print(f"[stripe] cc fee item warn: {fee_r.status_code} {fee_r.text[:200]}")
 
         # 4. Finalize → get hosted_invoice_url
         fin_r = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_inv_id}/finalize",
