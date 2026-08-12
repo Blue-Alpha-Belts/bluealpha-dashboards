@@ -13485,7 +13485,6 @@ def warranty_submit():
         original_purchaser_last_name = request.form.get("originalPurchaserLastName", "").strip()
         approval          = request.form.get("approval", "").strip()
         replacement_item_val = request.form.get("replacementItem", "").strip()
-        send_customer_email_val = request.form.get("sendCustomerEmail", "0").strip() == "1"
         photos            = request.files.getlist("photos")
 
         # Basic validation
@@ -13493,6 +13492,13 @@ def warranty_submit():
         if not all(required_fields):
             return Response(
                 json.dumps({"success": False, "error": "Missing required fields"}),
+                status=400, headers=c, mimetype="application/json",
+            )
+        # Replace decisions can't process without the item — it goes verbatim
+        # into the customer email and onto the ShipStation order.
+        if approval in ("Replace", "Replace w/o return") and not replacement_item_val:
+            return Response(
+                json.dumps({"success": False, "error": "Replacement Item is required for Replace decisions"}),
                 status=400, headers=c, mimetype="application/json",
             )
         photos = photos[:5]  # cap at 5 (photos are optional for CS submissions)
@@ -13517,10 +13523,13 @@ def warranty_submit():
             fields["Original Purchaser's Last Name"] = original_purchaser_last_name
         if approval:
             fields["Approval"] = approval
+            # Every CS decision emails the customer (Patty 2026-08-12) — the
+            # submit button is the consent; the old Send Customer Email
+            # checkbox is gone from the /cs form. The trigger is still
+            # written so the 10AM/2PM scan backstops a failed inline send.
+            fields["Send Customer Email"] = True
         if replacement_item_val:
             fields["Replacement Item"] = replacement_item_val
-        if send_customer_email_val:
-            fields["Send Customer Email"] = True
 
         create_resp = req_lib.post(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{WARRANTY_TABLE_ID}",
@@ -13629,9 +13638,30 @@ def warranty_submit():
                     f"— Blue Alpha"
                 ),
             )
+            return Response(
+                json.dumps({"success": True}),
+                status=200, headers=c, mimetype="application/json",
+            )
+
+        # CS decision submission: process it right now (Patty 2026-08-12 —
+        # submit IS the send; previously the record waited for the 10AM/2PM
+        # scan, and before that for a checkbox nobody remembered to tick).
+        # Direct call rather than an HTTP self-post: gunicorn runs 1 worker /
+        # 4 threads here, so a self-request could starve under load. A fresh
+        # record can't collide with the webhook's dedup map, and the Warranty
+        # Order # lock inside handles true duplicates.
+        email_sent = False
+        try:
+            wh_resp = _warranty_webhook_inner(record_id, "approval_changed", c)
+            wh_data = json.loads(wh_resp.get_data(as_text=True) or "{}")
+            email_sent = bool(wh_data.get("success"))
+            if not email_sent:
+                print(f"[warranty_submit] inline processing failed for {record_id}: {wh_data.get('error')}", flush=True)
+        except Exception as wh_err:
+            print(f"[warranty_submit] inline processing error for {record_id}: {wh_err}", flush=True)
 
         return Response(
-            json.dumps({"success": True}),
+            json.dumps({"success": True, "emailSent": email_sent}),
             status=200, headers=c, mimetype="application/json",
         )
 

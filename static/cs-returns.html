@@ -821,17 +821,17 @@
             <label>Replacement Item</label>
             <input type="text" id="w-replacementItem" placeholder="e.g. 1.75&quot; Cobra Belt — Coyote Brown / Medium" maxlength="100">
           </div>
-          <div class="field" style="display:flex;align-items:center;gap:12px;">
-            <input type="checkbox" id="w-sendEmail" style="width:18px;height:18px;cursor:pointer;accent-color:#003a6c;">
-            <label for="w-sendEmail" style="margin:0;cursor:pointer;font-size:0.95rem;font-weight:600;color:#1a2633;">Send Customer Email</label>
+          <div style="font-size:0.85rem;color:#6b7a8d;line-height:1.5;">
+            Submitting emails the customer the decision right away and creates the
+            return label / replacement order — there is no separate send step.
           </div>
         </div>
-        <button class="btn btn-primary" id="w-submitBtn" onclick="submitWarrantyForm()" style="margin-top:8px;width:100%;">Submit Warranty Request</button>
+        <button class="btn btn-primary" id="w-submitBtn" onclick="submitWarrantyForm()" style="margin-top:8px;width:100%;">Submit &amp; Email Customer</button>
       </div>
       <div id="warranty-success" class="hidden" style="text-align:center;padding:48px 32px;">
         <div style="font-size:3.5rem;margin-bottom:20px;">✅</div>
         <h2 style="font-family:'Montserrat',sans-serif;font-size:1.5rem;font-weight:800;color:#003a6c;margin-bottom:12px;">Request Submitted!</h2>
-        <p style="color:#6b7a8d;font-size:0.95rem;line-height:1.6;">The warranty request has been submitted successfully.</p>
+        <p id="warranty-success-msg" style="color:#6b7a8d;font-size:0.95rem;line-height:1.6;">The warranty request has been submitted successfully.</p>
         <button class="btn btn-primary" onclick="resetWarrantyForm()" style="margin-top:24px;">Submit Another</button>
       </div>
     </div>
@@ -2574,25 +2574,28 @@ async function submitWarrantyForm() {
   formData.append('originalPurchaserLastName', document.getElementById('w-originalPurchaserLastName').value.trim());
   formData.append('approval',         approval);
   formData.append('replacementItem',  replacementItem);
-  formData.append('sendCustomerEmail', document.getElementById('w-sendEmail').checked ? '1' : '0');
 
   try {
     const resp = await fetch('/api/warranty/submit', { method: 'POST', body: formData });
     const data = await resp.json();
     if (data.success) {
+      document.getElementById('warranty-success-msg').textContent =
+        data.emailSent
+          ? 'The warranty request has been saved and the customer has been emailed the decision.'
+          : 'Saved — but the decision email could not be sent right away. The system will retry automatically at 10 AM / 2 PM ET; no action needed.';
       document.getElementById('warranty-form-inner').classList.add('hidden');
       document.getElementById('warranty-success').classList.remove('hidden');
     } else {
       errEl.textContent = data.error || 'Something went wrong. Please try again.';
       errEl.style.display = 'block';
       btn.disabled = false;
-      btn.textContent = 'Submit Warranty Request';
+      btn.textContent = 'Submit & Email Customer';
     }
   } catch (err) {
     errEl.textContent = 'Network error. Please check your connection and try again.';
     errEl.style.display = 'block';
     btn.disabled = false;
-    btn.textContent = 'Submit Warranty Request';
+    btn.textContent = 'Submit & Email Customer';
   }
 }
 
@@ -2601,13 +2604,12 @@ function resetWarrantyForm() {
     document.getElementById(id).value = '';
   });
   document.getElementById('w-approval').value = '';
-  document.getElementById('w-sendEmail').checked = false;
   document.getElementById('w-replacementItemRow').style.display = 'none';
   document.getElementById('w-descCount').textContent = '150';
   document.getElementById('warranty-form-inner').classList.remove('hidden');
   document.getElementById('warranty-success').classList.add('hidden');
   document.getElementById('w-submitBtn').disabled = false;
-  document.getElementById('w-submitBtn').textContent = 'Submit Warranty Request';
+  document.getElementById('w-submitBtn').textContent = 'Submit & Email Customer';
 }
 </script>
 </body>
