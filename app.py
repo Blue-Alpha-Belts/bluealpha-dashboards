@@ -6680,7 +6680,8 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
             pdf.set_x(bill_x)
             pdf.set_font("Helvetica", "B" if ln == bill_org else "", 8)
             pdf.set_text_color(*TEXT)
-            pdf.cell(col3_w, 5, ln, border=0, new_x="LEFT", new_y="NEXT")
+            # truncate long org names — cell() would overflow into the next column
+            pdf.cell(col3_w, 5, _pdf_fit_line(pdf, ln, col3_w - 3), border=0, new_x="LEFT", new_y="NEXT")
     y_after_bill = pdf.get_y()
 
     # --- Ship To ---
@@ -6700,7 +6701,7 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
             pdf.set_x(ship_x)
             pdf.set_font("Helvetica", "B" if ln == ship_org_display else "", 8)
             pdf.set_text_color(*TEXT)
-            pdf.cell(col3_w, 5, ln, border=0, new_x="LEFT", new_y="NEXT")
+            pdf.cell(col3_w, 5, _pdf_fit_line(pdf, ln, col3_w - 3), border=0, new_x="LEFT", new_y="NEXT")
     y_after_ship = pdf.get_y()
 
     # --- Quote / Order Details ---
@@ -6975,6 +6976,16 @@ def order_pdf(record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=cors(), mimetype="application/json")
 
 
+def _pdf_fit_line(pdf, text, max_w):
+    """Truncate text with '...' so it fits within max_w mm at the current font."""
+    text = str(text or "")
+    if pdf.get_string_width(text) <= max_w:
+        return text
+    while text and pdf.get_string_width(text + "...") > max_w:
+        text = text[:-1]
+    return text.rstrip() + "..."
+
+
 def _build_invoice_pdf_bytes(inv):
     """Generate PDF bytes for an invoice matching the quote/SO PDF style."""
     import os, tempfile
@@ -7145,7 +7156,8 @@ def _build_invoice_pdf_bytes(inv):
             pdf.set_x(bill_x)
             pdf.set_font("Helvetica", "B" if ln == org_name else "", 8)
             pdf.set_text_color(*TEXT)
-            pdf.cell(col3_w, 5, ln, border=0, new_x="LEFT", new_y="NEXT")
+            # truncate long org names — cell() would overflow into the next column
+            pdf.cell(col3_w, 5, _pdf_fit_line(pdf, ln, col3_w - 3), border=0, new_x="LEFT", new_y="NEXT")
     y_after_bill = pdf.get_y()
 
     # --- Ship To ---
@@ -7158,7 +7170,7 @@ def _build_invoice_pdf_bytes(inv):
             pdf.set_x(ship_x)
             pdf.set_font("Helvetica", "B" if ln == ship_org else "", 8)
             pdf.set_text_color(*TEXT)
-            pdf.cell(col3_w, 5, ln, border=0, new_x="LEFT", new_y="NEXT")
+            pdf.cell(col3_w, 5, _pdf_fit_line(pdf, ln, col3_w - 3), border=0, new_x="LEFT", new_y="NEXT")
     # Ship Date + Tracking directly below Ship To address
     if ship_date:
         pdf.set_x(ship_x)
