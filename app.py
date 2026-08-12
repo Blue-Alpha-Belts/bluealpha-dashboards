@@ -7453,11 +7453,13 @@ def invoice_pdf(record_id):
         }
 
         pdf_bytes = _build_invoice_pdf_bytes(inv)
+        # Staff sessions view the PDF in the browser tab; customers keep the download
+        _disposition = "inline" if _is_staff else "attachment"
         return Response(
             pdf_bytes,
             headers={
                 **cors(),
-                "Content-Disposition": f'attachment; filename="{inv_number}.pdf"',
+                "Content-Disposition": f'{_disposition}; filename="{inv_number}.pdf"',
                 "Content-Type": "application/pdf",
             },
         )
@@ -11720,8 +11722,8 @@ def portal_admin_convert_to_invoice(user, record_id):
                 print(f"[convert-to-invoice] could not fetch line item {li_id}: {li_r.status_code}")
                 continue
             lf = li_r.json().get("fields", {})
-            product_name_list = lf.get("Product Name (from Product SKU)", [])
-            product_name = product_name_list[0] if product_name_list else ""
+            product_name = _first(lf.get("Product Name (from Product SKU)", [])) or \
+                           _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
             # Use caller-specified qty if provided, else original
             qty = selected_items[li_id] if (selected_items is not None and li_id in selected_items) else lf.get("Qty.", 0)
             adj_price       = lf.get("Confirmed Adj. Unit Price")
@@ -11846,10 +11848,10 @@ def portal_admin_convert_to_invoice(user, record_id):
                 print(f"[convert-to-invoice] email failed: {email_err}")
 
         # Create Stripe CC + ACH invoices inline (Airtable automation replaced by this)
-        if bill_email:
+        if to_email:
             try:
                 _create_stripe_invoices_for_record(
-                    write_token, inv_record_id, bill_email, bill_name, org_name, li_items_for_email
+                    write_token, inv_record_id, to_email, to_name, org_name, email_line_items
                 )
             except Exception as stripe_err:
                 print(f"[convert-to-invoice] Stripe invoice creation failed for {inv_number}: {stripe_err}")
@@ -12383,8 +12385,8 @@ def admin_convert_to_invoice(record_id):
             adj_list_v = lf.get("Adj. Unit Price (from MO Line Items)", [])
             unit_price = float(adj_price if adj_price is not None else (conf_price if conf_price is not None else (float(adj_list_v[0]) if adj_list_v else 0)))
             li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
-            pname_list = lf.get("Product Name (from Product SKU)", [])
-            pname = _first(pname_list) if pname_list else "Item"
+            pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
+                    _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
             req_lib.post(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
                 headers={**at_headers(write_token), "Content-Type": "application/json"},
