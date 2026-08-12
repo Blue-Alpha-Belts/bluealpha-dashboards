@@ -7410,7 +7410,8 @@ def invoice_pdf(record_id):
 
         tracking = ship_date = ""
         tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
-                                    fields=["Order #", "Tracking #", "Ship Date"], base_id=_SO_TRACKING_BASE)
+                                    fields=["Order #", "Tracking #", "Ship Date"], base_id=_SO_TRACKING_BASE,
+                                    formula=f'{{Order #}}="{so_number}"') if so_number else []
         for tr in tracking_recs:
             if tr.get("fields", {}).get("Order #", "").strip() == so_number:
                 tracking  = tr["fields"].get("Tracking #", "")
@@ -11610,7 +11611,8 @@ def _fetch_so_line_items(record_id, split_order_number=None):
         if so_number:
             tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
                                         fields=["Order #", "Base Order #"],
-                                        base_id=_SO_TRACKING_BASE)
+                                        base_id=_SO_TRACKING_BASE,
+                                        formula=f'{{Base Order #}}="{so_number}"')
             has_splits = any(
                 r.get("fields", {}).get("Base Order #") == so_number
                 for r in tracking_recs
@@ -11710,6 +11712,7 @@ def portal_admin_convert_to_invoice(user, record_id):
             _SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
             fields=["Order #", "Tracking #", "Ship Date"],
             base_id=_SO_TRACKING_BASE,
+            formula=f'{{Order #}}="{tracking_order_num}"',
         )
         tracking  = ""
         ship_date = ""
@@ -12042,6 +12045,7 @@ def invoice_detail(record_id):
                 _SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
                 fields=["Order #", "Tracking #", "Ship Date"],
                 base_id=_SO_TRACKING_BASE,
+                formula=f'{{Order #}}="{so_number}"',
             )
             _li_results = list(_ex_inv.map(_fetch_inv_li, li_ids))
         tracking_recs = _fut_tracking_inv.result()
@@ -12324,7 +12328,8 @@ def admin_convert_to_invoice(record_id):
 
         # Get tracking and ship date (use split order number for splits)
         tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
-                                    fields=["Order #", "Tracking #", "Ship Date"], base_id=_SO_TRACKING_BASE)
+                                    fields=["Order #", "Tracking #", "Ship Date"], base_id=_SO_TRACKING_BASE,
+                                    formula=f'{{Order #}}="{tracking_order_num}"')
         tracking  = ""
         ship_date = ""
         for _tr in tracking_recs:
@@ -13110,7 +13115,8 @@ def admin_resend_invoice(record_id):
         # Get tracking + ship date
         tracking = ship_date = ""
         tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
-                                    fields=["Order #", "Tracking #", "Ship Date"], base_id=_SO_TRACKING_BASE)
+                                    fields=["Order #", "Tracking #", "Ship Date"], base_id=_SO_TRACKING_BASE,
+                                    formula=f'{{Order #}}="{so_number}"') if so_number else []
         for tr in tracking_recs:
             if tr.get("fields", {}).get("Order #", "").strip() == so_number:
                 tracking  = tr["fields"].get("Tracking #", "")

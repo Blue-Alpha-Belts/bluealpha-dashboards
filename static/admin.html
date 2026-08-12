@@ -1232,6 +1232,7 @@
       titleEl.textContent = `Convert ${soNumber} to Invoice${isSplitTitle ? ' (Split)' : ''}`;
       bodyEl.innerHTML = '<div style="text-align:center;padding:24px;color:#555;">Loading items…</div>';
       submitEl.disabled = true;
+      submitEl.textContent = 'Create Invoice';  // reset — stays "Converting…" after a prior successful convert
       modal.style.display = 'flex';
 
       try {
