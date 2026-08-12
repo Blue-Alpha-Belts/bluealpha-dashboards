@@ -377,6 +377,7 @@
 
       <!-- Admin: Invoices -->
       <div class="tab-panel" id="tab-invoices">
+        <div id="fulfillmentDrafts" style="display:none;margin-bottom:18px;"></div>
         <div style="margin-bottom:10px;">
           <input type="text" id="invoiceSearch" placeholder="Search customer or invoice #…" oninput="applyInvoiceFilters()" style="max-width:320px;margin-bottom:0;">
         </div>
@@ -1413,15 +1414,176 @@
     async function loadInvoices() {
       const el = document.getElementById('invoicesContent');
       el.innerHTML = '<div class="loading">Loading…</div>';
+      loadFulfillmentDrafts();   // parallel — renders its own panel
       try {
         const resp = await fetch('/api/admin/invoices');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
-        allInvoices = data.invoices || [];
+        // Drafts live in the review panel above, not the main table
+        allInvoices = (data.invoices || []).filter(i => !i.is_draft);
         applyInvoiceFilters();
         invoicesLoaded = true;
       } catch (e) {
         el.innerHTML = `<div class="empty-state">Failed to load: ${esc(e.message)}</div>`;
+      }
+    }
+
+    // ── Fulfillment draft invoices (WPS monthly billing) ─────────────────────
+    let _draftDetailOpen = {};   // record_id -> bool
+
+    async function loadFulfillmentDrafts() {
+      const panel = document.getElementById('fulfillmentDrafts');
+      try {
+        const resp = await fetch('/api/admin/fulfillment/drafts');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        renderFulfillmentDrafts(data.drafts || []);
+      } catch (e) {
+        panel.style.display = 'block';
+        panel.innerHTML = `<div class="empty-state">Draft invoices failed to load: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderFulfillmentDrafts(drafts) {
+      const panel = document.getElementById('fulfillmentDrafts');
+      if (!drafts.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+      panel.style.display = 'block';
+      let html = `<h3 style="margin:0 0 8px;font-size:1.02rem;">📝 Draft Invoices Awaiting Review
+        <span class="badge" style="background:#fff3cd;color:#6b4c00;margin-left:6px;">${drafts.length}</span></h3>`;
+      drafts.forEach(d => {
+        const rowsHtml = d.lines.map(ln => {
+          const amtColor = ln.total < 0 ? 'color:#1a6b34;' : '';
+          const amountCell = ln.is_returns
+            ? `<div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;">
+                 <span style="white-space:nowrap;">−$</span>
+                 <input type="number" min="0" step="0.01" id="ret-${esc(d.record_id)}"
+                        value="${ln.unit_price ? Math.abs(ln.unit_price).toFixed(2) : ''}" placeholder="0.00"
+                        style="width:90px;margin:0;padding:4px 6px;text-align:right;">
+                 <button class="btn btn-outline btn-sm" style="padding:4px 8px;font-size:0.78rem;"
+                         onclick="saveReturnsCredit('${esc(d.record_id)}','${esc(ln.record_id)}',this)">Save</button>
+               </div>`
+            : `$${ln.total.toFixed(2)}`;
+          return `<tr>
+            <td>${esc(ln.name)}</td>
+            <td style="text-align:right;">${ln.qty}</td>
+            <td style="text-align:right;">$${ln.unit_price.toFixed(2)}</td>
+            <td style="text-align:right;${amtColor}">${amountCell}</td>
+          </tr>`;
+        }).join('');
+        const detailBtn = d.month
+          ? `<button class="btn btn-outline btn-sm" onclick="toggleDraftDetail('${esc(d.record_id)}','${esc(d.month)}',this)">🔍 Order Detail</button>`
+          : '';
+        const warn = (d.internal_notes || '').includes('WARNING')
+          ? `<div style="background:#fff3cd;color:#6b4c00;padding:6px 10px;border-radius:6px;font-size:0.82rem;margin-top:8px;">⚠ ${esc(d.internal_notes.split('WARNING:')[1] || '')}</div>` : '';
+        html += `<div class="card card-padded" style="margin-bottom:12px;border-left:4px solid #c9960c;">
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;">
+            <div>
+              <strong style="font-size:1.02rem;">${esc(d.inv_number)}</strong>
+              <span style="color:var(--muted);margin-left:8px;">${esc(d.po_number)}</span>
+              <span class="badge" style="background:#e2e3e5;color:#41464b;margin-left:8px;">DRAFT · hidden from customer</span>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button class="btn btn-outline btn-sm" onclick="openPdfViewer('${esc(d.record_id)}','${esc(d.inv_number)}')">📄 PDF</button>
+              ${detailBtn}
+              <button class="btn btn-primary btn-sm" style="background:#155724;border-color:#155724;"
+                      onclick="approveFulfillmentDraft('${esc(d.record_id)}','${esc(d.inv_number)}',this)">✅ Approve &amp; Send</button>
+            </div>
+          </div>
+          <table style="width:100%;margin-top:10px;font-size:0.88rem;">
+            <thead><tr><th>Line item</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Unit</th><th style="text-align:right;width:220px;">Amount</th></tr></thead>
+            <tbody>${rowsHtml}</tbody>
+            <tfoot><tr><td colspan="3" style="text-align:right;font-weight:700;">Total</td>
+              <td style="text-align:right;font-weight:700;">$${d.total.toFixed(2)}</td></tr></tfoot>
+          </table>
+          ${warn}
+          <div id="detail-${esc(d.record_id)}" style="display:none;margin-top:10px;"></div>
+        </div>`;
+      });
+      panel.innerHTML = html;
+    }
+
+    async function saveReturnsCredit(recordId, lineId, btn) {
+      const input = document.getElementById(`ret-${recordId}`);
+      const val = Math.abs(parseFloat(input.value || '0') || 0);
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        const resp = await fetch(`/api/admin/fulfillment/line-item/${lineId}`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({amount: -val}),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+        btn.textContent = '✓';
+        setTimeout(() => { loadFulfillmentDrafts(); }, 600);
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Save';
+        alert('Failed to save returns credit: ' + e.message);
+      }
+    }
+
+    async function approveFulfillmentDraft(recordId, invNumber, btn) {
+      const input = document.getElementById(`ret-${recordId}`);
+      const pending = input && input.value !== '' && btn.dataset.savedWarned !== '1';
+      if (!confirm(`Approve & send ${invNumber}?\n\nThis makes the invoice visible in WPS's portal and creates the Stripe payment links.` +
+                   (pending ? '\n\nNote: make sure you clicked Save on the Returns Credit first.' : ''))) return;
+      btn.disabled = true; btn.textContent = 'Approving…';
+      try {
+        const resp = await fetch(`/api/admin/fulfillment/drafts/${recordId}/approve`, {method: 'POST'});
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+        btn.textContent = '✓ Approved';
+        setTimeout(() => { invoicesLoaded = false; loadInvoices(); }, 1500);
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '✅ Approve & Send';
+        alert('Approve failed: ' + e.message);
+      }
+    }
+
+    async function toggleDraftDetail(recordId, month, btn) {
+      const box = document.getElementById(`detail-${recordId}`);
+      if (_draftDetailOpen[recordId]) {
+        box.style.display = 'none'; _draftDetailOpen[recordId] = false;
+        btn.textContent = '🔍 Order Detail'; return;
+      }
+      _draftDetailOpen[recordId] = true;
+      btn.textContent = '▲ Hide Detail';
+      box.style.display = 'block';
+      box.innerHTML = '<div class="loading">Pulling order detail from ShipStation…</div>';
+      try {
+        const resp = await fetch(`/api/admin/fulfillment/detail?month=${encodeURIComponent(month)}`);
+        const d = await resp.json();
+        if (!resp.ok || d.error) throw new Error(d.error || `HTTP ${resp.status}`);
+        const bucketNames = {low_profile:'Low Profile', lp_inner:'LP Inner', cobra:'1.75" Cobra', dring:'1.75" D-ring', exchange:'Exchange', unknown:'⚠ UNMAPPED'};
+        let h = `<div style="font-size:0.84rem;color:var(--muted);margin-bottom:6px;">
+          ${d.order_count} orders · ${d.unit_count} billable units · shipped ${esc(d.month)}</div>`;
+        h += '<div style="max-height:340px;overflow-y:auto;"><table style="width:100%;font-size:0.82rem;"><thead><tr><th>#</th><th>Order</th><th>Shipped</th><th>Customer</th><th>Items</th></tr></thead><tbody>';
+        d.order_rows.forEach((r, i) => {
+          const items = r.items.map(it =>
+            `<span class="badge" style="background:#e8eef7;color:#1B3A6B;">${esc(bucketNames[it.bucket] || it.bucket)}</span> ${esc(it.sku)} ×${it.qty}`
+          ).join('<br>');
+          h += `<tr><td>${i+1}</td><td>${esc(r.order)}</td><td>${esc(r.ship_date.slice(5))}</td><td>${esc(r.customer)}</td><td>${items}</td></tr>`;
+        });
+        h += '</tbody></table></div>';
+        if (d.incorrect_rows.length) {
+          h += '<h4 style="margin:10px 0 4px;font-size:0.9rem;">Incorrect Item Store credit</h4><table style="width:100%;font-size:0.82rem;"><thead><tr><th>Order</th><th>Customer</th><th>Labels</th><th style="text-align:right;">Credit</th></tr></thead><tbody>';
+          d.incorrect_rows.forEach(r => {
+            const labels = r.labels.map(l => `$${l.cost.toFixed(2)}${l.is_return ? ' (return)' : ''}${l.status === 'error' ? ' ⚠error' : ''}`).join(' + ');
+            h += `<tr><td>${esc(r.order)}</td><td>${esc(r.customer)}</td><td>${labels}${r.doubled ? ' → ×2' : ''}</td><td style="text-align:right;color:#1a6b34;">−$${r.credit.toFixed(2)}</td></tr>`;
+          });
+          h += '</tbody></table>';
+        }
+        if (d.excluded.length) {
+          h += `<div style="margin-top:8px;font-size:0.82rem;color:var(--muted);">Excluded (placed on/before cutover, already invoiced): ${d.excluded.map(x => esc(x.order)).join(', ')}</div>`;
+        }
+        if (d.unknown.length) {
+          h += `<div style="margin-top:8px;background:#fff3cd;color:#6b4c00;padding:6px 10px;border-radius:6px;font-size:0.82rem;">⚠ Unmapped items (NOT billed): ${d.unknown.map(u => `${esc(u.sku)} (${esc(u.name)})`).join('; ')}</div>`;
+        }
+        if (d.restock.length) {
+          h += `<div style="margin-top:8px;font-size:0.82rem;color:var(--muted);">Warrior Poet Society restock shipments (not billed): ${d.restock.map(x => esc(x.shipment)).join(', ')}</div>`;
+        }
+        box.innerHTML = h;
+      } catch (e) {
+        box.innerHTML = `<div class="empty-state">Detail failed: ${esc(e.message)}</div>`;
       }
     }
 

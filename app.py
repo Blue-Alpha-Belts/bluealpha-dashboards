@@ -44,6 +44,8 @@ SIZING_EXCHANGE_STORE_ID = 185018
 
 SHIPSTATION_KEY      = os.environ.get("SHIPSTATION_KEY", "")
 SHIPSTATION_SECRET   = os.environ.get("SHIPSTATION_SECRET", "")
+# WPS (Warrior Poet Society) ShipStation v2 API key — monthly fulfillment invoicing
+WPS_SHIPSTATION_V2_KEY = os.environ.get("WPS_SHIPSTATION_V2_KEY", "")
 SENDGRID_API_KEY     = os.environ.get("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL  = os.environ.get("SENDGRID_FROM_EMAIL", "orders@bluealpha.us")
 CS_FROM_EMAIL        = "info@bluealpha.us"   # CS portal emails (exchange, returns, warranty, etc.)
@@ -6933,11 +6935,13 @@ def quote_pdf(record_id):
                             headers=c, mimetype="application/json")
         pdf_bytes = _build_quote_pdf_bytes(quote)
         q_number  = quote.get("quoteNumber", record_id)
+        # Staff sessions view the PDF in the browser tab; customers keep the download
+        _disposition = "inline" if _is_staff else "attachment"
         return Response(
             pdf_bytes,
             headers={
                 **cors(),
-                "Content-Disposition": f'attachment; filename="{q_number}.pdf"',
+                "Content-Disposition": f'{_disposition}; filename="{q_number}.pdf"',
                 "Content-Type": "application/pdf",
             },
         )
@@ -6963,11 +6967,13 @@ def order_pdf(record_id):
                             headers=c, mimetype="application/json")
         pdf_bytes = _build_quote_pdf_bytes(order, doc_type="order")
         so_number = order.get("quoteNumber", record_id)
+        # Staff sessions view the PDF in the browser tab; customers keep the download
+        _disposition = "inline" if _is_staff else "attachment"
         return Response(
             pdf_bytes,
             headers={
                 **cors(),
-                "Content-Disposition": f'attachment; filename="{so_number}.pdf"',
+                "Content-Disposition": f'{_disposition}; filename="{so_number}.pdf"',
                 "Content-Type": "application/pdf",
             },
         )
@@ -12876,7 +12882,7 @@ def admin_invoices():
                     "Stripe Invoice Status (CC)", "Stripe Invoice Status (ACH)",
                     "Stripe Invoice URL (CC)", "Stripe Invoice Due Date",
                     "Bill-To Contact Email (from Customer)", "Bill-To Contact Name (from Customer)",
-                    "Bill-To Org Name (from Customer)", "Overdue Notice Dates"],
+                    "Bill-To Org Name (from Customer)", "Overdue Notice Dates", "Invoice Status"],
             formula='{Order Type}="Invoice"',
         )
 
@@ -12956,6 +12962,7 @@ def admin_invoices():
                 "has_stripe":           bool(f.get("Stripe Invoice URL (CC)", "")),
                 "billing_email":        bill_email_raw[0] if isinstance(bill_email_raw, list) and bill_email_raw else (bill_email_raw or ""),
                 "overdue_notice_dates": (f.get("Overdue Notice Dates") or "").strip(),
+                "is_draft":             (f.get("Invoice Status") or "") == "Draft",
             })
 
         invoices.sort(key=lambda x: x.get("date", ""), reverse=True)
@@ -15443,6 +15450,567 @@ def pd_portal_order_detail(record_id):
         return Response(json.dumps(order), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WPS (Warrior Poet Society) monthly fulfillment invoicing
+#
+# Bills WPS for dropship orders Blue Alpha fulfills out of WPS's own ShipStation
+# account, on a SHIPPED-date basis (cutover: invoiced through orders placed
+# 4/30/26 under the old placed-basis process; ships from 5/1/26 onward billed
+# here, May excludes shipments whose orders were placed on/before 4/30).
+#
+# A background worker creates a Draft + Hidden invoice in Manual Orders on the
+# 1st of each month for the prior month; Patty reviews it in /admin (Invoices
+# tab), enters the Returns Credit, and clicks Approve & Send — which flips
+# Invoice Status to Approved (the Airtable automation then generates the Stripe
+# invoices) and unhides it in the customer portal. The worker also repopulates
+# the "WPS Orders" stats table in the Automated Data base.
+# ═════════════════════════════════════════════════════════════════════════════
+
+WPS_FUL_STORE_ID        = "se-243481"   # WPS Shopify dropship store (billable)
+WPS_RESTOCK_STORE_ID    = "se-143792"   # Warrior Poet Society restock/portal shipments (never billed)
+WPS_INCORRECT_STORE_ID  = "se-215071"   # incorrect-item store (label costs credited back)
+WPS_CUSTOMER_RECORD_ID  = "recoiW57of2qTtNAg"
+WPS_FUL_CUTOVER_ISO     = "2026-05-01"  # first fulfillment-basis month; placed<=4/30 excluded in May
+
+AUTOMATED_DATA_BASE_ID     = "app3xt0dghBWnHxdN"
+WPS_ORDERS_STATS_TABLE_ID  = "tblmBSqmAW7ZSvkFI"
+
+WPS_FUL_PRICES = {
+    "low_profile": 32.37,   # children of WPS Low Profile (BAG-2174..2245-WPS)
+    "lp_inner":    39.47,   # Low Profile Inner incl. Inner Only + Velcro Inner (BAG-2301..2355-WPS)
+    "cobra":       122.67,  # WPS-MDBR-*-LO-ST
+    "dring":       136.35,  # WPS-MDBR-*-LO-DR
+    "order_fee":   2.09,    # per distinct order shipped from the fulfillment store
+    "exchange":    100.00,  # flat monthly Size Exchange Service line
+}
+WPS_FUL_BUCKET_LABELS = {
+    "low_profile": "WPS Low Profile", "lp_inner": "WPS LP Inner",
+    "cobra": 'WPS 1.75" Cobra', "dring": 'WPS 1.75" D-ring',
+}
+# Service SKUs created 2026-08-12 for these invoices (resolved to record ids at runtime)
+WPS_FUL_SERVICE_SKUS = {
+    "low_profile": "WPS-LOWPRO-FUL", "lp_inner": "WPS-LPINNER-FUL",
+    "cobra": "WPS-COBRA-FUL", "dring": "WPS-DRING-FUL",
+    "order_fee": "WPS-ORDER-FUL", "exchange": "WPS-EXCH-SVC",
+    "incorrect": "WPS-INC-SHIP-CR", "returns": "RETURNS-CREDIT",
+}
+
+_wps_ful_cache = {}          # "YYYY-MM" -> (epoch, computed dict)
+_wps_ful_sku_ids = {}        # bucket key -> Product SKU record id
+_WPS_FUL_CACHE_TTL = 6 * 3600
+
+
+def _wps_v2_get(path, params=None):
+    """GET against ShipStation v2 with the WPS account key."""
+    if not WPS_SHIPSTATION_V2_KEY:
+        raise RuntimeError("WPS_SHIPSTATION_V2_KEY not configured")
+    last_exc = None
+    for attempt in range(3):
+        try:
+            r = req_lib.get(f"https://api.shipstation.com/v2/{path.lstrip('/')}",
+                            headers={"API-Key": WPS_SHIPSTATION_V2_KEY},
+                            params=params or {}, timeout=30)
+            if r.status_code == 429:
+                import time as _t; _t.sleep(3 * (attempt + 1)); continue
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last_exc = e
+            import time as _t; _t.sleep(2)
+    raise RuntimeError(f"ShipStation v2 GET {path} failed: {last_exc}")
+
+
+def _wps_month_bounds(month_str):
+    """'2026-07' -> (date 2026-07-01, date 2026-08-01)."""
+    from datetime import date as _date
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    start = _date(y, m, 1)
+    end = _date(y + 1, 1, 1) if m == 12 else _date(y, m + 1, 1)
+    return start, end
+
+
+def _wps_pull_shipments(month_str):
+    """All WPS-account shipments with ship_date in the month. v2 ignores
+    ship_date_start/end filters, so pull a buffered created_at window and
+    filter ship_date locally. created_at ~= order placed time (import lag <1h)."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    start, end = _wps_month_bounds(month_str)
+    ca_start = (start - _td(days=21)).isoformat() + "T00:00:00Z"
+    ca_end   = (end + _td(days=7)).isoformat() + "T00:00:00Z"
+    out, page, pages = [], 1, 1
+    while page <= pages:
+        data = _wps_v2_get("shipments", {
+            "created_at_start": ca_start, "created_at_end": ca_end,
+            "page_size": 200, "page": page,
+        })
+        pages = int(data.get("pages") or 1)
+        for s in data.get("shipments", []):
+            sd = (s.get("ship_date") or "")[:10]
+            if not sd or not (start.isoformat() <= sd < end.isoformat()):
+                continue
+            out.append({
+                "shipment_id":     s.get("shipment_id"),
+                "shipment_number": s.get("shipment_number") or "",
+                "external_id":     s.get("external_shipment_id") or "",
+                "ship_date":       sd,
+                "created_at":      (s.get("created_at") or "")[:10],
+                "status":          s.get("shipment_status") or "",
+                "store_id":        s.get("store_id") or "",
+                "ship_to_name":    (s.get("ship_to") or {}).get("name") or "",
+                "items": [{"sku": it.get("sku") or "", "name": it.get("name") or "",
+                           "qty": int(it.get("quantity") or 0)}
+                          for it in (s.get("items") or [])],
+            })
+        page += 1
+    return out
+
+
+def _wps_classify(sku, name):
+    """Map a WPS ShipStation SKU to a billing bucket (matches Product SKUs table)."""
+    import re as _re
+    m = _re.match(r"^BAG-(\d+)-WPS$", sku or "")
+    if m:
+        n = int(m.group(1))
+        if 2174 <= n <= 2245: return "low_profile"
+        if 2301 <= n <= 2355: return "lp_inner"
+        return "unknown"
+    if _re.match(r"^WPS-MDBR-\d+-\w+-LO-ST$", sku or ""): return "cobra"
+    if _re.match(r"^WPS-MDBR-\d+-\w+-LO-DR$", sku or ""): return "dring"
+    if sku == "belt-size-exchange": return "exchange"
+    # Pre-May-2026 bare SKUs (e.g. WPS-MDBR-42): classify by item name
+    if _re.match(r"^WPS-MDBR-\d+$", sku or ""):
+        if "D-ring" in (name or ""): return "dring"
+        if "Standard Cobra" in (name or ""): return "cobra"
+    return "unknown"
+
+
+def _wps_base_order(shipment):
+    """'#347738-8393337143592' -> '#347738'; 'WPS-SP-825...' is already one order."""
+    eid = shipment.get("external_id") or shipment.get("shipment_number") or ""
+    return eid.split("-")[0] if eid.startswith("#") else eid
+
+
+def _wps_compute(month_str, force=False):
+    """Compute the month's invoice lines + full per-order detail. Cached."""
+    import time as _time
+    cached = _wps_ful_cache.get(month_str)
+    if cached and not force and _time.time() - cached[0] < _WPS_FUL_CACHE_TTL:
+        return cached[1]
+
+    shipments = _wps_pull_shipments(month_str)
+    ful = [s for s in shipments if s["store_id"] == WPS_FUL_STORE_ID]
+    restock = [s for s in shipments if s["store_id"] == WPS_RESTOCK_STORE_ID]
+    incorrect = [s for s in shipments if s["store_id"] == WPS_INCORRECT_STORE_ID]
+
+    # May 2026 cutover: exclude orders placed on/before 4/30 (already invoiced)
+    excluded = []
+    if month_str == WPS_FUL_CUTOVER_ISO[:7]:
+        excluded = [s for s in ful if s["created_at"] < WPS_FUL_CUTOVER_ISO]
+        ful = [s for s in ful if s["created_at"] >= WPS_FUL_CUTOVER_ISO]
+
+    units = {"low_profile": 0, "lp_inner": 0, "cobra": 0, "dring": 0}
+    stats_units = {"low_profile": 0, "lp_inner": 0, "inner_only": 0, "cobra": 0, "dring": 0}
+    order_nums = {"low_profile": [], "lp_inner": [], "inner_only": [], "cobra": [], "dring": [], "exchange": []}
+    orders, order_rows, exchanges, unknown = set(), [], [], []
+
+    for s in sorted(ful, key=lambda x: x["ship_date"]):
+        base = _wps_base_order(s)
+        orders.add(base)
+        row_items = []
+        for it in s["items"]:
+            bucket = _wps_classify(it["sku"], it["name"])
+            row_items.append({"sku": it["sku"], "name": it["name"], "qty": it["qty"], "bucket": bucket})
+            if bucket == "exchange":
+                exchanges.append({"order": base, "name": it["name"]})
+                if base not in order_nums["exchange"]: order_nums["exchange"].append(base)
+            elif bucket == "unknown":
+                unknown.append({"order": base, "sku": it["sku"], "name": it["name"], "qty": it["qty"]})
+            else:
+                units[bucket] += it["qty"]
+                stats_key = bucket
+                if bucket == "lp_inner":
+                    stats_key = "inner_only" if "INNER ONLY" in (it["name"] or "").upper() else "lp_inner"
+                stats_units[stats_key] += it["qty"]
+                if base not in order_nums[stats_key]: order_nums[stats_key].append(base)
+        order_rows.append({"order": base, "ship_date": s["ship_date"],
+                           "customer": s["ship_to_name"], "items": row_items})
+
+    # Incorrect-item store: label costs credited. Group by order; single
+    # return-label-only orders are doubled (outbound cost isn't visible).
+    inc_orders = {}
+    for s in incorrect:
+        base = _wps_base_order(s) or s["shipment_number"]
+        inc_orders.setdefault(base, {"order": base, "customer": s["ship_to_name"], "labels": []})
+        try:
+            data = _wps_v2_get("labels", {"shipment_id": s["shipment_id"]})
+            for lb in data.get("labels", []):
+                if lb.get("voided"):
+                    continue
+                inc_orders[base]["labels"].append({
+                    "cost": float((lb.get("shipment_cost") or {}).get("amount") or 0),
+                    "is_return": bool(lb.get("is_return_label")),
+                    "status": lb.get("status") or "",
+                })
+        except Exception as e:
+            print(f"[wps-ful] labels fetch failed for {s['shipment_id']}: {e}")
+    incorrect_rows, incorrect_total = [], 0.0
+    for row in inc_orders.values():
+        labels = row["labels"]
+        cost = round(sum(l["cost"] for l in labels), 2)
+        doubled = len(labels) == 1 and labels[0]["is_return"]
+        credit = round(cost * 2, 2) if doubled else cost
+        incorrect_total = round(incorrect_total + credit, 2)
+        incorrect_rows.append({"order": row["order"], "customer": row["customer"],
+                               "labels": labels, "doubled": doubled, "credit": credit})
+
+    # Invoice lines (product lines skipped when qty 0; service lines always present)
+    lines, subtotal = [], 0.0
+    for key in ("low_profile", "lp_inner", "cobra", "dring"):
+        if units[key] > 0:
+            amt = round(units[key] * WPS_FUL_PRICES[key], 2)
+            subtotal = round(subtotal + amt, 2)
+            lines.append({"bucket": key, "label": WPS_FUL_BUCKET_LABELS[key],
+                          "qty": units[key], "unit_price": WPS_FUL_PRICES[key], "amount": amt})
+    fee = round(len(orders) * WPS_FUL_PRICES["order_fee"], 2)
+    lines.append({"bucket": "order_fee", "label": "Order Fulfillment",
+                  "qty": len(orders), "unit_price": WPS_FUL_PRICES["order_fee"], "amount": fee})
+    lines.append({"bucket": "exchange", "label": "Size Exchange Service",
+                  "qty": 1, "unit_price": WPS_FUL_PRICES["exchange"], "amount": WPS_FUL_PRICES["exchange"]})
+    lines.append({"bucket": "incorrect", "label": "Incorrect Item Store Shipping Credit",
+                  "qty": 1, "unit_price": -incorrect_total, "amount": -incorrect_total})
+    lines.append({"bucket": "returns", "label": "Returns Credit (entered manually)",
+                  "qty": 1, "unit_price": 0.0, "amount": 0.0})
+    total = round(subtotal + fee + WPS_FUL_PRICES["exchange"] - incorrect_total, 2)
+
+    comp = {
+        "month": month_str, "lines": lines, "total_before_returns": total,
+        "order_count": len(orders), "unit_count": sum(units.values()),
+        "units": units, "stats_units": stats_units, "order_nums": order_nums,
+        "order_rows": order_rows, "exchanges": exchanges, "unknown": unknown,
+        "excluded": [{"order": _wps_base_order(s), "placed": s["created_at"], "shipped": s["ship_date"],
+                      "items": s["items"]} for s in excluded],
+        "incorrect_rows": incorrect_rows, "incorrect_total": incorrect_total,
+        "restock": [{"shipment": s["shipment_number"], "shipped": s["ship_date"],
+                     "to": s["ship_to_name"]} for s in restock],
+    }
+    _wps_ful_cache[month_str] = (_time.time(), comp)
+    return comp
+
+
+def _wps_service_sku_ids():
+    """Resolve the fulfillment service SKUs to Product SKU record ids (cached)."""
+    if _wps_ful_sku_ids:
+        return _wps_ful_sku_ids
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    formula = "OR(" + ",".join(f'{{SKU ID}}="{sku}"' for sku in WPS_FUL_SERVICE_SKUS.values()) + ")"
+    recs = at_get_all(PRODUCT_SKUS_TABLE_ID, read_token, fields=["SKU ID"], formula=formula)
+    by_sku = {r.get("fields", {}).get("SKU ID"): r["id"] for r in recs}
+    for key, sku in WPS_FUL_SERVICE_SKUS.items():
+        if sku in by_sku:
+            _wps_ful_sku_ids[key] = by_sku[sku]
+    missing = [sku for key, sku in WPS_FUL_SERVICE_SKUS.items() if key not in _wps_ful_sku_ids]
+    if missing:
+        raise RuntimeError(f"WPS fulfillment service SKUs missing from Product SKUs: {missing}")
+    return _wps_ful_sku_ids
+
+
+def _wps_po_number(month_str):
+    import calendar as _cal
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    return f"FULFILLMENT-{_cal.month_name[m].upper()}-{y}"
+
+
+def _wps_find_draft(month_str):
+    """Existing fulfillment invoice for the month (any status) or None."""
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    recs = at_get_all(MANUAL_ORDERS_TABLE_ID, read_token,
+                      fields=["Document ID", "Invoice Status"],
+                      formula=f'{{Purchase Order #}}="{_wps_po_number(month_str)}"')
+    return recs[0] if recs else None
+
+
+def _wps_create_draft(month_str):
+    """Create the Draft+Hidden Manual Orders invoice for a month. Idempotent by PO #."""
+    existing = _wps_find_draft(month_str)
+    if existing:
+        return {"created": False, "record_id": existing["id"],
+                "inv_number": existing.get("fields", {}).get("Document ID", "")}
+    comp = _wps_compute(month_str)
+    sku_ids = _wps_service_sku_ids()
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+    order_id = _next_order_id(read_token)
+    from datetime import datetime as _dt, timezone as _tz
+    today = _dt.now(_tz.utc).date().isoformat()
+    notes = (f"WPS monthly fulfillment invoice — orders SHIPPED {month_str} from store "
+             f"{WPS_FUL_STORE_ID} ({comp['order_count']} orders, {comp['unit_count']} units). "
+             f"Incorrect-item credit ${comp['incorrect_total']:.2f}. Returns Credit entered "
+             f"manually before approval. Auto-generated {today}.")
+    if comp["unknown"]:
+        notes += f" WARNING: {len(comp['unknown'])} unmapped items NOT billed — review detail."
+    mo_resp = req_lib.post(
+        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
+        headers={**at_headers(write_token), "Content-Type": "application/json"},
+        json={"fields": {
+            "Order Type": "Invoice", "Order ID": order_id, "Date": today,
+            "Customer": [WPS_CUSTOMER_RECORD_ID], "Invoice Status": "Draft",
+            "Hidden from Customer": True, "Purchase Order #": _wps_po_number(month_str),
+            "Internal Notes": notes,
+        }}, timeout=20)
+    mo_resp.raise_for_status()
+    mo_id = mo_resp.json()["id"]
+    li_records = []
+    for ln in comp["lines"]:
+        li_records.append({"fields": {
+            "Manual Order": [mo_id], "Product SKU": [sku_ids[ln["bucket"]]],
+            "Qty.": int(ln["qty"]), "Confirmed Unit Price": float(ln["unit_price"]),
+            "Confirmed Adj. Unit Price": float(ln["unit_price"]),
+        }})
+    for i in range(0, len(li_records), 10):
+        r = req_lib.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"records": li_records[i:i + 10]}, timeout=20)
+        r.raise_for_status()
+    print(f"[wps-ful] created IN-{order_id} for {month_str}: ${comp['total_before_returns']:.2f}")
+    return {"created": True, "record_id": mo_id, "inv_number": f"IN-{order_id}",
+            "total": comp["total_before_returns"]}
+
+
+def _wps_update_stats(month_str):
+    """Upsert the month's row in the WPS Orders stats table (Automated Data base)."""
+    comp = _wps_compute(month_str)
+    token = AIRTABLE_WRITE_TOKEN or RETURNS_WRITE_TOKEN
+    su, on = comp["stats_units"], comp["order_nums"]
+    fields = {
+        "Month": _wps_month_bounds(month_str)[0].isoformat(),
+        "Total Units": comp["unit_count"],
+        "Order Count": comp["order_count"],
+        "WPS Low Profile": su["low_profile"],
+        "WPS LP Inner": su["lp_inner"],
+        '1.5" LP Inner Only Belt': su["inner_only"],
+        'WPS 1.75" Cobra': su["cobra"],
+        'WPS 1.75" D-ring': su["dring"],
+        "WPS Low Profile Order #s": "\n".join(on["low_profile"]),
+        "WPS LP Inner Order #s": "\n".join(on["lp_inner"]),
+        '1.5" LP Inner Only Order #s': "\n".join(on["inner_only"]),
+        'WPS 1.75" Cobra Order #s': "\n".join(on["cobra"]),
+        'WPS 1.75" D-ring Order #s': "\n".join(on["dring"]),
+        "Belt Size Exchange": len(comp["exchanges"]),
+        "Belt Size Exchange Order #s": "\n".join(on["exchange"]),
+        "Exchange Notes": "\n".join(e["name"] for e in comp["exchanges"]),
+    }
+    month_iso = fields["Month"]
+    existing = at_get_all(WPS_ORDERS_STATS_TABLE_ID, token, fields=["Month"],
+                          formula=f'IS_SAME({{Month}}, "{month_iso}", "month")',
+                          base_id=AUTOMATED_DATA_BASE_ID)
+    if existing:
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AUTOMATED_DATA_BASE_ID}/{WPS_ORDERS_STATS_TABLE_ID}/{existing[0]['id']}",
+            headers={**at_headers(token), "Content-Type": "application/json"},
+            json={"fields": fields}, timeout=20)
+    else:
+        r = req_lib.post(
+            f"https://api.airtable.com/v0/{AUTOMATED_DATA_BASE_ID}/{WPS_ORDERS_STATS_TABLE_ID}",
+            headers={**at_headers(token), "Content-Type": "application/json"},
+            json={"fields": fields}, timeout=20)
+    r.raise_for_status()
+    print(f"[wps-ful] stats row upserted for {month_str}")
+
+
+@app.route("/api/admin/fulfillment/drafts", methods=["GET"])
+def admin_fulfillment_drafts():
+    """Draft invoices (Invoice Status=Draft) with full line-item detail."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        recs = at_get_all(
+            MANUAL_ORDERS_TABLE_ID, read_token,
+            fields=["Document ID", "Date", "Purchase Order #", "MO Line Items",
+                    "Internal Notes", "Hidden from Customer"],
+            formula='AND({Order Type}="Invoice", {Invoice Status}="Draft")')
+        drafts = []
+        import calendar as _cal
+        month_by_name = {_cal.month_name[i].upper(): i for i in range(1, 13)}
+        for rec in recs:
+            f = rec.get("fields", {})
+            li_ids = f.get("MO Line Items", [])
+            lines, total = [], 0.0
+            if li_ids:
+                formula = "OR(" + ",".join(f'RECORD_ID()="{lid}"' for lid in li_ids) + ")"
+                li_recs = at_get_all(MO_LINE_ITEMS_TABLE_ID, read_token,
+                                     fields=["Name + Variations (from Product SKU)",
+                                             "SKU ID (from Product SKU)", "Qty.",
+                                             "Confirmed Unit Price", "Confirmed Line Item Total"],
+                                     formula=formula)
+                li_by_id = {lr["id"]: lr for lr in li_recs}
+                for lid in li_ids:  # preserve creation order
+                    lr = li_by_id.get(lid)
+                    if not lr:
+                        continue
+                    lf = lr.get("fields", {})
+                    name_raw = lf.get("Name + Variations (from Product SKU)", [])
+                    sku_raw  = lf.get("SKU ID (from Product SKU)", [])
+                    line_total = float(lf.get("Confirmed Line Item Total") or 0)
+                    total = round(total + line_total, 2)
+                    sku = sku_raw[0] if sku_raw else ""
+                    lines.append({
+                        "record_id": lr["id"],
+                        "name": name_raw[0] if name_raw else "",
+                        "sku": sku,
+                        "qty": lf.get("Qty.", 0),
+                        "unit_price": float(lf.get("Confirmed Unit Price") or 0),
+                        "total": line_total,
+                        "is_returns": sku == WPS_FUL_SERVICE_SKUS["returns"],
+                        "is_incorrect": sku == WPS_FUL_SERVICE_SKUS["incorrect"],
+                    })
+            # Month from PO # "FULFILLMENT-JULY-2026" -> "2026-07"
+            month = None
+            po = f.get("Purchase Order #", "") or ""
+            parts = po.split("-")
+            if len(parts) == 3 and parts[0] == "FULFILLMENT" and parts[1] in month_by_name:
+                month = f"{parts[2]}-{month_by_name[parts[1]]:02d}"
+            drafts.append({
+                "record_id": rec["id"], "inv_number": f.get("Document ID", ""),
+                "date": f.get("Date", ""), "po_number": po, "month": month,
+                "hidden": bool(f.get("Hidden from Customer")),
+                "internal_notes": f.get("Internal Notes", "") or "",
+                "lines": lines, "total": total,
+                "wps_configured": bool(WPS_SHIPSTATION_V2_KEY),
+            })
+        drafts.sort(key=lambda d: d.get("po_number", ""))
+        return Response(json.dumps({"drafts": drafts}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/fulfillment/line-item/<li_record_id>", methods=["PATCH"])
+def admin_fulfillment_update_line(li_record_id):
+    """Set a draft line item's amount (used for the Returns Credit line)."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        body = request.get_json(silent=True) or {}
+        if body.get("amount") is None:
+            return Response(json.dumps({"error": "amount required"}), status=400, headers=c, mimetype="application/json")
+        amount = round(float(body.get("amount")), 2)
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_record_id}",
+            headers={**at_headers(RETURNS_WRITE_TOKEN), "Content-Type": "application/json"},
+            json={"fields": {"Confirmed Unit Price": amount, "Confirmed Adj. Unit Price": amount}},
+            timeout=20)
+        r.raise_for_status()
+        return Response(json.dumps({"ok": True, "amount": amount}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/fulfillment/drafts/<record_id>/approve", methods=["POST"])
+def admin_fulfillment_approve(record_id):
+    """Approve a draft: unhide + Invoice Status=Approved. The Airtable automation
+    on Approved status generates the Stripe CC/ACH invoices."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(RETURNS_WRITE_TOKEN), "Content-Type": "application/json"},
+            json={"fields": {"Invoice Status": "Approved", "Hidden from Customer": False}},
+            timeout=20)
+        r.raise_for_status()
+        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/fulfillment/detail", methods=["GET"])
+def admin_fulfillment_detail():
+    """Per-order reconciliation detail for a month (?month=YYYY-MM[&force=1])."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    month = (request.args.get("month") or "").strip()
+    import re as _re
+    if not _re.match(r"^\d{4}-\d{2}$", month):
+        return Response(json.dumps({"error": "month must be YYYY-MM"}), status=400, headers=c, mimetype="application/json")
+    try:
+        comp = _wps_compute(month, force=request.args.get("force") == "1")
+        return Response(json.dumps(comp), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/fulfillment/generate", methods=["POST"])
+def admin_fulfillment_generate():
+    """Manually generate (or re-check) a month's draft + stats row. Body: {month: YYYY-MM}."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    month = (body.get("month") or "").strip()
+    import re as _re
+    if not _re.match(r"^\d{4}-\d{2}$", month):
+        return Response(json.dumps({"error": "month must be YYYY-MM"}), status=400, headers=c, mimetype="application/json")
+    if month < WPS_FUL_CUTOVER_ISO[:7]:
+        return Response(json.dumps({"error": f"months before {WPS_FUL_CUTOVER_ISO[:7]} were billed under the old placed-basis process"}),
+                        status=400, headers=c, mimetype="application/json")
+    try:
+        result = _wps_create_draft(month)
+        stats_ok, stats_err = True, ""
+        try:
+            _wps_update_stats(month)
+        except Exception as se:
+            stats_ok, stats_err = False, str(se)
+        result.update({"stats_updated": stats_ok, "stats_error": stats_err})
+        return Response(json.dumps(result), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+def _wps_monthly_worker():
+    """On the 1st (and as a catch-up on any later day), create the prior month's
+    draft invoice + stats row if missing. Checks daily at 7 AM ET."""
+    import time as _t
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt, timedelta as _td
+    _t.sleep(45)
+    while True:
+        try:
+            if WPS_SHIPSTATION_V2_KEY:
+                now_et = _dt.now(ZoneInfo("America/New_York"))
+                prior = (now_et.date().replace(day=1) - _td(days=1)).strftime("%Y-%m")
+                # Only months after the manually-created May–July 2026 catch-up set,
+                # and never before the fulfillment-basis cutover.
+                if prior >= "2026-08":
+                    if not _wps_find_draft(prior):
+                        print(f"[wps-ful] generating draft for {prior}")
+                        _wps_create_draft(prior)
+                        try:
+                            _wps_update_stats(prior)
+                        except Exception as se:
+                            print(f"[wps-ful] stats update failed for {prior}: {se}")
+            else:
+                print("[wps-ful] WPS_SHIPSTATION_V2_KEY not set — worker idle")
+        except Exception as exc:
+            print(f"[wps-ful] worker error: {exc}")
+        try:
+            from zoneinfo import ZoneInfo as _ZI
+            from datetime import datetime as _dt2, timedelta as _td2
+            now_et = _dt2.now(_ZI("America/New_York"))
+            next_run = now_et.replace(hour=7, minute=0, second=0, microsecond=0)
+            if now_et >= next_run:
+                next_run += _td2(days=1)
+            _t.sleep(max(60, (next_run - now_et).total_seconds()))
+        except Exception:
+            _t.sleep(6 * 3600)
+
+threading.Thread(target=_wps_monthly_worker, daemon=True).start()
 
 
 if __name__ == "__main__":
