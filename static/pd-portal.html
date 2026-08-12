@@ -712,7 +712,7 @@ function _productHtml(p) {
   const addonHtml = `<div class="sel-row hidden" id="sarow_${p.id}">
       <div class="sel-field" style="flex:1 1 100%">
         <label>Add-on${_addonOptional ? ' <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">(optional)</span>' : ''}</label>
-        <select id="sadon_${p.id}" onchange="_updatePrice('${p.id}')">
+        <select id="sadon_${p.id}" onchange="onSelAddon('${p.id}')">
           <option value="">None</option>
         </select>
       </div>
@@ -1115,7 +1115,7 @@ function populateFeatures(parentId, preferredFvarId = '', preferredAddonId = '')
     if (featSel && fvars.length === 1) featSel.value = fvars[0][0];
     populateAddons(parentId, colorId, sizeId, autoFvarId, preferredAddonId);
     document.getElementById('sqrow_' + parentId).classList.remove('hidden');
-    document.getElementById('sb_' + parentId).disabled = false;
+    _updateAddButton(parentId);
     _updatePrice(parentId);
     return;
   }
@@ -1132,7 +1132,7 @@ function populateFeatures(parentId, preferredFvarId = '', preferredAddonId = '')
   if (preferredFvarId && fvarMap[preferredFvarId]) {
     featSel.value = preferredFvarId;
     populateAddons(parentId, colorId, sizeId, preferredFvarId, preferredAddonId);
-    document.getElementById('sb_' + parentId).disabled = false;
+    _updateAddButton(parentId);
     _updatePrice(parentId);
   } else {
     document.getElementById('sb_' + parentId).disabled = true;
@@ -1143,8 +1143,38 @@ function onSelFeature(parentId) {
   const featId  = document.getElementById('sfeat_' + parentId)?.value || '';
   const colorId = document.getElementById('sc_' + parentId).value;
   const sizeId  = document.getElementById('ss_' + parentId)?.value || '';
-  document.getElementById('sb_' + parentId).disabled = !featId;
   if (featId) populateAddons(parentId, colorId, sizeId, featId);
+  _updateAddButton(parentId);
+  _updatePrice(parentId);
+}
+
+// True when the add-on dropdown is visible but still on its disabled placeholder
+function _addonOnPlaceholder(parentId) {
+  const addonRow = document.getElementById('sarow_' + parentId);
+  const addonSel = document.getElementById('sadon_' + parentId);
+  if (!addonRow || !addonSel || addonRow.classList.contains('hidden')) return false;
+  return addonSel.selectedIndex === 0 && (addonSel.options[0]?.disabled ?? false);
+}
+
+// Enable the Add button only when every visible selection row has a value
+function _updateAddButton(parentId) {
+  const btn = document.getElementById('sb_' + parentId);
+  if (!btn) return;
+  const colorId       = document.getElementById('sc_' + parentId).value;
+  const sizeId        = document.getElementById('ss_' + parentId)?.value || '';
+  const featureVarId  = document.getElementById('sfeat_' + parentId)?.value || '';
+  const sizeRowHidden = document.getElementById('szfield_' + parentId)?.classList.contains('hidden') ?? true;
+  const featRowHidden = document.getElementById('sfrow_'   + parentId)?.classList.contains('hidden') ?? true;
+  btn.disabled = !colorId ||
+    (!sizeRowHidden && !sizeId) ||
+    (!featRowHidden && !featureVarId) ||
+    _addonOnPlaceholder(parentId);
+}
+
+function onSelAddon(parentId) {
+  const addonSel = document.getElementById('sadon_' + parentId);
+  if (addonSel) { addonSel.style.borderColor = ''; addonSel.style.outline = ''; }
+  _updateAddButton(parentId);
   _updatePrice(parentId);
 }
 
@@ -1325,6 +1355,17 @@ function addCatalogItem(parentId) {
   const addonSel    = document.getElementById('sadon_' + parentId);
   const addonRawVal = addonSel ? addonSel.value : '';
   const addonId     = addonRawVal === '__none__' ? '' : addonRawVal;
+
+  // Add-on dropdown visible but still on placeholder — a selection is required
+  if (_addonOnPlaceholder(parentId)) {
+    addonSel.focus();
+    addonSel.style.borderColor = 'var(--red)';
+    addonSel.style.outline = '2px solid var(--red)';
+    addonSel.classList.remove('shake');
+    void addonSel.offsetWidth;
+    addonSel.classList.add('shake');
+    return;
+  }
 
   const sku = catalog.skus.find(s =>
     s.parentId === parentId && s.colorId === colorId && s.sizeId === sizeId &&
