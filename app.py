@@ -1384,7 +1384,6 @@ def send_international_return_email(to_email, customer_name, order_number, items
         f"Hi {_first_name(customer_name)},\n\n"
         f"We've received your return request for order #{order_number}.\n\n"
         f"{items_block}"
-        "Because your order shipped internationally, we aren't able to provide a prepaid return label. "
         "To complete your return, please ship the item(s) back to us at:\n\n"
         "Blue Alpha Returns\n"
         "35 Andrew St\n"
