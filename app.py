@@ -15559,6 +15559,7 @@ def _wps_pull_shipments(month_str):
                 "status":          s.get("shipment_status") or "",
                 "store_id":        s.get("store_id") or "",
                 "ship_to_name":    (s.get("ship_to") or {}).get("name") or "",
+                "internal_notes":  s.get("internal_notes") or "",
                 "items": [{"sku": it.get("sku") or "", "name": it.get("name") or "",
                            "qty": int(it.get("quantity") or 0)}
                           for it in (s.get("items") or [])],
@@ -15623,7 +15624,8 @@ def _wps_compute(month_str, force=False):
             bucket = _wps_classify(it["sku"], it["name"])
             row_items.append({"sku": it["sku"], "name": it["name"], "qty": it["qty"], "bucket": bucket})
             if bucket == "exchange":
-                exchanges.append({"order": base, "name": it["name"]})
+                exchanges.append({"order": base, "name": it["name"],
+                                  "note": s.get("internal_notes", "")})
                 if base not in order_nums["exchange"]: order_nums["exchange"].append(base)
             elif bucket == "unknown":
                 unknown.append({"order": base, "sku": it["sku"], "name": it["name"], "qty": it["qty"]})
@@ -15752,8 +15754,16 @@ def _wps_create_draft(month_str):
         notes += f" WARNING: {len(comp['unknown'])} unmapped items NOT billed — review detail."
     # Exchange belts: the $100 service line covers the service only — the replacement
     # belt is billed as product once an admin assigns which parent product was sent.
+    # The ShipStation internal note usually says which belt shipped — carry it along.
+    def _clean_note(n):
+        flat = " / ".join(x.strip() for x in (n or "").splitlines() if x.strip())
+        return flat.replace("|", "/").replace("->", "-")
     for ex in comp["exchanges"]:
-        notes += f"\nEXCHANGE-PENDING: {ex['order']} | {ex['name']}"
+        line = f"\nEXCHANGE-PENDING: {ex['order']} | {ex['name']}"
+        note = _clean_note(ex.get("note"))
+        if note:
+            line += f" | SS-NOTE: {note}"
+        notes += line
     mo_resp = req_lib.post(
         f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
         headers={**at_headers(write_token), "Content-Type": "application/json"},
@@ -15883,11 +15893,12 @@ def admin_fulfillment_drafts():
             exchanges = []
             import re as _re
             for nl in notes_text.split("\n"):
-                m = _re.match(r"^EXCHANGE-(PENDING|ASSIGNED): (.+?) \| (.+?)(?: -> (.+))?$", nl.strip())
+                m = _re.match(r"^EXCHANGE-(PENDING|ASSIGNED): (.+?) \| (.+?)(?: \| SS-NOTE: (.+?))?(?: -> (.+))?$", nl.strip())
                 if m:
                     exchanges.append({"order": m.group(2), "name": m.group(3),
+                                      "ss_note": m.group(4) or "",
                                       "assigned": m.group(1) == "ASSIGNED",
-                                      "bucket_label": m.group(4) or ""})
+                                      "bucket_label": m.group(5) or ""})
             drafts.append({
                 "record_id": rec["id"], "inv_number": f.get("Document ID", ""),
                 "date": f.get("Date", ""), "po_number": po, "month": month,

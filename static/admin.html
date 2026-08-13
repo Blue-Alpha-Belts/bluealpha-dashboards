@@ -1493,7 +1493,9 @@
                   `<button class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:0.76rem;margin:1px;"
                      onclick="assignExchange('${esc(d.record_id)}','${esc(ex.order)}','${b[0]}','${b[1]}',${b[2]},this)">${b[1]} $${b[2].toFixed(2)}</button>`
                 ).join('');
-            return `<tr><td style="white-space:nowrap;">${esc(ex.order)}</td><td>${esc(ex.name)}</td><td>${action}</td></tr>`;
+            const noteHtml = ex.ss_note
+              ? `<div style="font-size:0.78rem;color:var(--muted);font-style:italic;">📝 ${esc(ex.ss_note)}</div>` : '';
+            return `<tr><td style="white-space:nowrap;">${esc(ex.order)}</td><td>${esc(ex.name)}${noteHtml}</td><td>${action}</td></tr>`;
           }).join('');
           const pendingCount = d.exchanges.filter(ex => !ex.assigned).length;
           exchHtml = `<div style="margin-top:10px;border:1px solid ${pendingCount ? '#c9960c' : '#d4edda'};border-radius:8px;padding:8px 10px;">
