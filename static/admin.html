@@ -1471,7 +1471,7 @@
           </tr>`;
         }).join('');
         const detailBtn = d.month
-          ? `<button class="btn btn-outline btn-sm" onclick="toggleDraftDetail('${esc(d.record_id)}','${esc(d.month)}',this)">🔍 Order Detail</button>`
+          ? `<button class="btn btn-outline btn-sm" onclick="toggleDraftDetail('${esc(d.record_id)}','${esc(d.month)}','${esc(d.partner || 'wps')}',this)">🔍 Order Detail</button>`
           : '';
         const warnText = (d.internal_notes || '').includes('WARNING')
           ? (d.internal_notes.split('WARNING:')[1] || '').split('\n')[0] : '';
@@ -1607,7 +1607,7 @@
       }
     }
 
-    async function toggleDraftDetail(recordId, month, btn) {
+    async function toggleDraftDetail(recordId, month, partner, btn) {
       const box = document.getElementById(`detail-${recordId}`);
       if (_draftDetailOpen[recordId]) {
         box.style.display = 'none'; _draftDetailOpen[recordId] = false;
@@ -1618,7 +1618,7 @@
       box.style.display = 'block';
       box.innerHTML = '<div class="loading">Pulling order detail from ShipStation…</div>';
       try {
-        const resp = await fetch(`/api/admin/fulfillment/detail?month=${encodeURIComponent(month)}`);
+        const resp = await fetch(`/api/admin/fulfillment/detail?month=${encodeURIComponent(month)}&partner=${encodeURIComponent(partner || 'wps')}`);
         const d = await resp.json();
         if (!resp.ok || d.error) throw new Error(d.error || `HTTP ${resp.status}`);
         const bucketNames = {low_profile:'Low Profile', lp_inner:'LP Inner', cobra:'1.75" Cobra', dring:'1.75" D-ring', exchange:'Exchange', unknown:'⚠ UNMAPPED'};

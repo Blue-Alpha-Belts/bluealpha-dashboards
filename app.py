@@ -46,6 +46,9 @@ SHIPSTATION_KEY      = os.environ.get("SHIPSTATION_KEY", "")
 SHIPSTATION_SECRET   = os.environ.get("SHIPSTATION_SECRET", "")
 # WPS (Warrior Poet Society) ShipStation v2 API key — monthly fulfillment invoicing
 WPS_SHIPSTATION_V2_KEY = os.environ.get("WPS_SHIPSTATION_V2_KEY", "")
+# FATTAC ShipStation v1 API key/secret — monthly fulfillment invoicing
+FATTAC_SHIPSTATION_KEY    = os.environ.get("FATTAC_SHIPSTATION_KEY", "")
+FATTAC_SHIPSTATION_SECRET = os.environ.get("FATTAC_SHIPSTATION_SECRET", "")
 SENDGRID_API_KEY     = os.environ.get("SENDGRID_API_KEY", "")
 SENDGRID_FROM_EMAIL  = os.environ.get("SENDGRID_FROM_EMAIL", "orders@bluealpha.us")
 CS_FROM_EMAIL        = "info@bluealpha.us"   # CS portal emails (exchange, returns, warranty, etc.)
@@ -15834,6 +15837,232 @@ def _wps_update_stats(month_str):
     print(f"[wps-ful] stats row upserted for {month_str}")
 
 
+# ─── FATTAC fulfillment (v1 ShipStation API; same review workflow as WPS) ────
+# Blue Alpha fulfills belt orders inside FATTAC's multi-vendor ShipStation
+# account (BigCommerce store 312789). Billable shipments are identified by SKU:
+# BAG-2174..2245-* = 1.5" Low Profile EDC Belt; BAG-2301..2355-* and
+# Inner-*-CU = 1.5" LP Inner Only Belt. Same prices as WPS; per FATTAC rules
+# there is NO exchange-service line and NO incorrect-item credit, and the
+# "FATTAC Special Order" store (320046) is ignored.
+
+FATTAC_STORE_ID           = 312789
+FATTAC_CUSTOMER_RECORD_ID = "recGoGgs3gG6Gq2oo"
+FATTAC_STATS_TABLE_ID     = "tblRFn843sRhv9VXu"   # "FATTAC Orders" in Automated Data base
+FATTAC_PRICES = {"low_profile": 32.37, "lp_inner": 39.47, "order_fee": 2.09}
+FATTAC_BUCKET_LABELS = {"low_profile": '1.5" Low Profile EDC Belt', "lp_inner": '1.5" LP Inner Only Belt'}
+FATTAC_SERVICE_SKUS = {"low_profile": "FATTAC-LOWPRO-FUL", "lp_inner": "FATTAC-INNER-FUL",
+                       "order_fee": "FATTAC-ORDER-FUL", "returns": "RETURNS-CREDIT"}
+_fattac_cache = {}       # "YYYY-MM" -> (epoch, computed dict)
+_fattac_sku_ids = {}
+
+
+def _fattac_v1_get(path, params=None):
+    if not FATTAC_SHIPSTATION_KEY or not FATTAC_SHIPSTATION_SECRET:
+        raise RuntimeError("FATTAC_SHIPSTATION_KEY/SECRET not configured")
+    import base64 as _b64
+    auth = _b64.b64encode(f"{FATTAC_SHIPSTATION_KEY}:{FATTAC_SHIPSTATION_SECRET}".encode()).decode()
+    last_exc = None
+    for attempt in range(3):
+        try:
+            r = req_lib.get(f"https://ssapi.shipstation.com/{path.lstrip('/')}",
+                            headers={"Authorization": f"Basic {auth}"},
+                            params=params or {}, timeout=30)
+            if r.status_code == 429:
+                import time as _t; _t.sleep(30)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last_exc = e
+            import time as _t; _t.sleep(2)
+    raise RuntimeError(f"ShipStation v1 GET {path} failed: {last_exc}")
+
+
+def _fattac_classify(sku, name):
+    import re as _re
+    m = _re.match(r"^BAG-(\d+)-", sku or "")
+    if m:
+        n = int(m.group(1))
+        if 2174 <= n <= 2245: return "low_profile"
+        if 2301 <= n <= 2355: return "lp_inner"
+    if _re.match(r"^Inner-\w+-CU$", sku or ""): return "lp_inner"
+    # Belt-named item we couldn't classify -> surface for verification
+    if "belt" in (name or "").lower(): return "unknown"
+    return "not_ours"   # FATTAC's own product — out of scope entirely
+
+
+def _fattac_compute(month_str, force=False):
+    import time as _time
+    cached = _fattac_cache.get(month_str)
+    if cached and not force and _time.time() - cached[0] < _WPS_FUL_CACHE_TTL:
+        return cached[1]
+    start, end = _wps_month_bounds(month_str)
+    from datetime import timedelta as _td
+    ship_end = (end - _td(days=1)).isoformat()   # v1 shipDate filters are inclusive
+    shipments, page, pages = [], 1, 1
+    while page <= pages:
+        data = _fattac_v1_get("shipments", {
+            "shipDateStart": start.isoformat(), "shipDateEnd": ship_end,
+            "includeShipmentItems": "true", "pageSize": 500, "page": page,
+        })
+        pages = max(1, int(data.get("pages") or 1))
+        shipments.extend(data.get("shipments") or [])
+        page += 1
+
+    units = {"low_profile": 0, "lp_inner": 0}
+    orders, order_rows, unknown = set(), [], []
+    for s in shipments:
+        if s.get("voided"):
+            continue
+        store = (s.get("advancedOptions") or {}).get("storeId")
+        if store != FATTAC_STORE_ID:
+            continue
+        items = s.get("shipmentItems") or []
+        classified = [(it, _fattac_classify(it.get("sku") or "", it.get("name") or "")) for it in items]
+        ours = [(it, b) for it, b in classified if b in ("low_profile", "lp_inner")]
+        suspects = [(it, b) for it, b in classified if b == "unknown"]
+        base = str(s.get("orderNumber") or "")
+        for it, b in suspects:
+            unknown.append({"order": base, "sku": it.get("sku") or "", "name": it.get("name") or "",
+                            "qty": int(it.get("quantity") or 0)})
+        if not ours:
+            continue
+        orders.add(base)
+        row_items = []
+        for it, b in ours:
+            qty = int(it.get("quantity") or 0)
+            units[b] += qty
+            row_items.append({"sku": it.get("sku") or "", "name": it.get("name") or "",
+                              "qty": qty, "bucket": b})
+        order_rows.append({"order": base, "ship_date": (s.get("shipDate") or "")[:10],
+                           "customer": (s.get("shipTo") or {}).get("name") or "", "items": row_items})
+    order_rows.sort(key=lambda r: r["ship_date"])
+
+    lines, subtotal = [], 0.0
+    for key in ("low_profile", "lp_inner"):
+        if units[key] > 0:
+            amt = round(units[key] * FATTAC_PRICES[key], 2)
+            subtotal = round(subtotal + amt, 2)
+            lines.append({"bucket": key, "label": FATTAC_BUCKET_LABELS[key],
+                          "qty": units[key], "unit_price": FATTAC_PRICES[key], "amount": amt})
+    fee = round(len(orders) * FATTAC_PRICES["order_fee"], 2)
+    lines.append({"bucket": "order_fee", "label": "Order Fulfillment",
+                  "qty": len(orders), "unit_price": FATTAC_PRICES["order_fee"], "amount": fee})
+    lines.append({"bucket": "returns", "label": "Returns Credit (entered manually)",
+                  "qty": 1, "unit_price": 0.0, "amount": 0.0})
+    comp = {
+        "month": month_str, "lines": lines,
+        "total_before_returns": round(subtotal + fee, 2),
+        "order_count": len(orders), "unit_count": units["low_profile"] + units["lp_inner"],
+        "units": units, "order_rows": order_rows, "unknown": unknown,
+        "exchanges": [], "excluded": [], "incorrect_rows": [], "incorrect_total": 0.0, "restock": [],
+    }
+    _fattac_cache[month_str] = (_time.time(), comp)
+    return comp
+
+
+def _fattac_service_sku_ids():
+    if _fattac_sku_ids:
+        return _fattac_sku_ids
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    formula = "OR(" + ",".join(f'{{SKU ID}}="{sku}"' for sku in FATTAC_SERVICE_SKUS.values()) + ")"
+    recs = at_get_all(PRODUCT_SKUS_TABLE_ID, read_token, fields=["SKU ID"], formula=formula)
+    by_sku = {r.get("fields", {}).get("SKU ID"): r["id"] for r in recs}
+    for key, sku in FATTAC_SERVICE_SKUS.items():
+        if sku in by_sku:
+            _fattac_sku_ids[key] = by_sku[sku]
+    missing = [sku for key, sku in FATTAC_SERVICE_SKUS.items() if key not in _fattac_sku_ids]
+    if missing:
+        raise RuntimeError(f"FATTAC fulfillment service SKUs missing: {missing}")
+    return _fattac_sku_ids
+
+
+def _fattac_po_number(month_str):
+    import calendar as _cal
+    y, m = int(month_str[:4]), int(month_str[5:7])
+    return f"FATTAC-FULFILLMENT-{_cal.month_name[m].upper()}-{y}"
+
+
+def _fattac_find_draft(month_str):
+    read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    recs = at_get_all(MANUAL_ORDERS_TABLE_ID, read_token,
+                      fields=["Document ID", "Invoice Status"],
+                      formula=f'{{Purchase Order #}}="{_fattac_po_number(month_str)}"')
+    return recs[0] if recs else None
+
+
+def _fattac_create_draft(month_str):
+    existing = _fattac_find_draft(month_str)
+    if existing:
+        return {"created": False, "record_id": existing["id"],
+                "inv_number": existing.get("fields", {}).get("Document ID", "")}
+    comp = _fattac_compute(month_str)
+    sku_ids = _fattac_service_sku_ids()
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+    order_id = _next_order_id(read_token)
+    from datetime import datetime as _dt, timezone as _tz
+    today = _dt.now(_tz.utc).date().isoformat()
+    notes = (f"FATTAC monthly fulfillment invoice — belt orders SHIPPED {month_str} from FATTAC "
+             f"ShipStation ({comp['order_count']} orders, {comp['unit_count']} units). No exchange "
+             f"service or incorrect-item lines per FATTAC rules. Returns Credit entered manually "
+             f"before approval. Auto-generated {today}.")
+    if comp["unknown"]:
+        notes += f" WARNING: {len(comp['unknown'])} belt-named items could not be classified and were NOT billed — review detail."
+    mo_resp = req_lib.post(
+        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
+        headers={**at_headers(write_token), "Content-Type": "application/json"},
+        json={"fields": {
+            "Order Type": "Invoice", "Order ID": order_id, "Date": today,
+            "Customer": [FATTAC_CUSTOMER_RECORD_ID], "Invoice Status": "Draft",
+            "Hidden from Customer": True, "Purchase Order #": _fattac_po_number(month_str),
+            "Internal Notes": notes,
+        }}, timeout=20)
+    mo_resp.raise_for_status()
+    mo_id = mo_resp.json()["id"]
+    li_records = [{"fields": {
+        "Manual Order": [mo_id], "Product SKU": [sku_ids[ln["bucket"]]],
+        "Qty.": int(ln["qty"]), "Confirmed Unit Price": float(ln["unit_price"]),
+        "Confirmed Adj. Unit Price": float(ln["unit_price"]),
+    }} for ln in comp["lines"]]
+    for i in range(0, len(li_records), 10):
+        r = req_lib.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"records": li_records[i:i + 10]}, timeout=20)
+        r.raise_for_status()
+    print(f"[fattac-ful] created IN-{order_id} for {month_str}: ${comp['total_before_returns']:.2f}")
+    return {"created": True, "record_id": mo_id, "inv_number": f"IN-{order_id}",
+            "total": comp["total_before_returns"]}
+
+
+def _fattac_update_stats(month_str):
+    comp = _fattac_compute(month_str)
+    token = AIRTABLE_WRITE_TOKEN or RETURNS_WRITE_TOKEN
+    fields = {
+        "Month": _wps_month_bounds(month_str)[0].isoformat(),
+        "Total Units": comp["unit_count"], "Order Count": comp["order_count"],
+        '1.5" Low Profile EDC Belt': comp["units"]["low_profile"],
+        '1.5" LP Inner Only Belt': comp["units"]["lp_inner"],
+    }
+    month_iso = fields["Month"]
+    existing = at_get_all(FATTAC_STATS_TABLE_ID, token, fields=["Month"],
+                          formula=f'IS_SAME({{Month}}, "{month_iso}", "month")',
+                          base_id=AUTOMATED_DATA_BASE_ID)
+    if existing:
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AUTOMATED_DATA_BASE_ID}/{FATTAC_STATS_TABLE_ID}/{existing[0]['id']}",
+            headers={**at_headers(token), "Content-Type": "application/json"},
+            json={"fields": fields}, timeout=20)
+    else:
+        r = req_lib.post(
+            f"https://api.airtable.com/v0/{AUTOMATED_DATA_BASE_ID}/{FATTAC_STATS_TABLE_ID}",
+            headers={**at_headers(token), "Content-Type": "application/json"},
+            json={"fields": fields}, timeout=20)
+    r.raise_for_status()
+    print(f"[fattac-ful] stats row upserted for {month_str}")
+
+
 @app.route("/api/admin/fulfillment/drafts", methods=["GET"])
 def admin_fulfillment_drafts():
     """Draft invoices (Invoice Status=Draft) with full line-item detail."""
@@ -15882,12 +16111,15 @@ def admin_fulfillment_drafts():
                         "is_returns": sku == WPS_FUL_SERVICE_SKUS["returns"],
                         "is_incorrect": sku == WPS_FUL_SERVICE_SKUS["incorrect"],
                     })
-            # Month from PO # "FULFILLMENT-JULY-2026" -> "2026-07"
-            month = None
+            # Month + partner from PO #: "FULFILLMENT-JULY-2026" (WPS) or
+            # "FATTAC-FULFILLMENT-JULY-2026" (FATTAC)
+            month, partner = None, None
             po = f.get("Purchase Order #", "") or ""
             parts = po.split("-")
             if len(parts) == 3 and parts[0] == "FULFILLMENT" and parts[1] in month_by_name:
-                month = f"{parts[2]}-{month_by_name[parts[1]]:02d}"
+                month, partner = f"{parts[2]}-{month_by_name[parts[1]]:02d}", "wps"
+            elif len(parts) == 4 and parts[0] == "FATTAC" and parts[1] == "FULFILLMENT" and parts[2] in month_by_name:
+                month, partner = f"{parts[3]}-{month_by_name[parts[2]]:02d}", "fattac"
             # Exchange belts pending/assigned product selection (tracked in Internal Notes)
             notes_text = f.get("Internal Notes", "") or ""
             exchanges = []
@@ -15902,6 +16134,7 @@ def admin_fulfillment_drafts():
             drafts.append({
                 "record_id": rec["id"], "inv_number": f.get("Document ID", ""),
                 "date": f.get("Date", ""), "po_number": po, "month": month,
+                "partner": partner,
                 "hidden": bool(f.get("Hidden from Customer")),
                 "internal_notes": notes_text,
                 "exchanges": exchanges,
@@ -16054,11 +16287,13 @@ def admin_fulfillment_detail():
     if not check_admin_session(request):
         return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
     month = (request.args.get("month") or "").strip()
+    partner = (request.args.get("partner") or "wps").strip().lower()
     import re as _re
     if not _re.match(r"^\d{4}-\d{2}$", month):
         return Response(json.dumps({"error": "month must be YYYY-MM"}), status=400, headers=c, mimetype="application/json")
     try:
-        comp = _wps_compute(month, force=request.args.get("force") == "1")
+        compute = _fattac_compute if partner == "fattac" else _wps_compute
+        comp = compute(month, force=request.args.get("force") == "1")
         return Response(json.dumps(comp), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
@@ -16072,6 +16307,7 @@ def admin_fulfillment_generate():
         return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
     body = request.get_json(silent=True) or {}
     month = (body.get("month") or "").strip()
+    partner = (body.get("partner") or "wps").strip().lower()
     import re as _re
     if not _re.match(r"^\d{4}-\d{2}$", month):
         return Response(json.dumps({"error": "month must be YYYY-MM"}), status=400, headers=c, mimetype="application/json")
@@ -16079,10 +16315,12 @@ def admin_fulfillment_generate():
         return Response(json.dumps({"error": f"months before {WPS_FUL_CUTOVER_ISO[:7]} were billed under the old placed-basis process"}),
                         status=400, headers=c, mimetype="application/json")
     try:
-        result = _wps_create_draft(month)
+        create_draft = _fattac_create_draft if partner == "fattac" else _wps_create_draft
+        update_stats = _fattac_update_stats if partner == "fattac" else _wps_update_stats
+        result = create_draft(month)
         stats_ok, stats_err = True, ""
         try:
-            _wps_update_stats(month)
+            update_stats(month)
         except Exception as se:
             stats_ok, stats_err = False, str(se)
         result.update({"stats_updated": stats_ok, "stats_error": stats_err})
@@ -16100,21 +16338,30 @@ def _wps_monthly_worker():
     _t.sleep(45)
     while True:
         try:
-            if WPS_SHIPSTATION_V2_KEY:
-                now_et = _dt.now(ZoneInfo("America/New_York"))
-                prior = (now_et.date().replace(day=1) - _td(days=1)).strftime("%Y-%m")
-                # Only months after the manually-created May–July 2026 catch-up set,
-                # and never before the fulfillment-basis cutover.
-                if prior >= "2026-08":
-                    if not _wps_find_draft(prior):
-                        print(f"[wps-ful] generating draft for {prior}")
-                        _wps_create_draft(prior)
-                        try:
-                            _wps_update_stats(prior)
-                        except Exception as se:
-                            print(f"[wps-ful] stats update failed for {prior}: {se}")
-            else:
-                print("[wps-ful] WPS_SHIPSTATION_V2_KEY not set — worker idle")
+            now_et = _dt.now(ZoneInfo("America/New_York"))
+            prior = (now_et.date().replace(day=1) - _td(days=1)).strftime("%Y-%m")
+            # Only months after the manually-created May–July 2026 catch-up set,
+            # and never before the fulfillment-basis cutover.
+            if prior >= "2026-08":
+                partners = [
+                    ("wps", bool(WPS_SHIPSTATION_V2_KEY), _wps_find_draft, _wps_create_draft, _wps_update_stats),
+                    ("fattac", bool(FATTAC_SHIPSTATION_KEY and FATTAC_SHIPSTATION_SECRET),
+                     _fattac_find_draft, _fattac_create_draft, _fattac_update_stats),
+                ]
+                for name, configured, find_draft, create_draft, update_stats in partners:
+                    try:
+                        if not configured:
+                            print(f"[{name}-ful] API credentials not set — skipping")
+                            continue
+                        if not find_draft(prior):
+                            print(f"[{name}-ful] generating draft for {prior}")
+                            create_draft(prior)
+                            try:
+                                update_stats(prior)
+                            except Exception as se:
+                                print(f"[{name}-ful] stats update failed for {prior}: {se}")
+                    except Exception as pe:
+                        print(f"[{name}-ful] worker error: {pe}")
         except Exception as exc:
             print(f"[wps-ful] worker error: {exc}")
         try:
