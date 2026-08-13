@@ -709,9 +709,8 @@ function goToStep3() {
   document.getElementById('msg-intl-notice').classList.toggle('show', intl);
   document.getElementById('field-return-tracking').style.display = intl ? 'block' : 'none';
   document.getElementById('address-label').textContent = intl ? 'Your Address' : 'Return Address';
-  document.getElementById('address-note').innerHTML = intl
-    ? 'This is the shipping address we have on file for your order. If this is incorrect, please contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.'
-    : 'This is the address your return label will be created for. If this is incorrect, please contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a> before submitting.';
+  // International: no note needed — nothing ships back to this address
+  document.getElementById('address-note').style.display = intl ? 'none' : '';
 
   // Pre-fill email — prefer what they entered in step 1, fall back to ShipStation email
   const emailEntered = document.getElementById('email-verify').value.trim();
