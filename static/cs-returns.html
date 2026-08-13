@@ -566,9 +566,9 @@
 
         <!-- Return tracking (return mode, international orders only) -->
         <div class="field hidden" id="field-return-tracking">
-          <label>Return Tracking # <span class="req">*</span></label>
+          <label>Return Tracking # <span style="font-weight:400;color:#66707f;font-size:0.8rem;">(optional)</span></label>
           <input type="text" id="cs-return-tracking" placeholder="Tracking number for the package the customer is sending back to us">
-          <div class="validation-msg" id="msg-no-return-tracking">⚠ Tracking number for the return package is required for international returns.</div>
+          <p class="field-hint">If the customer already shipped their return, enter the tracking number. Otherwise leave blank — the email asks them to reply with it once shipped.</p>
         </div>
 
         <!-- Address (return only) -->
@@ -1158,7 +1158,6 @@ function setMode(mode) {
   document.getElementById('intl-return-banner').classList.add('hidden');
   document.getElementById('field-return-tracking').classList.add('hidden');
   document.getElementById('cs-return-tracking').value = '';
-  document.getElementById('msg-no-return-tracking').style.display = 'none';
 
   // Reason fields
   document.getElementById('field-reason-return').classList.toggle('hidden', !isReturn);
@@ -1426,7 +1425,6 @@ function populateOrderInfo(data) {
   document.getElementById('intl-return-banner').classList.toggle('hidden', !intlReturn);
   document.getElementById('field-return-tracking').classList.toggle('hidden', !intlReturn);
   document.getElementById('cs-return-tracking').value = '';
-  document.getElementById('msg-no-return-tracking').style.display = 'none';
   document.querySelector('#field-address label').textContent =
     intlReturn ? 'Customer Address' : 'Return Label Address';
   document.querySelector('#field-address .field-hint').textContent =
@@ -1562,12 +1560,10 @@ async function csSubmitReturn() {
   if (selectedItems.length === 0) { document.getElementById('msg-no-item').style.display = 'block';         valid = false; }
   if (!email)                      { document.getElementById('msg-no-email').style.display = 'block';        valid = false; }
   if (!reason)                     { document.getElementById('msg-no-reason-return').style.display = 'block'; valid = false; }
-  if (intlReturn && !returnTracking) { document.getElementById('msg-no-return-tracking').style.display = 'block'; valid = false; }
   if (!valid) return;
   document.getElementById('msg-no-item').style.display         = 'none';
   document.getElementById('msg-no-email').style.display        = 'none';
   document.getElementById('msg-no-reason-return').style.display = 'none';
-  document.getElementById('msg-no-return-tracking').style.display = 'none';
 
   if (!refundGuardAllowsSubmit()) return;
 
