@@ -1473,8 +1473,39 @@
         const detailBtn = d.month
           ? `<button class="btn btn-outline btn-sm" onclick="toggleDraftDetail('${esc(d.record_id)}','${esc(d.month)}',this)">🔍 Order Detail</button>`
           : '';
-        const warn = (d.internal_notes || '').includes('WARNING')
-          ? `<div style="background:#fff3cd;color:#6b4c00;padding:6px 10px;border-radius:6px;font-size:0.82rem;margin-top:8px;">⚠ ${esc(d.internal_notes.split('WARNING:')[1] || '')}</div>` : '';
+        const warnText = (d.internal_notes || '').includes('WARNING')
+          ? (d.internal_notes.split('WARNING:')[1] || '').split('\n')[0] : '';
+        const warn = warnText
+          ? `<div style="background:#fff3cd;color:#6b4c00;padding:6px 10px;border-radius:6px;font-size:0.82rem;margin-top:8px;">⚠ ${esc(warnText)}</div>` : '';
+
+        // Exchange belts: admin picks which parent product was sent; each pick adds
+        // 1 unit to that product's line ($100 service line covers the service only).
+        let exchHtml = '';
+        if ((d.exchanges || []).length) {
+          const buckets = [
+            ['low_profile', 'Low Profile', 32.37], ['lp_inner', 'LP Inner', 39.47],
+            ['cobra', '1.75" Cobra', 122.67], ['dring', '1.75" D-ring', 136.35],
+          ];
+          const rows = d.exchanges.map(ex => {
+            const action = ex.assigned
+              ? `<span style="color:#155724;font-size:0.82rem;">✓ ${esc(ex.bucket_label)} added to invoice</span>`
+              : buckets.map(b =>
+                  `<button class="btn btn-outline btn-sm" style="padding:3px 8px;font-size:0.76rem;margin:1px;"
+                     onclick="assignExchange('${esc(d.record_id)}','${esc(ex.order)}','${b[0]}','${b[1]}',${b[2]},this)">${b[1]} $${b[2].toFixed(2)}</button>`
+                ).join('');
+            return `<tr><td style="white-space:nowrap;">${esc(ex.order)}</td><td>${esc(ex.name)}</td><td>${action}</td></tr>`;
+          }).join('');
+          const pendingCount = d.exchanges.filter(ex => !ex.assigned).length;
+          exchHtml = `<div style="margin-top:10px;border:1px solid ${pendingCount ? '#c9960c' : '#d4edda'};border-radius:8px;padding:8px 10px;">
+            <div style="font-weight:600;font-size:0.88rem;margin-bottom:4px;">
+              🔁 Exchange belts shipped — select the product that was sent
+              ${pendingCount ? `<span class="badge" style="background:#fff3cd;color:#6b4c00;margin-left:6px;">${pendingCount} pending</span>`
+                             : '<span class="badge" style="background:#d4edda;color:#155724;margin-left:6px;">all assigned</span>'}
+            </div>
+            <table style="width:100%;font-size:0.84rem;"><thead><tr><th>Order</th><th>Exchange item</th><th>Product sent</th></tr></thead>
+            <tbody>${rows}</tbody></table>
+          </div>`;
+        }
         html += `<div class="card card-padded" style="margin-bottom:12px;border-left:4px solid #c9960c;">
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;">
             <div>
@@ -1496,6 +1527,7 @@
               <td style="text-align:right;font-weight:700;">$${d.total.toFixed(2)}</td></tr></tfoot>
           </table>
           ${warn}
+          ${exchHtml}
           <div id="detail-${esc(d.record_id)}" style="display:none;margin-top:10px;"></div>
         </div>`;
       });
@@ -1521,6 +1553,26 @@
       }
     }
 
+    async function assignExchange(recordId, order, bucket, label, price, btn) {
+      if (!confirm(`Bill this exchange as 1 × ${label} ($${price.toFixed(2)})?\n\nOrder ${order} — this adds one unit to the invoice.`)) return;
+      const row = btn.closest('td');
+      row.querySelectorAll('button').forEach(b => b.disabled = true);
+      btn.textContent = '…';
+      try {
+        const resp = await fetch(`/api/admin/fulfillment/drafts/${recordId}/assign-exchange`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({order, bucket}),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+        loadFulfillmentDrafts();
+      } catch (e) {
+        row.querySelectorAll('button').forEach(b => b.disabled = false);
+        alert('Assign failed: ' + e.message);
+        loadFulfillmentDrafts();
+      }
+    }
+
     async function approveFulfillmentDraft(recordId, invNumber, btn) {
       const input = document.getElementById(`ret-${recordId}`);
       const pending = input && input.value !== '' && btn.dataset.savedWarned !== '1';
@@ -1528,9 +1580,23 @@
                    (pending ? '\n\nNote: make sure you clicked Save on the Returns Credit first.' : ''))) return;
       btn.disabled = true; btn.textContent = 'Approving…';
       try {
-        const resp = await fetch(`/api/admin/fulfillment/drafts/${recordId}/approve`, {method: 'POST'});
+        const resp = await fetch(`/api/admin/fulfillment/drafts/${recordId}/approve`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({}),
+        });
         const data = await resp.json();
-        if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+        if (resp.status === 409 && data.pending_exchanges) {
+          btn.disabled = false; btn.textContent = '✅ Approve & Send';
+          if (confirm(`${data.pending_exchanges} exchange belt(s) still need a product assigned.\n\nApprove anyway WITHOUT billing them?`)) {
+            btn.disabled = true; btn.textContent = 'Approving…';
+            const resp2 = await fetch(`/api/admin/fulfillment/drafts/${recordId}/approve`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({force: true}),
+            });
+            const data2 = await resp2.json();
+            if (!resp2.ok || data2.error) throw new Error(data2.error || `HTTP ${resp2.status}`);
+          } else { return; }
+        } else if (!resp.ok || data.error) {
+          throw new Error(data.error || `HTTP ${resp.status}`);
+        }
         btn.textContent = '✓ Approved';
         setTimeout(() => { invoicesLoaded = false; loadInvoices(); }, 1500);
       } catch (e) {

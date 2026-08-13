@@ -15750,6 +15750,10 @@ def _wps_create_draft(month_str):
              f"manually before approval. Auto-generated {today}.")
     if comp["unknown"]:
         notes += f" WARNING: {len(comp['unknown'])} unmapped items NOT billed — review detail."
+    # Exchange belts: the $100 service line covers the service only — the replacement
+    # belt is billed as product once an admin assigns which parent product was sent.
+    for ex in comp["exchanges"]:
+        notes += f"\nEXCHANGE-PENDING: {ex['order']} | {ex['name']}"
     mo_resp = req_lib.post(
         f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
         headers={**at_headers(write_token), "Content-Type": "application/json"},
@@ -15874,11 +15878,22 @@ def admin_fulfillment_drafts():
             parts = po.split("-")
             if len(parts) == 3 and parts[0] == "FULFILLMENT" and parts[1] in month_by_name:
                 month = f"{parts[2]}-{month_by_name[parts[1]]:02d}"
+            # Exchange belts pending/assigned product selection (tracked in Internal Notes)
+            notes_text = f.get("Internal Notes", "") or ""
+            exchanges = []
+            import re as _re
+            for nl in notes_text.split("\n"):
+                m = _re.match(r"^EXCHANGE-(PENDING|ASSIGNED): (.+?) \| (.+?)(?: -> (.+))?$", nl.strip())
+                if m:
+                    exchanges.append({"order": m.group(2), "name": m.group(3),
+                                      "assigned": m.group(1) == "ASSIGNED",
+                                      "bucket_label": m.group(4) or ""})
             drafts.append({
                 "record_id": rec["id"], "inv_number": f.get("Document ID", ""),
                 "date": f.get("Date", ""), "po_number": po, "month": month,
                 "hidden": bool(f.get("Hidden from Customer")),
-                "internal_notes": f.get("Internal Notes", "") or "",
+                "internal_notes": notes_text,
+                "exchanges": exchanges,
                 "lines": lines, "total": total,
                 "wps_configured": bool(WPS_SHIPSTATION_V2_KEY),
             })
@@ -15910,6 +15925,86 @@ def admin_fulfillment_update_line(li_record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+@app.route("/api/admin/fulfillment/drafts/<record_id>/assign-exchange", methods=["POST"])
+def admin_fulfillment_assign_exchange(record_id):
+    """Assign the parent product sent for an exchange belt: adds 1 unit to that
+    product's line (creating the line if needed) and marks the exchange assigned
+    in Internal Notes. Body: {order: "...", bucket: "low_profile|lp_inner|cobra|dring"}."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        body = request.get_json(silent=True) or {}
+        order = str(body.get("order") or "").strip()
+        bucket = str(body.get("bucket") or "").strip()
+        if not order or bucket not in WPS_FUL_BUCKET_LABELS:
+            return Response(json.dumps({"error": "order and a valid bucket are required"}),
+                            status=400, headers=c, mimetype="application/json")
+        read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        write_token = RETURNS_WRITE_TOKEN
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15)
+        r.raise_for_status()
+        f = r.json().get("fields", {})
+        if (f.get("Invoice Status") or "") != "Draft":
+            return Response(json.dumps({"error": "Invoice is no longer a draft"}),
+                            status=400, headers=c, mimetype="application/json")
+        notes = f.get("Internal Notes", "") or ""
+        pending_prefix = f"EXCHANGE-PENDING: {order} | "
+        new_lines, found = [], None
+        for nl in notes.split("\n"):
+            if nl.strip().startswith(pending_prefix):
+                found = nl.strip()[len(pending_prefix):]
+                new_lines.append(f"EXCHANGE-ASSIGNED: {order} | {found} -> {WPS_FUL_BUCKET_LABELS[bucket]}")
+            else:
+                new_lines.append(nl)
+        if found is None:
+            return Response(json.dumps({"error": f"No pending exchange for order {order} (already assigned?)"}),
+                            status=409, headers=c, mimetype="application/json")
+
+        # Add 1 unit to the product line (find by fulfillment service SKU, else create)
+        sku_ids = _wps_service_sku_ids()
+        price = WPS_FUL_PRICES[bucket]
+        li_ids = f.get("MO Line Items", [])
+        target = None
+        if li_ids:
+            formula = "OR(" + ",".join(f'RECORD_ID()="{lid}"' for lid in li_ids) + ")"
+            li_recs = at_get_all(MO_LINE_ITEMS_TABLE_ID, read_token,
+                                 fields=["SKU ID (from Product SKU)", "Qty."], formula=formula)
+            for lr in li_recs:
+                sku_raw = lr.get("fields", {}).get("SKU ID (from Product SKU)", [])
+                if sku_raw and sku_raw[0] == WPS_FUL_SERVICE_SKUS[bucket]:
+                    target = lr
+                    break
+        if target:
+            r2 = req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{target['id']}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {"Qty.": int(target.get("fields", {}).get("Qty.") or 0) + 1}},
+                timeout=20)
+        else:
+            r2 = req_lib.post(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {"Manual Order": [record_id], "Product SKU": [sku_ids[bucket]],
+                                 "Qty.": 1, "Confirmed Unit Price": price,
+                                 "Confirmed Adj. Unit Price": price}},
+                timeout=20)
+        r2.raise_for_status()
+
+        r3 = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {"Internal Notes": "\n".join(new_lines)}}, timeout=20)
+        r3.raise_for_status()
+        return Response(json.dumps({"ok": True, "order": order, "bucket": bucket,
+                                    "label": WPS_FUL_BUCKET_LABELS[bucket], "price": price}),
+                        headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
 @app.route("/api/admin/fulfillment/drafts/<record_id>/approve", methods=["POST"])
 def admin_fulfillment_approve(record_id):
     """Approve a draft: unhide + Invoice Status=Approved. The Airtable automation
@@ -15918,6 +16013,18 @@ def admin_fulfillment_approve(record_id):
     if not check_admin_session(request):
         return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
     try:
+        body = request.get_json(silent=True) or {}
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        r0 = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15)
+        r0.raise_for_status()
+        notes = r0.json().get("fields", {}).get("Internal Notes", "") or ""
+        pending = [nl for nl in notes.split("\n") if nl.strip().startswith("EXCHANGE-PENDING:")]
+        if pending and not body.get("force"):
+            return Response(json.dumps({"error": f"{len(pending)} exchange belt(s) still need a product assigned",
+                                        "pending_exchanges": len(pending)}),
+                            status=409, headers=c, mimetype="application/json")
         r = req_lib.patch(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
             headers={**at_headers(RETURNS_WRITE_TOKEN), "Content-Type": "application/json"},
