@@ -368,15 +368,26 @@
   <div id="step-3" class="card hidden">
     <div class="card-title">Step 3 — Confirm Your Details</div>
 
+    <div class="message message-warning" id="msg-intl-notice">
+      <strong>International Return</strong>
+      We're unable to provide a prepaid return label for international orders. You'll need to ship the item(s) back to us at your own expense — full shipping instructions will be emailed to you after you submit. Once we receive your return, we'll refund the <strong>item value</strong>. Shipping charges are nonrefundable.
+    </div>
+
     <div class="field">
-      <label>Return Address</label>
+      <label id="address-label">Return Address</label>
       <div class="address-block" id="address-display"></div>
-      <div class="address-note">This is the address your return label will be created for. If this is incorrect, please contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a> before submitting.</div>
+      <div class="address-note" id="address-note">This is the address your return label will be created for. If this is incorrect, please contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a> before submitting.</div>
     </div>
 
     <div class="field">
       <label>Email Address <span class="req">*</span></label>
       <input type="email" id="email" placeholder="you@example.com">
+    </div>
+
+    <div class="field" id="field-return-tracking" style="display:none;">
+      <label>Return Tracking Number <span style="font-weight:400; color:#6b6b5e; font-size:0.85rem;">(optional)</span></label>
+      <input type="text" id="return-tracking" placeholder="Tracking number for the package you're sending back to us">
+      <div class="address-note">Already shipped your return? Enter the tracking number here. Otherwise, you can reply to the instructions email with your tracking number once it ships.</div>
     </div>
 
     <div class="field">
@@ -426,6 +437,17 @@
       <div class="success-icon">✓</div>
       <h2>Label Sent!</h2>
       <p>Your prepaid return label has been emailed to you. If you don't see it within a few minutes, check your spam folder.</p>
+      <p style="margin-top:12px; font-size:0.85rem;">Questions? <a href="mailto:info@bluealpha.us" style="color:var(--navy); font-weight:700;">info@bluealpha.us</a> · <a href="tel:6789613304" style="color:var(--navy); font-weight:700;">678-961-3304</a></p>
+      <div style="margin-top:28px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
+        <a href="https://www.bluealphabelts.com" style="display:inline-block; padding:12px 24px; background:var(--navy); color:#fff; border-radius:6px; font-weight:700; text-decoration:none; font-size:0.95rem;">Back to bluealphabelts.com</a>
+        <button onclick="location.reload()" style="padding:12px 24px; background:transparent; color:var(--navy); border:2px solid var(--navy); border-radius:6px; font-weight:700; font-size:0.95rem; cursor:pointer;">Start Another Return</button>
+      </div>
+    </div>
+    <!-- International: instructions emailed state -->
+    <div id="success-intl" class="success-screen hidden">
+      <div class="success-icon">✓</div>
+      <h2>Return Request Received!</h2>
+      <p>We've emailed you instructions for shipping your return back to us. Return shipping is at your own expense, and once we receive your item(s) we'll refund the item value — shipping charges are nonrefundable.</p>
       <p style="margin-top:12px; font-size:0.85rem;">Questions? <a href="mailto:info@bluealpha.us" style="color:var(--navy); font-weight:700;">info@bluealpha.us</a> · <a href="tel:6789613304" style="color:var(--navy); font-weight:700;">678-961-3304</a></p>
       <div style="margin-top:28px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
         <a href="https://www.bluealphabelts.com" style="display:inline-block; padding:12px 24px; background:var(--navy); color:#fff; border-radius:6px; font-weight:700; text-decoration:none; font-size:0.95rem;">Back to bluealphabelts.com</a>
@@ -679,8 +701,17 @@ function goToStep3() {
 
   // Pre-fill address
   const a = orderData.address;
-  const addrLines = [a.name, a.street1, a.street2, `${a.city}, ${a.state} ${a.postalCode}`].filter(Boolean);
+  const intl = !!orderData.international;
+  const addrLines = [a.name, a.street1, a.street2, `${a.city}, ${a.state} ${a.postalCode}`, intl ? a.country : ''].filter(Boolean);
   document.getElementById('address-display').innerHTML = addrLines.join('<br>');
+
+  // International: no prepaid label — show ship-back notice + tracking field
+  document.getElementById('msg-intl-notice').classList.toggle('show', intl);
+  document.getElementById('field-return-tracking').style.display = intl ? 'block' : 'none';
+  document.getElementById('address-label').textContent = intl ? 'Your Address' : 'Return Address';
+  document.getElementById('address-note').innerHTML = intl
+    ? 'This is the shipping address we have on file for your order. If this is incorrect, please contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.'
+    : 'This is the address your return label will be created for. If this is incorrect, please contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a> before submitting.';
 
   // Pre-fill email — prefer what they entered in step 1, fall back to ShipStation email
   const emailEntered = document.getElementById('email-verify').value.trim();
@@ -744,10 +775,15 @@ async function submitReturn() {
         eligibleUntil:    orderData.eligibleUntil,
         orderId:          orderData.orderId,
         orderKey:         orderData.orderKey,
+        international:    !!orderData.international,
+        returnTracking:   (document.getElementById('return-tracking').value || '').trim(),
       })
     });
     const data = await res.json();
     if (data.success) {
+      if (orderData.international) {
+        document.querySelector('#success-pending p').textContent = 'Processing your return request — this usually takes just a moment…';
+      }
       showStep('success');
       pollReturnStatus(data.recordId);
     } else {
@@ -762,8 +798,9 @@ async function submitReturn() {
 }
 
 async function pollReturnStatus(recordId, attempts) {
+  const sentState = (orderData && orderData.international) ? 'intl' : 'sent';
   if (!recordId) {
-    setTimeout(() => showSuccessState('sent'), 20000);
+    setTimeout(() => showSuccessState(sentState), 20000);
     return;
   }
   attempts = attempts || 0;
@@ -772,8 +809,12 @@ async function pollReturnStatus(recordId, attempts) {
     const res = await fetch(API_BASE + '/api/return-status/' + recordId);
     const data = await res.json();
     if (data.status === 'Label Sent') {
-      showSuccessState('sent');
+      showSuccessState(sentState);
     } else if (data.status === 'Needs Review') {
+      if (orderData && orderData.international) {
+        document.getElementById('review-heading').textContent = 'We had trouble emailing your return instructions.';
+        document.querySelector('#review-no-label p').textContent = 'Your return request has been received and our team will follow up shortly with instructions for shipping it back to us.';
+      }
       // If label was generated but only email failed, show the download link
       if (data.labelUrl) {
         document.getElementById('review-label-download').classList.remove('hidden');
@@ -796,7 +837,7 @@ async function pollReturnStatus(recordId, attempts) {
     if (attempts < maxAttempts) {
       setTimeout(() => pollReturnStatus(recordId, attempts + 1), 5000);
     } else {
-      showSuccessState('sent');
+      showSuccessState(sentState);
     }
   }
 }
@@ -804,6 +845,7 @@ async function pollReturnStatus(recordId, attempts) {
 function showSuccessState(state) {
   document.getElementById('success-pending').classList.add('hidden');
   document.getElementById('success-sent').classList.add('hidden');
+  document.getElementById('success-intl').classList.add('hidden');
   document.getElementById('success-review').classList.add('hidden');
   document.getElementById('success-' + state).classList.remove('hidden');
 }

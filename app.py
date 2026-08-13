@@ -913,13 +913,13 @@ def verify_order():
         if not name_match and not email_match:
             return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
 
-        # Check international — also block military overseas (APO/FPO/DPO)
-        # which use state codes AA, AE, AP and are USPS-domestic but overseas
+        # Check international — includes military overseas (APO/FPO/DPO) which
+        # use state codes AA, AE, AP. These orders can't get a prepaid label;
+        # flag them so the portal switches to the ship-back-at-own-expense flow.
         MILITARY_STATES = {"AA", "AE", "AP"}
         country = order.get("shipTo", {}).get("country", "US")
         state   = order.get("shipTo", {}).get("state", "").upper()
-        if country not in ("US", "USA") or state in MILITARY_STATES:
-            return Response(json.dumps({"status": "international"}), headers=c, mimetype="application/json")
+        is_international = country not in ("US", "USA") or state in MILITARY_STATES
 
         # Block returns on unshipped orders
         order_status = order.get("orderStatus", "")
@@ -1002,6 +1002,7 @@ def verify_order():
                  (order.get("billTo") or {}).get("phone") or "")
         return Response(json.dumps({
             "status":        "eligible",
+            "international": is_international,
             "orderId":       order.get("orderId"),
             "orderKey":      order.get("orderKey", ""),
             "customerName":  ship_to.get("name", ""),
@@ -1016,6 +1017,7 @@ def verify_order():
                 "city":       ship_to.get("city", ""),
                 "state":      ship_to.get("state", ""),
                 "postalCode": ship_to.get("postalCode", ""),
+                "country":    ship_to.get("country", "US"),
             },
             "items": items,
             "alreadyReturnedQtys": already_returned_qtys,
@@ -1367,6 +1369,33 @@ def _send_cs_email(to_email, subject, body):
 
 def _first_name(customer_name):
     return customer_name.split()[0] if (customer_name or "").strip() else "there"
+
+
+def send_international_return_email(to_email, customer_name, order_number, items_text="", tracking_number=""):
+    """Ship-back instructions for international returns (no prepaid label).
+    Returns True on success."""
+    items_block = f"Items to return:\n{items_text}\n\n" if items_text else ""
+    if tracking_number:
+        tracking_block = f"We have your return tracking number on file: {tracking_number}\n\n"
+    else:
+        tracking_block = ("Once you've shipped your return, please reply to this email with the "
+                          "tracking number so we can watch for your package.\n\n")
+    body = (
+        f"Hi {_first_name(customer_name)},\n\n"
+        f"We've received your return request for order #{order_number}.\n\n"
+        f"{items_block}"
+        "Because your order shipped internationally, we aren't able to provide a prepaid return label. "
+        "To complete your return, please ship the item(s) back to us at:\n\n"
+        "Blue Alpha Returns\n"
+        "35 Andrew St\n"
+        "Newnan, GA 30263\n"
+        "United States\n\n"
+        "Return shipping is at your expense, and shipping charges are nonrefundable. "
+        "Once we receive and inspect your return, we'll refund the item value within 3 business days.\n\n"
+        f"{tracking_block}"
+        "— Blue Alpha"
+    )
+    return _send_cs_email(to_email, f"Your Blue Alpha Return — Order #{order_number}", body)
 
 
 def _addr_block(addr):
@@ -2932,9 +2961,20 @@ def submit_return():
     from datetime import datetime, timezone
 
     addr = data.get("address", {})
+
+    # International (incl. APO/FPO/DPO military) — no prepaid label possible.
+    # Customer ships back at their own expense; we email instructions instead.
+    _ret_country = (addr.get("country") or "US").strip().upper()
+    _ret_state   = (addr.get("state") or "").strip().upper()
+    is_international = (bool(data.get("international"))
+                        or _ret_country not in ("US", "USA")
+                        or _ret_state in {"AA", "AE", "AP"})
+    intl_tracking = (data.get("returnTracking") or "").strip()
+
     address_str = ", ".join(filter(None, [
         addr.get("name"), addr.get("street1"), addr.get("street2"),
-        addr.get("city"), addr.get("state"), addr.get("postalCode")
+        addr.get("city"), addr.get("state"), addr.get("postalCode"),
+        addr.get("country") if is_international else None
     ]))
     wc_link = (f"https://www.bluealphabelts.com/wp-admin/post.php"
                f"?post={data.get('orderId', '')}&action=edit")
@@ -2949,6 +2989,17 @@ def submit_return():
     if data.get("csException"):
         cs_notes = data.get("csNotes", "").strip()
         reason_for_return = "[CS Exception] " + reason_for_return
+    if is_international:
+        reason_for_return = "[International] " + reason_for_return
+
+    # International returns carry a standing note so ops knows there's no label
+    status_notes_value = cs_notes
+    if is_international:
+        intl_note = ("🌍 International return — no prepaid label. Customer ships back at "
+                     "own expense; refund item value only (shipping nonrefundable).")
+        if intl_tracking:
+            intl_note += f" Return tracking: {intl_tracking}"
+        status_notes_value = f"{cs_notes}\n\n{intl_note}".strip() if cs_notes else intl_note
 
     fields = {
         "Order Number":                   data.get("orderNumber", ""),
@@ -2959,7 +3010,8 @@ def submit_return():
         "Items to Return":                data.get("itemsToReturn", ""),
         "Reason for Return":              reason_for_return,
         "Customer Notes":                 customer_notes,
-        "Status Notes":                   cs_notes,
+        "Status Notes":                   status_notes_value,
+        "Return Tracking #":              intl_tracking if is_international else "",
         "Submission Date":                datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "Ship Date from Shipstation":     data.get("shipDate", "")[:10] if data.get("shipDate") else "",
         "Eligible Until":                 data.get("eligibleUntil", "")[:10] if data.get("eligibleUntil") else "",
@@ -3045,7 +3097,9 @@ def submit_return():
             record_id = existing_nr_ids[0]
             # Explicitly reset fields that the empty-value filter above may have
             # dropped, so a retry doesn't inherit stale values from the old record
-            patch_fields = {**fields, "Status": "New", "Status Notes": "", "Customer Notes": customer_notes}
+            patch_fields = {**fields, "Status": "New", "Status Notes": status_notes_value,
+                            "Customer Notes": customer_notes,
+                            "Return Tracking #": intl_tracking if is_international else ""}
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
                 headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}", "Content-Type": "application/json"},
@@ -3075,6 +3129,67 @@ def submit_return():
     except Exception as e:
         return Response(json.dumps({"success": False, "error": str(e)}),
                         status=500, headers=c, mimetype="application/json")
+
+    # ── International: no label — email ship-back instructions instead ───
+    if is_international:
+        def process_international(record_id, data):
+            try:
+                with _get_return_items_lock(record_id):
+                    _has_items = False
+                    try:
+                        _ri_check = req_lib.get(
+                            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
+                            params={"fields[]": ["Return Items"]},
+                            headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}"},
+                            timeout=10,
+                        )
+                        _has_items = len(_ri_check.json().get("fields", {}).get("Return Items", [])) > 0
+                    except Exception:
+                        pass
+                    if not _has_items:
+                        create_return_items(record_id, data.get("itemsToReturn", ""))
+
+                customer_email = data.get("email", "")
+                email_sent = False
+                if customer_email:
+                    email_sent = send_international_return_email(
+                        to_email=customer_email,
+                        customer_name=data.get("customerName", ""),
+                        order_number=data.get("orderNumber", ""),
+                        items_text=data.get("itemsToReturn", ""),
+                        tracking_number=intl_tracking,
+                    )
+                if email_sent:
+                    status_update = {"Status": "Label Sent"}
+                else:
+                    status_update = {"Status": "Needs Review",
+                                     "Status Notes": (f"{status_notes_value}\n\n⚠ Ship-back instructions "
+                                                      "email failed to send — contact the customer manually.").strip()}
+                    print(f"[process_international] Instructions email failed for record {record_id}")
+                req_lib.patch(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
+                    headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}", "Content-Type": "application/json"},
+                    json={"fields": status_update},
+                    timeout=10,
+                )
+                _return_status_cache[record_id] = {"status": status_update.get("Status")}
+            except Exception as e:
+                print(f"[process_international] Failed for record {record_id}: {e}")
+                _return_status_cache[record_id] = "Needs Review"
+                try:
+                    req_lib.patch(
+                        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
+                        headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}", "Content-Type": "application/json"},
+                        json={"fields": {"Status": "Needs Review",
+                                         "Status Notes": f"{status_notes_value}\n\nInternational return processing failed: {e}".strip()}},
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+
+        threading.Thread(target=process_international, args=(record_id, data), daemon=True).start()
+        return Response(json.dumps({"success": True, "recordId": record_id, "international": True}),
+                        headers=c, mimetype="application/json")
 
     # ── Kick off label generation + email in background ──────────────────
     def process_label(record_id, data, addr):

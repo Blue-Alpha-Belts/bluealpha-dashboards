@@ -550,11 +550,25 @@
           <div class="validation-msg" id="msg-no-item">⚠ Please select at least one item.</div>
         </div>
 
+        <!-- International return notice (return mode, international orders only) -->
+        <div class="info-banner banner-amber hidden" id="intl-return-banner" style="margin-bottom:16px;">
+          🌍 <strong>International order</strong> — a prepaid return label can't be generated.
+          The customer ships the item(s) back to us at their own expense; refund the <strong>item value only</strong>
+          (shipping is nonrefundable). Ship-back instructions will be emailed to the customer.
+        </div>
+
         <!-- Email (return only) -->
         <div class="field" id="field-email">
           <label>Customer Email <span class="req">*</span></label>
           <input type="email" id="cs-email" placeholder="Customer's email for label delivery">
           <div class="validation-msg" id="msg-no-email">⚠ Email required to send the label.</div>
+        </div>
+
+        <!-- Return tracking (return mode, international orders only) -->
+        <div class="field hidden" id="field-return-tracking">
+          <label>Return Tracking # <span class="req">*</span></label>
+          <input type="text" id="cs-return-tracking" placeholder="Tracking number for the package the customer is sending back to us">
+          <div class="validation-msg" id="msg-no-return-tracking">⚠ Tracking number for the return package is required for international returns.</div>
         </div>
 
         <!-- Address (return only) -->
@@ -851,7 +865,7 @@
       <!-- Return: label sent -->
       <div id="return-success-sent" class="success-screen hidden">
         <div class="success-icon">✓</div>
-        <h2>Label Sent!</h2>
+        <h2 id="cs-success-heading">Label Sent!</h2>
         <p id="cs-success-msg">The return label has been emailed to the customer.</p>
         <div style="margin-top:28px;">
           <button onclick="resetForm()" class="btn btn-primary">Submit Another</button>
@@ -862,7 +876,7 @@
       <div id="return-success-review" class="success-screen hidden">
         <div style="font-size:2rem; margin-bottom:16px;">⚠️</div>
         <h2>Needs Manual Review</h2>
-        <p>Return was saved to Airtable, but the label couldn't be auto-generated. Please create the label manually in ShipStation and send it to the customer.</p>
+        <p id="cs-review-msg">Return was saved to Airtable, but the label couldn't be auto-generated. Please create the label manually in ShipStation and send it to the customer.</p>
         <div style="margin-top:28px;">
           <button onclick="resetForm()" class="btn btn-primary">Submit Another</button>
         </div>
@@ -972,6 +986,14 @@ let reshipOrderGroups = null;
 
 function displayName(name) {
   return name.replace(/^DBL No Buckle Outer\b/i, 'Duty Belt Lite');
+}
+
+// International (or APO/FPO/DPO military) order — no prepaid return label possible
+function isIntlReturnOrder(data) {
+  const a = (data && data.address) || {};
+  const c = (a.country || 'US').toUpperCase();
+  const s = (a.state || '').toUpperCase();
+  return (c !== 'US' && c !== 'USA') || ['AA','AE','AP'].indexOf(s) !== -1;
 }
 
 const CANCELLABLE_STATUSES = ['awaiting_shipment', 'awaiting_payment', 'on_hold', 'cancelled'];
@@ -1131,6 +1153,12 @@ function setMode(mode) {
   // Return-only fields
   document.getElementById('field-email').classList.toggle('hidden', !isReturn);
   document.getElementById('field-address').classList.toggle('hidden', !isReturn);
+
+  // International-return extras stay hidden until an international order is looked up
+  document.getElementById('intl-return-banner').classList.add('hidden');
+  document.getElementById('field-return-tracking').classList.add('hidden');
+  document.getElementById('cs-return-tracking').value = '';
+  document.getElementById('msg-no-return-tracking').style.display = 'none';
 
   // Reason fields
   document.getElementById('field-reason-return').classList.toggle('hidden', !isReturn);
@@ -1389,8 +1417,25 @@ function populateOrderInfo(data) {
   // Email + address (return mode)
   document.getElementById('cs-email').value = data.email || '';
   const a = data.address || {};
-  const addrLines = [a.name, a.street1, a.street2, a.city && (a.city + ', ' + a.state + ' ' + a.postalCode)].filter(Boolean);
+  const intlReturn = currentMode === 'return' && isIntlReturnOrder(data);
+  const addrLines = [a.name, a.street1, a.street2, a.city && (a.city + ', ' + a.state + ' ' + a.postalCode),
+                     intlReturn ? a.country : ''].filter(Boolean);
   document.getElementById('cs-address-display').innerHTML = addrLines.join('<br>');
+
+  // International return: no label — show notice + required tracking field
+  document.getElementById('intl-return-banner').classList.toggle('hidden', !intlReturn);
+  document.getElementById('field-return-tracking').classList.toggle('hidden', !intlReturn);
+  document.getElementById('cs-return-tracking').value = '';
+  document.getElementById('msg-no-return-tracking').style.display = 'none';
+  document.querySelector('#field-address label').textContent =
+    intlReturn ? 'Customer Address' : 'Return Label Address';
+  document.querySelector('#field-address .field-hint').textContent =
+    intlReturn ? 'Pulled from ShipStation. No label will be generated — the customer ships the return at their own expense.'
+               : 'Pulled from ShipStation. Label will ship from this address.';
+  if (currentMode === 'return') {
+    document.getElementById('btn-cs-submit').innerHTML =
+      intlReturn ? 'Submit &amp; Email Ship-Back Instructions' : 'Submit &amp; Send Label';
+  }
 
   // Populate lost order address fields from shipTo
   const st = data.shipTo || data.address || {};
@@ -1511,14 +1556,18 @@ async function csSubmitReturn() {
   const selectedItems = getSelectedItems();
   const email  = document.getElementById('cs-email').value.trim();
   const reason = document.getElementById('cs-reason-return').value;
+  const intlReturn = isIntlReturnOrder(orderData);
+  const returnTracking = document.getElementById('cs-return-tracking').value.trim();
   let valid = true;
   if (selectedItems.length === 0) { document.getElementById('msg-no-item').style.display = 'block';         valid = false; }
   if (!email)                      { document.getElementById('msg-no-email').style.display = 'block';        valid = false; }
   if (!reason)                     { document.getElementById('msg-no-reason-return').style.display = 'block'; valid = false; }
+  if (intlReturn && !returnTracking) { document.getElementById('msg-no-return-tracking').style.display = 'block'; valid = false; }
   if (!valid) return;
   document.getElementById('msg-no-item').style.display         = 'none';
   document.getElementById('msg-no-email').style.display        = 'none';
   document.getElementById('msg-no-reason-return').style.display = 'none';
+  document.getElementById('msg-no-return-tracking').style.display = 'none';
 
   if (!refundGuardAllowsSubmit()) return;
 
@@ -1547,13 +1596,21 @@ async function csSubmitReturn() {
         csException:     true,
         csPassword:      csPassword,
         csNotes:         csNotes,
+        international:   intlReturn,
+        returnTracking:  intlReturn ? returnTracking : '',
       })
     });
     const data = await res.json();
     if (data.success) {
       document.getElementById('screen-main').classList.add('hidden');
       document.getElementById('screen-success').classList.remove('hidden');
-      document.getElementById('cs-success-msg').textContent = 'The return label has been emailed to ' + email + '.';
+      document.getElementById('cs-success-heading').textContent = intlReturn ? 'Instructions Sent!' : 'Label Sent!';
+      document.getElementById('cs-success-msg').textContent = intlReturn
+        ? 'Ship-back instructions have been emailed to ' + email + '. Refund the item value once the return arrives — shipping is nonrefundable.'
+        : 'The return label has been emailed to ' + email + '.';
+      document.getElementById('cs-review-msg').textContent = intlReturn
+        ? 'Return was saved to Airtable, but the ship-back instructions email couldn\'t be sent. Please email the customer manually with the return address.'
+        : 'Return was saved to Airtable, but the label couldn\'t be auto-generated. Please create the label manually in ShipStation and send it to the customer.';
       showSuccessState('return-success-pending');
       pollStatus(data.recordId);
     } else {
@@ -1563,7 +1620,7 @@ async function csSubmitReturn() {
     errEl.classList.add('show');
   }
   btn.disabled = false;
-  btn.innerHTML = 'Submit &amp; Send Label';
+  btn.innerHTML = intlReturn ? 'Submit &amp; Email Ship-Back Instructions' : 'Submit &amp; Send Label';
 }
 
 // ── Submit: Cancellation ───────────────────────────────────────────────────
@@ -2458,6 +2515,9 @@ function resetForm() {
   document.getElementById('cs-order-number').value  = '';
   document.getElementById('cs-items-list').innerHTML = '';
   document.getElementById('cs-email').value          = '';
+  document.getElementById('cs-return-tracking').value = '';
+  document.getElementById('intl-return-banner').classList.add('hidden');
+  document.getElementById('field-return-tracking').classList.add('hidden');
   document.getElementById('cs-reason-return').value  = '';
   document.getElementById('cs-reason-cancel').value    = '';
   document.getElementById('cs-reason-shipping').value  = '';
