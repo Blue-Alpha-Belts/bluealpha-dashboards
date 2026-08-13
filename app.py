@@ -16189,7 +16189,8 @@ def admin_fulfillment_drafts():
         recs = at_get_all(
             MANUAL_ORDERS_TABLE_ID, read_token,
             fields=["Document ID", "Date", "Purchase Order #", "MO Line Items",
-                    "Internal Notes", "Hidden from Customer"],
+                    "Internal Notes", "Hidden from Customer",
+                    "Organization Name (from Customer)"],
             formula='AND({Order Type}="Invoice", {Invoice Status}="Draft")')
         drafts = []
         import calendar as _cal
@@ -16246,10 +16247,12 @@ def admin_fulfillment_drafts():
                                       "ss_note": m.group(4) or "",
                                       "assigned": m.group(1) == "ASSIGNED",
                                       "bucket_label": m.group(5) or ""})
+            org_raw = f.get("Organization Name (from Customer)", [])
+            customer_name = (org_raw[0] if isinstance(org_raw, list) and org_raw else org_raw) or "the customer"
             drafts.append({
                 "record_id": rec["id"], "inv_number": f.get("Document ID", ""),
                 "date": f.get("Date", ""), "po_number": po, "month": month,
-                "partner": partner,
+                "partner": partner, "customer_name": customer_name,
                 "hidden": bool(f.get("Hidden from Customer")),
                 "internal_notes": notes_text,
                 "exchanges": exchanges,

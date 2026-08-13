@@ -1512,6 +1512,7 @@
           <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;">
             <div>
               <strong style="font-size:1.02rem;">${esc(d.inv_number)}</strong>
+              <span class="badge" style="background:#1B3A6B;color:#fff;margin-left:8px;">${esc(d.customer_name || '')}</span>
               <span style="color:var(--muted);margin-left:8px;">${esc(d.po_number)}</span>
               <span class="badge" style="background:#e2e3e5;color:#41464b;margin-left:8px;">DRAFT · hidden from customer</span>
             </div>
@@ -1519,7 +1520,7 @@
               <button class="btn btn-outline btn-sm" onclick="openPdfViewer('${esc(d.record_id)}','${esc(d.inv_number)}')">📄 PDF</button>
               ${detailBtn}
               <button class="btn btn-primary btn-sm" style="background:#155724;border-color:#155724;"
-                      onclick="approveFulfillmentDraft('${esc(d.record_id)}','${esc(d.inv_number)}',this)">✅ Approve &amp; Send</button>
+                      onclick="approveFulfillmentDraft('${esc(d.record_id)}','${esc(d.inv_number)}','${esc(d.customer_name || 'the customer')}',this)">✅ Approve &amp; Send</button>
             </div>
           </div>
           <table style="width:100%;margin-top:10px;font-size:0.88rem;">
@@ -1575,10 +1576,10 @@
       }
     }
 
-    async function approveFulfillmentDraft(recordId, invNumber, btn) {
+    async function approveFulfillmentDraft(recordId, invNumber, customerName, btn) {
       const input = document.getElementById(`ret-${recordId}`);
       const pending = input && input.value !== '' && btn.dataset.savedWarned !== '1';
-      if (!confirm(`Approve & send ${invNumber}?\n\nThis makes the invoice visible in WPS's portal and creates the Stripe payment links.` +
+      if (!confirm(`Approve & send ${invNumber}?\n\nThis makes the invoice visible in ${customerName}'s portal and creates the Stripe payment links.` +
                    (pending ? '\n\nNote: make sure you clicked Save on the Returns Credit first.' : ''))) return;
       btn.disabled = true; btn.textContent = 'Approving…';
       try {
