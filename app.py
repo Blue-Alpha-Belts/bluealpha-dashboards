@@ -952,7 +952,9 @@ def verify_order():
             od = order.get("orderDate", "")
             ship_date = parse_dt(od) if od else datetime.now(timezone.utc)
 
-        eligible_until = ship_date + timedelta(days=37)
+        # International orders get a longer window (transit runs longer both
+        # ways); domestic stays at 37 days after shipment.
+        eligible_until = ship_date + timedelta(days=45 if is_international else 37)
         if datetime.now(timezone.utc) > eligible_until:
             return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
 
