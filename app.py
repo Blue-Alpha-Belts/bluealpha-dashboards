@@ -11537,6 +11537,168 @@ def cron_intl_exchange():
                     mimetype="application/json")
 
 
+@app.route("/api/cron-push-ready-sos", methods=["GET", "POST"])
+def cron_push_ready_sos():
+    """
+    Push approved Sales Orders from Airtable into ShipStation, with their line
+    items. Targeted mode only for now: ?so=SO-0489,SO-0481 names the orders.
+    ?dry=1 reports what would be pushed without creating anything.
+
+    Idempotent: an SO whose exact number already has a live (non-cancelled)
+    ShipStation order is skipped. A cancelled ShipStation order is resurrected
+    in place (same orderKey) rather than duplicated. Unauthenticated by the
+    same convention as /api/cron-intl-exchange — it can only materialize SOs
+    that are already Approved in Airtable.
+
+    Built 2026-08-15 to re-push SOs the external pusher imported without line
+    items; intended to grow into the Make-replacement sweeper.
+    """
+    read_token = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or RETURNS_WRITE_TOKEN
+    dry_run    = request.args.get("dry", "") in ("1", "true", "yes")
+    so_param   = (request.args.get("so") or "").strip()
+    if not so_param:
+        return Response(json.dumps({"success": False,
+                                    "error": "Pass ?so=SO-0001,SO-0002 (sweep mode not implemented yet)"}),
+                        status=400, mimetype="application/json")
+    so_numbers = [s.strip() for s in so_param.split(",") if s.strip()]
+
+    # Store/status conventions are copied from the most recent live SO order
+    # already in ShipStation, so pushes land wherever the normal flow puts them.
+    ref_store_id = None
+    try:
+        ref_r = req_lib.get(
+            "https://ssapi.shipstation.com/orders",
+            params={"orderNumber": "SO-0", "pageSize": 100, "sortBy": "OrderDate", "sortDir": "DESC"},
+            headers=ss_headers(), timeout=15,
+        )
+        for o in ref_r.json().get("orders", []):
+            onum = (o.get("orderNumber") or "").strip()
+            if (onum.upper().startswith("SO-") and onum not in so_numbers
+                    and o.get("orderStatus") != "cancelled" and o.get("items")):
+                ref_store_id = (o.get("advancedOptions") or {}).get("storeId")
+                break
+    except Exception as ref_err:
+        print(f"[push-ready-sos] reference order lookup failed: {ref_err}")
+
+    results = []
+    for so_number in so_numbers:
+        try:
+            # 1. Airtable SO record (must be an Approved Sales Order)
+            recs = at_get_all(
+                MANUAL_ORDERS_TABLE_ID, read_token,
+                formula=f'AND({{Document ID}}="{so_number}",{{Order Type}}="Sales Order")',
+            )
+            if not recs:
+                results.append({"so": so_number, "success": False, "error": "No Sales Order with that Document ID in Airtable"})
+                continue
+            f = recs[0].get("fields", {})
+            if f.get("Sales Order Status") != "Approved":
+                results.append({"so": so_number, "success": False,
+                                "error": f"Sales Order Status is {f.get('Sales Order Status') or 'empty'}, not Approved"})
+                continue
+
+            # 2. Line items (single-record GETs — the fields[] param is rejected there)
+            items = []
+            for li_id in f.get("MO Line Items", []):
+                li_r = req_lib.get(
+                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+                    headers=at_headers(read_token), timeout=10,
+                )
+                if li_r.status_code != 200:
+                    raise Exception(f"line item {li_id} fetch failed (AT {li_r.status_code})")
+                lf    = li_r.json().get("fields", {})
+                skus  = lf.get("SKU ID (from Product SKU)", [])
+                names = lf.get("Name + Variations (from Product SKU)", [])
+                price = lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0
+                items.append({
+                    "sku":       skus[0] if skus else "",
+                    "name":      names[0] if names else "Item",
+                    "quantity":  int(lf.get("Qty.", 1)),
+                    "unitPrice": float(price),
+                })
+            if not items:
+                results.append({"so": so_number, "success": False, "error": "SO has no line items in Airtable — refusing to push empty"})
+                continue
+
+            # 3. Existing ShipStation order?
+            existing = _ss_order_exact(so_number)
+            if existing and existing.get("orderStatus") != "cancelled":
+                results.append({"so": so_number, "success": False, "skipped": True,
+                                "error": f"Live ShipStation order already exists (status {existing.get('orderStatus')})"})
+                continue
+
+            # 4. Build payload from the SO's snapshot fields
+            addr2 = (f.get("Snapshot Addr 2") or "").strip()   # "City, ST 12345"
+            m = re.match(r"^(.*?),\s*([A-Za-z]{2})\s+(\S+)$", addr2)
+            city, state_v, zip_v = (m.group(1), m.group(2), m.group(3)) if m else (addr2, "", "")
+            contact = (f.get("Snapshot Contact") or "").strip()
+            org     = (f.get("Snapshot Org") or "").strip()
+            addr = {
+                "name":       contact or org,
+                "company":    org,
+                "street1":    (f.get("Snapshot Addr 1") or "").strip(),
+                "city":       city,
+                "state":      state_v,
+                "postalCode": zip_v,
+                "country":    "US",
+                "phone":      (f.get("Snapshot Phone") or "").strip(),
+            }
+            note_bits = []
+            if f.get("Purchase Order #"):
+                note_bits.append(f"PO #{f['Purchase Order #']}")
+            if f.get("Notes from Customer"):
+                note_bits.append(f["Notes from Customer"])
+            order_date = f.get("Date") or _today_utc().isoformat()
+            payload = {
+                "orderNumber": so_number,
+                # Reuse the cancelled order's key so we resurrect it in place
+                # instead of creating a duplicate alongside it.
+                "orderKey":    (existing.get("orderKey") if existing else so_number),
+                "orderDate":   f"{order_date}T12:00:00.0000000",
+                "paymentDate": f"{order_date}T12:00:00.0000000",
+                "orderStatus": "awaiting_shipment",
+                "billTo":      addr,
+                "shipTo":      addr,
+                "items":       items,
+                "amountPaid":  0,
+                "taxAmount":   0,
+                "internalNotes": " | ".join(note_bits),
+            }
+            if f.get("Snapshot Email"):
+                payload["customerEmail"] = f["Snapshot Email"]
+            if ref_store_id:
+                payload["advancedOptions"] = {"storeId": ref_store_id}
+
+            if dry_run:
+                results.append({"so": so_number, "success": True, "dryRun": True,
+                                "resurrecting": bool(existing), "refStoreId": ref_store_id,
+                                "payload": payload})
+                continue
+
+            # 5. Create/resurrect in ShipStation
+            create_r = req_lib.post(
+                "https://ssapi.shipstation.com/orders/createorder",
+                headers={**ss_headers(), "Content-Type": "application/json"},
+                json=payload, timeout=20,
+            )
+            if create_r.status_code not in (200, 201):
+                results.append({"so": so_number, "success": False,
+                                "error": f"SS createorder failed: {create_r.status_code} {create_r.text[:300]}"})
+                continue
+            results.append({"so": so_number, "success": True,
+                            "resurrected": bool(existing),
+                            "ssOrderId": create_r.json().get("orderId"),
+                            "itemCount": len(items)})
+            print(f"[push-ready-sos] pushed {so_number} ({len(items)} items, resurrected={bool(existing)})", flush=True)
+        except Exception as so_err:
+            results.append({"so": so_number, "success": False, "error": str(so_err)})
+            print(f"[push-ready-sos] {so_number} ERROR: {so_err}", flush=True)
+
+    ok = all(r.get("success") for r in results)
+    return Response(json.dumps({"success": ok, "dryRun": dry_run, "results": results}),
+                    status=200 if ok else 500, mimetype="application/json")
+
+
 def _ontime_bg_worker():
     """Refresh on-time cache on startup (if no data), then daily at 9 PM ET."""
     import time as _t
