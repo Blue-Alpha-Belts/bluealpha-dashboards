@@ -6162,8 +6162,11 @@ def create_quote():
                 "Order ID":         order_id_str,
                 "Date":             today_str,
                 "Customer":         [cust_id],
-                # Sales Orders from the portal are pre-approved (vetted contract customers)
-                **({"Sales Order Status": "Approved"} if order_type == "Sales Order" else {}),
+                # Sales Orders from the portal are pre-approved (vetted contract customers),
+                # but start as "Pending" and flip to "Approved" only after all line items
+                # exist — "Approved" drives the Ready for ShipStation formula, and the
+                # ShipStation pusher must never see an SO without its line items.
+                **({"Sales Order Status": "Pending"} if order_type == "Sales Order" else {}),
                 # Snapshot billing/shipping — stored directly so customer record changes
                 # never alter this quote's displayed info
                 "Snapshot Org":     org_name,
@@ -6217,6 +6220,19 @@ def create_quote():
                 except Exception: err_detail = li_r.text
                 print(f"[create_quote] line item creation failed {li_r.status_code}: {err_detail} | item={item}")
             li_r.raise_for_status()
+
+        # 4b. All line items in — now approve the SO so it enters the
+        # Ready for ShipStation view complete. (Quotes stay status-less.)
+        if order_type == "Sales Order":
+            appr_r = req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{mo_record_id}",
+                headers={**at_headers(token), "Content-Type": "application/json"},
+                json={"fields": {"Sales Order Status": "Approved"}},
+                timeout=15,
+            )
+            if not appr_r.ok:
+                print(f"[create_quote] SO approve patch failed {appr_r.status_code}: {appr_r.text[:200]}")
+            appr_r.raise_for_status()
 
         # 5. Upload PO document to Airtable if provided
         pdf_b64  = (data.get("pdfBase64") or "").strip()
@@ -6423,7 +6439,10 @@ def accept_quote(record_id):
         # Create SO record
         # Note: Document ID, MO Is Approved, Ready for ShipStation (SOs), Origin Quote are all
         # formula fields — Airtable computes them automatically. Do NOT write them.
-        # Sales Order Status = "Approved" drives both MO Is Approved and Ready for ShipStation.
+        # Sales Order Status = "Approved" drives both MO Is Approved and Ready for ShipStation,
+        # so the SO is created as "Pending" and flipped to "Approved" only AFTER its line
+        # items are copied — otherwise the ShipStation pusher can grab it in the few-second
+        # window where it has no line items (caused empty on-hold SS orders, 2026-08-15).
         # Carry snapshot fields from the quote to the SO — prefer billing form data if provided,
         # otherwise inherit whatever was stored on the quote record
         _b_org     = (billing.get("org")   or "").strip() or mo_fields.get("Snapshot Org", "")
@@ -6448,7 +6467,7 @@ def accept_quote(record_id):
                 "Order Type":         "Sales Order",
                 "Order ID":           order_id_str,
                 "Date":               date_str,
-                "Sales Order Status": "Approved",
+                "Sales Order Status": "Pending",
                 "Snapshot Org":       _b_org,
                 "Snapshot Contact":   _b_name,
                 "Snapshot Email":     _b_email,
@@ -6583,6 +6602,17 @@ def accept_quote(record_id):
             )
             if not new_li.ok:
                 print(f"[accept_quote] line item copy failed {new_li.status_code}: {new_li.text[:200]}")
+
+        # All line items copied — approve the SO so it enters the
+        # Ready for ShipStation view complete.
+        appr_r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{so_record_id}",
+            headers={**at_headers(token), "Content-Type": "application/json"},
+            json={"fields": {"Sales Order Status": "Approved"}},
+            timeout=15,
+        )
+        if not appr_r.ok:
+            print(f"[accept_quote] SO approve patch failed {appr_r.status_code}: {appr_r.text[:200]}")
 
         # Send confirmation email
         to_email = ""
@@ -8563,12 +8593,14 @@ def department_order_create(user):
 
     # 3. Create Manual Order record
     try:
+        # Start as "Pending"; flipped to "Approved" after line items exist so the
+        # ShipStation pusher never sees an SO without its line items.
         mo_fields = {
             "Order Type":         "Sales Order",
             "Order ID":           order_id,
             "Date":               today,
             "Officer Name":       officer_name,
-            "Sales Order Status": "Approved",
+            "Sales Order Status": "Pending",
         }
         if badge_num:
             mo_fields["Badge Number"] = badge_num
@@ -8606,6 +8638,19 @@ def department_order_create(user):
             )
         except Exception as e:
             print(f"[department_order_create] line item warning: {e}")
+
+    # 5. All line items in — approve the SO (enters Ready for ShipStation complete)
+    try:
+        appr_r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{mo_record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {"Sales Order Status": "Approved"}},
+            timeout=15,
+        )
+        if not appr_r.ok:
+            print(f"[department_order_create] SO approve patch failed {appr_r.status_code}: {appr_r.text[:200]}")
+    except Exception as e:
+        print(f"[department_order_create] SO approve patch error: {e}")
 
     return Response(json.dumps({"ok": True, "record_id": mo_record_id, "order_id": f"SO-{order_id}"}),
                     headers=c, mimetype="application/json")
@@ -15019,7 +15064,8 @@ def pd_order_create():
                 "Department Portion $":    department_portion,
                 "Officer Payment Method":  officer_payment_method,
                 "Customer":                [department_id],
-                "Sales Order Status":      "Approved",
+                # "Pending" until line items exist — see accept_quote for why
+                "Sales Order Status":      "Pending",
                 "Production Status":       "Not Started",
             }},
             timeout=15,
@@ -15049,6 +15095,19 @@ def pd_order_create():
             )
         except Exception as e:
             print(f"[pd_order_create] line item create warning: {e}")
+
+    # 4. All line items in — approve the SO (enters Ready for ShipStation complete)
+    try:
+        appr_r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{mo_record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": {"Sales Order Status": "Approved"}},
+            timeout=15,
+        )
+        if not appr_r.ok:
+            print(f"[pd_order_create] SO approve patch failed {appr_r.status_code}: {appr_r.text[:200]}")
+    except Exception as e:
+        print(f"[pd_order_create] SO approve patch error: {e}")
 
     return Response(json.dumps({"ok": True, "record_id": mo_record_id, "order_id": f"SO-{order_id}"}),
                     headers=c, mimetype="application/json")
