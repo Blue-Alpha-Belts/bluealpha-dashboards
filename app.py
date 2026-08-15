@@ -11545,10 +11545,11 @@ def cron_push_ready_sos():
     ?dry=1 reports what would be pushed without creating anything.
 
     Idempotent: an SO whose exact number already has a live (non-cancelled)
-    ShipStation order is skipped. A cancelled ShipStation order is resurrected
-    in place (same orderKey) rather than duplicated. Unauthenticated by the
-    same convention as /api/cron-intl-exchange — it can only materialize SOs
-    that are already Approved in Airtable.
+    ShipStation order is skipped. If only cancelled orders carry the number, a
+    NEW order is created alongside them (cancelled SS orders cannot be revived
+    via the API). Unauthenticated by the same convention as
+    /api/cron-intl-exchange — it can only materialize SOs that are already
+    Approved in Airtable.
 
     Built 2026-08-15 to re-push SOs the external pusher imported without line
     items; intended to grow into the Make-replacement sweeper.
@@ -11620,12 +11621,22 @@ def cron_push_ready_sos():
                 results.append({"so": so_number, "success": False, "error": "SO has no line items in Airtable — refusing to push empty"})
                 continue
 
-            # 3. Existing ShipStation order?
-            existing = _ss_order_exact(so_number)
-            if existing and existing.get("orderStatus") != "cancelled":
+            # 3. Existing ShipStation order(s)? The same orderNumber can appear
+            # on several orders (a cancelled original + a re-push), so check
+            # every exact match — skip only if ANY of them is live.
+            ss_r = req_lib.get(
+                "https://ssapi.shipstation.com/orders",
+                params={"orderNumber": so_number, "pageSize": 100},
+                headers=ss_headers(), timeout=15,
+            )
+            exact = [o for o in ss_r.json().get("orders", [])
+                     if (o.get("orderNumber") or "").strip().lower() == so_number.lower()]
+            live = [o for o in exact if o.get("orderStatus") != "cancelled"]
+            if live:
                 results.append({"so": so_number, "success": False, "skipped": True,
-                                "error": f"Live ShipStation order already exists (status {existing.get('orderStatus')})"})
+                                "error": f"Live ShipStation order already exists (status {live[0].get('orderStatus')})"})
                 continue
+            existing = exact[0] if exact else None
 
             # 4. Build payload from the SO's snapshot fields
             addr2 = (f.get("Snapshot Addr 2") or "").strip()   # "City, ST 12345"
@@ -11651,9 +11662,12 @@ def cron_push_ready_sos():
             order_date = f.get("Date") or _today_utc().isoformat()
             payload = {
                 "orderNumber": so_number,
-                # Reuse the cancelled order's key so we resurrect it in place
-                # instead of creating a duplicate alongside it.
-                "orderKey":    (existing.get("orderKey") if existing else so_number),
+                # A cancelled SS order can NOT be revived: createorder with its
+                # orderKey returns 200 but the order stays cancelled (verified
+                # 2026-08-15). Use a fresh key to create a new order alongside
+                # the cancelled one(s); the count-based key is stable on retry
+                # (idempotent) but unique if a re-push itself gets cancelled.
+                "orderKey":    (f"{so_number}-repush{len(exact)}" if existing else so_number),
                 "orderDate":   f"{order_date}T12:00:00.0000000",
                 "paymentDate": f"{order_date}T12:00:00.0000000",
                 "orderStatus": "awaiting_shipment",
@@ -11671,7 +11685,7 @@ def cron_push_ready_sos():
 
             if dry_run:
                 results.append({"so": so_number, "success": True, "dryRun": True,
-                                "resurrecting": bool(existing), "refStoreId": ref_store_id,
+                                "recreatingAfterCancel": bool(existing), "refStoreId": ref_store_id,
                                 "payload": payload})
                 continue
 
@@ -11686,10 +11700,10 @@ def cron_push_ready_sos():
                                 "error": f"SS createorder failed: {create_r.status_code} {create_r.text[:300]}"})
                 continue
             results.append({"so": so_number, "success": True,
-                            "resurrected": bool(existing),
+                            "recreatedAfterCancel": bool(existing),
                             "ssOrderId": create_r.json().get("orderId"),
                             "itemCount": len(items)})
-            print(f"[push-ready-sos] pushed {so_number} ({len(items)} items, resurrected={bool(existing)})", flush=True)
+            print(f"[push-ready-sos] pushed {so_number} ({len(items)} items, recreated={bool(existing)})", flush=True)
         except Exception as so_err:
             results.append({"so": so_number, "success": False, "error": str(so_err)})
             print(f"[push-ready-sos] {so_number} ERROR: {so_err}", flush=True)
