@@ -3798,7 +3798,8 @@ def resend_warranty_label(record_id):
             return Response(json.dumps({"ok": False, "error": "No label PDF stored on this request (labels are only stored since 2026-07-29)"}),
                             status=400, mimetype="application/json")
         sent, err = _send_warranty_approval_email(email, (f.get("First Name") or "").strip(), pdf_b64,
-                                                  label_date=f.get("Request Date"))
+                                                  label_date=f.get("Request Date"),
+                                                  note=f.get("Note to Customer"))
         if not sent:
             return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
                             status=500, mimetype="application/json")
@@ -14183,7 +14184,21 @@ def _warranty_order_ref(original_order_num, last_name, purchaser_last_name, reco
     return _dedupe_warranty_ref(f"{last_name}-W", record_id), None
 
 
-def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_date=None):
+def _warranty_note_para(note):
+    """Optional CS 'Note to Customer' (Airtable long text) — rendered
+    word-for-word as its own paragraph in the approval/replace emails, for
+    partial approvals/denials ("the pouches are covered, the belt fraying is
+    normal wear"). Empty/missing note = empty string, emails unchanged.
+    Added 2026-08-17 per Patty."""
+    import html as _html
+    note = (note or "").strip()
+    if not note:
+        return ""
+    return ('<p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">'
+            + _html.escape(note).replace("\n", "<br>") + "</p>")
+
+
+def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_date=None, note=None):
     """Send approval email with return label attached. FROM: info@bluealpha.us
     Returns (success, error_message).
 
@@ -14222,6 +14237,7 @@ def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_dat
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
             Please note: this label will expire on {ship_by}. Be sure to ship your item before then.
           </p>
+          {_warranty_note_para(note)}
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0;">
             Questions? Reply to this email and we'll be happy to help.
           </p>
@@ -14359,14 +14375,23 @@ def _wa_email_footer():
 </body></html>"""
 
 
-def _send_warranty_replace_email(to_email, first_name, replacement_item, label_pdf_b64=None):
+def _send_warranty_replace_email(to_email, first_name, replacement_item, label_pdf_b64=None, note=None):
     """Replace approval email — includes return label if provided."""
     if not SENDGRID_API_KEY:
         return
     actual_to = TEST_EMAIL_OVERRIDE or to_email
     if label_pdf_b64:
-        return_label_line = """<p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
+        # Same expiration warning as the repair email (added 2026-08-17 per
+        # Patty — Replace labels auto-void on day 27 just the same). This
+        # email is only ever sent right after the label is created, so
+        # today+26 is the label's real deadline.
+        from datetime import datetime, timezone, timedelta
+        ship_by = _friendly_date(datetime.now(timezone.utc) + timedelta(days=26))
+        return_label_line = f"""<p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
             Attached is a prepaid return label for your original item. Please print it, attach it to your package, and drop it off at any USPS location.
+          </p>
+          <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
+            Please note: this label will expire on {ship_by}. Be sure to ship your item before then.
           </p>"""
     else:
         return_label_line = ""
@@ -14376,6 +14401,7 @@ def _send_warranty_replace_email(to_email, first_name, replacement_item, label_p
             Great news — your warranty request has been approved! We'll be sending out a replacement <strong>{replacement_item}</strong> to you shortly.
           </p>
           {return_label_line}
+          {_warranty_note_para(note)}
           <p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0;">
             If you have any questions, please reply to this email and we'll be happy to help.
           </p>""" + _wa_email_footer()
@@ -14634,7 +14660,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
 
                 # ── Send approval email ──
                 print(f"[warranty_webhook] sending approval email to {email}, label_data_len={len(label_pdf_b64)}", flush=True)
-                _send_warranty_approval_email(email, first_name, label_pdf_b64)
+                _send_warranty_approval_email(email, first_name, label_pdf_b64,
+                                              note=fields.get("Note to Customer"))
 
                 return Response(
                     json.dumps({"success": True, "action": "label_sent", "orderRef": order_ref}),
@@ -14709,7 +14736,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     json={"fields": {"Warranty Order #": order_ref}}, timeout=10,
                 )
                 print(f"[warranty_webhook] sending replace_wo_return email to {email}", flush=True)
-                _send_warranty_replace_email(email, first_name, replacement_item)
+                _send_warranty_replace_email(email, first_name, replacement_item,
+                                             note=fields.get("Note to Customer"))
                 return Response(json.dumps({"success": True, "action": "replace_wo_return", "orderRef": order_ref}),
                                 status=200, headers=c, mimetype="application/json")
 
@@ -14798,7 +14826,8 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 # written) — keep the lock from here on.
                 _pending_lock["ref"] = None
                 print(f"[warranty_webhook] sending replace email to {email}, label_len={len(label_pdf_b64)}", flush=True)
-                _send_warranty_replace_email(email, first_name, replacement_item, label_pdf_b64)
+                _send_warranty_replace_email(email, first_name, replacement_item, label_pdf_b64,
+                                             note=fields.get("Note to Customer"))
                 return Response(json.dumps({"success": True, "action": "replace", "orderRef": order_ref}),
                                 status=200, headers=c, mimetype="application/json")
 
