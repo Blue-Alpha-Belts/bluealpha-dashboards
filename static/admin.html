@@ -580,6 +580,41 @@
     let resetRecordId = null;
     let currentRole   = null; // 'admin' or 'cs'
 
+    // ── Session-expiry guard ──────────────────────────────────────────────────
+    // Login sessions last 12 hours. A tab left open past that keeps showing
+    // stale data, and any action just alerted "Error: Unauthorized". Intercept
+    // 401s from admin API calls and bounce back to the login gate instead.
+    // Only active once logged in (currentRole set) — the startup role probe
+    // relies on a raw 401 from /api/admin/users to detect CS users.
+    function showSessionExpired() {
+      currentRole = null;
+      document.querySelectorAll('.modal-overlay.show').forEach(m => m.classList.remove('show'));
+      const invModal = document.getElementById('invoiceModal');
+      if (invModal) invModal.style.display = 'none';
+      document.getElementById('adminContent').style.display = 'none';
+      document.getElementById('loginGate').style.display = '';
+      document.getElementById('adminPassword').value = '';
+      document.getElementById('loginError').innerHTML =
+        '<div class="alert alert-error">Your session has expired — please sign in again.</div>';
+      window.scrollTo(0, 0);
+    }
+
+    const _rawFetch = window.fetch.bind(window);
+    window.fetch = async (url, opts) => {
+      const resp = await _rawFetch(url, opts);
+      const isAdminApi = typeof url === 'string' &&
+        url.startsWith('/api/admin/') && url !== '/api/admin/login';
+      if (resp.status === 401 && isAdminApi && currentRole !== null) {
+        showSessionExpired();
+        // Rewrite the error so handlers that alert/display it say something
+        // accurate instead of a bare "Unauthorized".
+        return new Response(
+          JSON.stringify({ error: 'Your session has expired — please sign in again.' }),
+          { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+      return resp;
+    };
+
     // ── Startup: check session (with one retry for transient server restarts) ──
     (async () => {
       let resp;
