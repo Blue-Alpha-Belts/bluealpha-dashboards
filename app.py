@@ -14366,7 +14366,7 @@ def _send_warranty_replace_email(to_email, first_name, replacement_item, label_p
     actual_to = TEST_EMAIL_OVERRIDE or to_email
     if label_pdf_b64:
         return_label_line = """<p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
-            Attached is a prepaid return label. Please print it, attach it to your original item, and drop it off at any USPS location.
+            Attached is a prepaid return label for your original item. Please print it, attach it to your package, and drop it off at any USPS location.
           </p>"""
     else:
         return_label_line = ""
