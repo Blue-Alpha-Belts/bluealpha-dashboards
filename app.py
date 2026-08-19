@@ -7009,7 +7009,7 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
     # Pin footer to bottom of current page; disable auto page break so it never overflows
     PAGE_H     = 279.4   # letter height in mm
     BOT_MARGIN = 6       # mm from bottom for footer start
-    footer_h   = 20 + (10 if clean_notes else 0)
+    footer_h   = 25 + (10 if clean_notes else 0)
     footer_y   = PAGE_H - BOT_MARGIN - footer_h
     # Only jump down if we're above the footer zone (never jump backward past content)
     if pdf.get_y() < footer_y:
@@ -7058,7 +7058,14 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
         pdf.write(4.5, "  Payment terms are Net 30 upon acceptance.")
     pdf.ln(5)
 
-    # Line 2: questions
+    # Line 2: pricing / shipping terms
+    pdf.set_font("Helvetica", "", 7.5)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(W, 4.5,
+        "Prices reflected for payment via ACH/Check. If paying by CC there is a 3% fee. All shipments are F.O.B. Origin.",
+        border=0, new_x="LMARGIN", new_y="NEXT")
+
+    # Line 3: questions
     pdf.set_font("Helvetica", "", 7.5)
     pdf.set_text_color(*MUTED)
     pdf.cell(W, 4.5,
