@@ -67,6 +67,10 @@ WC_CONSUMER_KEY     = os.environ.get("WC_CONSUMER_KEY", "")
 WC_CONSUMER_SECRET  = os.environ.get("WC_CONSUMER_SECRET", "")
 # Optional shared secret for a Cloudflare WAF "skip" rule (sent as X-BA-CS-Portal)
 WC_CF_BYPASS_TOKEN  = os.environ.get("WC_CF_BYPASS_TOKEN", "")
+# Shared secret required by /api/send-invoice (X-BA-CS-Key header from the CS
+# app). That endpoint emails to a caller-chosen address — unlike the
+# record-id-as-capability resend endpoints — so it's gated when this is set.
+CS_INVOICE_SHARED_SECRET = os.environ.get("CS_INVOICE_SHARED_SECRET", "")
 INT_EXCHANGE_TABLE_ID    = os.environ.get("INT_EXCHANGE_TABLE_ID", "")
 RETURN_ADDRESS_INTL      = "35 Andrew St., Newnan, GA 30263 USA"
 
@@ -1030,26 +1034,28 @@ def verify_order():
                         status=500, headers=c, mimetype="application/json")
 
 
-def wc_refund_summary(order_number, order_date=None):
-    """Best-effort WooCommerce refund lookup for an order.
+def _wc_headers():
+    # Cloudflare's bot protection blocks the default python-requests UA from
+    # datacenter IPs; identify ourselves, and carry the WAF skip-rule token if set.
+    h = {"User-Agent": "BlueAlpha-CS-Portal/1.0 (+https://bluealpha.us)"}
+    if WC_CF_BYPASS_TOKEN:
+        h["X-BA-CS-Portal"] = WC_CF_BYPASS_TOKEN
+    return h
+
+
+def wc_find_order(order_number, order_date=None):
+    """Resolve a customer-facing order number to its WooCommerce order dict.
 
     The store uses sequential order numbers (the customer-facing number, e.g.
     286189) that do NOT match WooCommerce's internal order IDs (e.g. 383119),
-    and the WC REST API can't search by that number. We resolve the real order
-    by scanning orders created around order_date (from ShipStation) and
-    matching the `number` field exactly.
-
-    Returns None when the WC API is unconfigured or unreachable (callers must
-    treat that as "unknown", never as "no refunds"). Otherwise returns:
-    {orderTotal, refundedTotal, fullyRefunded, refunds: [{amount, date, reason}]}
+    and the WC REST API can't search by that number. With an order_date we
+    scan orders created around it and match the `number` field exactly;
+    without one, we try the number as a direct ID and only trust an exact
+    `number` match. Returns None when unconfigured, unreachable, or no match.
     """
     if not WC_CONSUMER_KEY or not WC_CONSUMER_SECRET:
         return None
-    # Cloudflare's bot protection blocks the default python-requests UA from
-    # datacenter IPs; identify ourselves, and carry the WAF skip-rule token if set.
-    wc_headers = {"User-Agent": "BlueAlpha-CS-Portal/1.0 (+https://bluealpha.us)"}
-    if WC_CF_BYPASS_TOKEN:
-        wc_headers["X-BA-CS-Portal"] = WC_CF_BYPASS_TOKEN
+    wc_headers = _wc_headers()
     wc_auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
     try:
         from datetime import datetime, timedelta
@@ -1068,26 +1074,42 @@ def wc_refund_summary(order_number, order_date=None):
                     auth=wc_auth, headers=wc_headers, timeout=8,
                 )
                 if pr.status_code != 200:
-                    print(f"[wc-refund] order {order_number}: WC scan returned {pr.status_code}: {pr.text[:200]}")
+                    print(f"[wc-find] order {order_number}: WC scan returned {pr.status_code}: {pr.text[:200]}")
                     return None
                 batch = pr.json()
                 o = next((c for c in batch if str(c.get("number")) == str(order_number)), None)
                 if o is not None or len(batch) < 100:
                     break
-        else:
-            # No date available — try the number as a direct ID, but only trust
-            # the result if its customer-facing number actually matches.
+        if o is None:
+            # No date (or the scan missed) — try the number as a direct ID, but
+            # only trust the result if its customer-facing number matches.
             r = req_lib.get(
                 f"{WC_API_URL}/wp-json/wc/v3/orders/{order_number}",
                 auth=wc_auth, headers=wc_headers, timeout=8,
             )
             if r.status_code == 200 and str(r.json().get("number")) == str(order_number):
                 o = r.json()
+        return o
+    except Exception as e:
+        print(f"[wc-find] order {order_number}: lookup failed: {e}")
+        return None
 
-        if o is None:
-            print(f"[wc-refund] order {order_number}: no matching WC order found (date={order_date})")
-            return None
 
+def wc_refund_summary(order_number, order_date=None):
+    """Best-effort WooCommerce refund lookup for an order (resolution via
+    wc_find_order above).
+
+    Returns None when the WC API is unconfigured or unreachable (callers must
+    treat that as "unknown", never as "no refunds"). Otherwise returns:
+    {orderTotal, refundedTotal, fullyRefunded, refunds: [{amount, date, reason}]}
+    """
+    o = wc_find_order(order_number, order_date)
+    if o is None:
+        print(f"[wc-refund] order {order_number}: no matching WC order found (date={order_date})")
+        return None
+    wc_headers = _wc_headers()
+    wc_auth = (WC_CONSUMER_KEY, WC_CONSUMER_SECRET)
+    try:
         total    = float(o.get("total") or 0)
         refunded = sum(abs(float(rf.get("total") or 0)) for rf in (o.get("refunds") or []))
         fully    = o.get("status") == "refunded" or (total > 0 and refunded >= total - 0.01)
@@ -3764,6 +3786,112 @@ def resend_return_label(record_id):
                             status=500, mimetype="application/json")
         print(f"[resend-return-label] label re-sent to {email} for {record_id}", flush=True)
         return Response(json.dumps({"ok": True, "sentTo": email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
+@app.route("/api/send-invoice/<order_number>", methods=["POST"])
+def send_invoice(order_number):
+    """Email a website order's PDF invoice (CS app button, Patty 2026-08-21).
+
+    The PDF comes from the WooCommerce "PDF Invoices & Packing Slips" plugin's
+    document link, fetched server-side with the order's order_key. The FIRST
+    fetch generates the invoice and assigns the next sequential invoice number
+    — exactly what generating it on the website does today.
+
+    Body: {"email": recipient, "order_date": "YYYY-MM-DD" (optional, speeds
+    the WC order-number resolution)}. The recipient is caller-chosen because
+    accounting departments usually want the invoice sent straight to them —
+    which is why this endpoint, unlike the record-id-as-capability resends,
+    requires the X-BA-CS-Key shared secret when configured.
+    """
+    if CS_INVOICE_SHARED_SECRET and request.headers.get("X-BA-CS-Key", "") != CS_INVOICE_SHARED_SECRET:
+        return Response(json.dumps({"ok": False, "error": "Forbidden"}),
+                        status=403, mimetype="application/json")
+    if not SENDGRID_API_KEY:
+        return Response(json.dumps({"ok": False, "error": "Email not configured"}),
+                        status=500, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    to_email = (body.get("email") or "").strip()
+    order_date = body.get("order_date") or None
+    if not to_email or "@" not in to_email:
+        return Response(json.dumps({"ok": False, "error": "Valid recipient email required"}),
+                        status=400, mimetype="application/json")
+    try:
+        o = wc_find_order(order_number, order_date)
+        if o is None:
+            return Response(json.dumps({"ok": False, "error":
+                f"No WooCommerce order matches {order_number} — invoices only exist for website orders"}),
+                status=404, mimetype="application/json")
+        # The plugin's document link: generates on first call, returns the
+        # stored PDF afterwards. order_key is the access key for guest links.
+        pr = req_lib.get(
+            f"{WC_API_URL}/wp-admin/admin-ajax.php",
+            params={"action": "generate_wpo_wcpdf", "template_type": "invoice",
+                    "order_ids": o["id"], "order_key": o.get("order_key", "")},
+            headers=_wc_headers(), timeout=45,
+        )
+        ctype = pr.headers.get("Content-Type", "")
+        if pr.status_code != 200 or "pdf" not in ctype.lower():
+            snippet = pr.text[:200].strip() if pr.text else f"HTTP {pr.status_code}"
+            print(f"[send-invoice] order {order_number} (wc {o['id']}): PDF fetch failed: {snippet}", flush=True)
+            return Response(json.dumps({"ok": False, "error":
+                f"The website wouldn't hand over the invoice PDF ({snippet}) — "
+                "check the PDF plugin's document-access setting"}),
+                status=502, mimetype="application/json")
+        pdf_b64 = base64.b64encode(pr.content).decode()
+
+        first_name = ((o.get("billing") or {}).get("first_name") or "").strip() or "there"
+        actual_to = TEST_EMAIL_OVERRIDE or to_email
+        html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1B2438;padding:24px 36px;">
+          <span style="font-family:Arial;font-size:20px;font-weight:800;color:#fff;letter-spacing:2px;">BLUE ALPHA</span>
+        </td></tr>
+        <tr><td style="padding:32px 36px;">
+          <p style="color:#1a2633;font-size:16px;margin:0 0 8px;">Hi {first_name},</p>
+          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0 0 20px;">
+            The invoice for Blue Alpha order <strong>#{order_number}</strong> is attached as a PDF.
+          </p>
+          <p style="color:#6b7a8d;font-size:12px;margin-top:16px;">
+            Questions? Contact us at <a href="mailto:orders@bluealpha.us" style="color:#1B2438;">orders@bluealpha.us</a>
+          </p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
+          <p style="color:#6b7a8d;font-size:11px;margin:0;">Blue Alpha &bull; bluealphabelts.com</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+        sr = req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": actual_to}]}],
+                "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+                "subject": f"Invoice for Blue Alpha order #{order_number}",
+                "content": [{"type": "text/html", "value": html_body}],
+                "attachments": [{
+                    "content": pdf_b64,
+                    "type": "application/pdf",
+                    "filename": f"invoice-{order_number}.pdf",
+                    "disposition": "attachment",
+                }],
+            },
+            timeout=15,
+        )
+        if sr.status_code not in (200, 202):
+            return Response(json.dumps({"ok": False, "error": f"SendGrid {sr.status_code}: {sr.text[:200]}"}),
+                            status=500, mimetype="application/json")
+        print(f"[send-invoice] order {order_number} (wc {o['id']}) invoice emailed to {actual_to}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": to_email, "wcOrderId": o["id"]}),
                         status=200, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
