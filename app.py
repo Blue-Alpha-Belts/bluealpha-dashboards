@@ -3856,11 +3856,8 @@ def send_invoice(order_number):
         </td></tr>
         <tr><td style="padding:32px 36px;">
           <p style="color:#1a2633;font-size:16px;margin:0 0 8px;">Hi {first_name},</p>
-          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0 0 20px;">
-            The invoice for Blue Alpha order <strong>#{order_number}</strong> is attached as a PDF.
-          </p>
-          <p style="color:#6b7a8d;font-size:12px;margin-top:16px;">
-            Questions? Contact us at <a href="mailto:orders@bluealpha.us" style="color:#1B2438;">orders@bluealpha.us</a>
+          <p style="color:#6b7a8d;font-size:14px;line-height:1.6;margin:0;">
+            The invoice you requested for Blue Alpha order <strong>#{order_number}</strong> is attached as a PDF.
           </p>
         </td></tr>
         <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
@@ -3875,7 +3872,10 @@ def send_invoice(order_number):
             headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
             json={
                 "personalizations": [{"to": [{"email": actual_to}]}],
-                "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+                # Invoice emails come from info@ (Patty 2026-08-21), not the
+                # orders@ the label emails use — replies land in the inbox the
+                # CS app mirrors. Same authenticated domain, so SendGrid is fine.
+                "from": {"email": "info@bluealpha.us", "name": "Blue Alpha"},
                 "subject": f"Invoice for Blue Alpha order #{order_number}",
                 "content": [{"type": "text/html", "value": html_body}],
                 "attachments": [{
