@@ -14891,6 +14891,11 @@ def _warranty_webhook_inner(record_id, trigger, c):
                           "orderDate": today_str, "billTo": _caddr, "shipTo": _caddr,
                           "items": [{"name": replacement_item, "quantity": 1, "unitPrice": 0}],
                           "advancedOptions": {"storeId": 241180}}
+                # ShipStation Notes (2026-08-21): typed by CS on the decision
+                # form, lands in the SS order's internal notes.
+                _ss_notes = (fields.get("ShipStation Notes") or "").strip()
+                if _ss_notes:
+                    _order_payload["internalNotes"] = _ss_notes
                 if email:
                     _order_payload["customerEmail"] = email
                 if _pd:
@@ -14976,6 +14981,11 @@ def _warranty_webhook_inner(record_id, trigger, c):
                           "weight": {"value": 4, "units": "ounces"},
                           "dimensions": {"units": "inches", "length": 8, "width": 6, "height": 2},
                           "advancedOptions": {"storeId": 241180}}
+                # ShipStation Notes (2026-08-21): typed by CS on the decision
+                # form, lands in the SS order's internal notes.
+                _ss_notes = (fields.get("ShipStation Notes") or "").strip()
+                if _ss_notes:
+                    _order_payload["internalNotes"] = _ss_notes
                 if email:
                     _order_payload["customerEmail"] = email
                 if _pd:
@@ -15081,6 +15091,13 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 }],
                 "advancedOptions": {"storeId": 241180},
             }
+            # ShipStation Notes (2026-08-21): typed by CS on the decision
+            # form, lands in the SS order's internal notes. Read fresh from
+            # the record at check-in time, so notes added or edited between
+            # the decision and the box arriving still make it on.
+            _ss_notes = (fields.get("ShipStation Notes") or "").strip()
+            if _ss_notes:
+                _repair_payload["internalNotes"] = _ss_notes
             if email:
                 _repair_payload["customerEmail"] = email
             if _pd:
