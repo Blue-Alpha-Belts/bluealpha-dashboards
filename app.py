@@ -11559,11 +11559,19 @@ def cron_push_ready_sos():
     /api/cron-intl-exchange — it can only materialize SOs that are already
     Approved in Airtable.
 
+    ?supplement=1: instead of skipping an SO with a live ShipStation order,
+    diff the Airtable line items against what the live order(s) already carry
+    (aggregated by SKU) and create a SECOND order under the same orderNumber
+    holding only the missing items. Built for SO-0488 (2026-08-21), where the
+    pre-2026-08-15 approval race let the pusher import only 2 of 8 items and
+    the 2-item order had already shipped.
+
     Built 2026-08-15 to re-push SOs the external pusher imported without line
     items; intended to grow into the Make-replacement sweeper.
     """
     read_token = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or RETURNS_WRITE_TOKEN
     dry_run    = request.args.get("dry", "") in ("1", "true", "yes")
+    supplement = request.args.get("supplement", "") in ("1", "true", "yes")
     so_param   = (request.args.get("so") or "").strip()
     if not so_param:
         return Response(json.dumps({"success": False,
@@ -11640,10 +11648,34 @@ def cron_push_ready_sos():
             exact = [o for o in ss_r.json().get("orders", [])
                      if (o.get("orderNumber") or "").strip().lower() == so_number.lower()]
             live = [o for o in exact if o.get("orderStatus") != "cancelled"]
-            if live:
+            supp_have = None
+            if live and not supplement:
                 results.append({"so": so_number, "success": False, "skipped": True,
-                                "error": f"Live ShipStation order already exists (status {live[0].get('orderStatus')})"})
+                                "error": f"Live ShipStation order already exists (status {live[0].get('orderStatus')}) — pass supplement=1 to push only the missing items"})
                 continue
+            if live and supplement:
+                # Diff the SO's Airtable items against what the live order(s)
+                # already carry, aggregated by SKU — two Airtable lines with the
+                # same SKU are covered by one SS line of quantity 2, and vice versa.
+                have = {}
+                for o in live:
+                    for it in o.get("items", []):
+                        sk = (it.get("sku") or "").strip()
+                        have[sk] = have.get(sk, 0) + int(it.get("quantity") or 0)
+                supp_have = dict(have)
+                remaining = []
+                for it in items:
+                    take = min(have.get(it["sku"], 0), it["quantity"])
+                    if take:
+                        have[it["sku"]] -= take
+                    if it["quantity"] > take:
+                        remaining.append({**it, "quantity": it["quantity"] - take})
+                if not remaining:
+                    results.append({"so": so_number, "success": False, "skipped": True,
+                                    "alreadyInShipStation": supp_have,
+                                    "error": "Live ShipStation order(s) already carry every Airtable line item — nothing to supplement"})
+                    continue
+                items = remaining
             existing = exact[0] if exact else None
 
             # 4. Build payload from the SO's snapshot fields
@@ -11663,6 +11695,8 @@ def cron_push_ready_sos():
                 "phone":      (f.get("Snapshot Phone") or "").strip(),
             }
             note_bits = []
+            if supp_have is not None:
+                note_bits.append(f"Supplemental shipment — items missing from the original {so_number} ShipStation order")
             if f.get("Purchase Order #"):
                 note_bits.append(f"PO #{f['Purchase Order #']}")
             if f.get("Notes from Customer"):
@@ -11675,7 +11709,11 @@ def cron_push_ready_sos():
                 # 2026-08-15). Use a fresh key to create a new order alongside
                 # the cancelled one(s); the count-based key is stable on retry
                 # (idempotent) but unique if a re-push itself gets cancelled.
-                "orderKey":    (f"{so_number}-repush{len(exact)}" if existing else so_number),
+                # Supplements likewise need their own key so they never collide
+                # with the live original's.
+                "orderKey":    (f"{so_number}-supp{len(exact)}" if supp_have is not None
+                                else f"{so_number}-repush{len(exact)}" if existing
+                                else so_number),
                 "orderDate":   f"{order_date}T12:00:00.0000000",
                 "paymentDate": f"{order_date}T12:00:00.0000000",
                 "orderStatus": "awaiting_shipment",
@@ -11693,7 +11731,10 @@ def cron_push_ready_sos():
 
             if dry_run:
                 results.append({"so": so_number, "success": True, "dryRun": True,
-                                "recreatingAfterCancel": bool(existing), "refStoreId": ref_store_id,
+                                "supplement": supp_have is not None,
+                                "alreadyInShipStation": supp_have,
+                                "recreatingAfterCancel": bool(existing) and supp_have is None,
+                                "refStoreId": ref_store_id,
                                 "payload": payload})
                 continue
 
@@ -11708,10 +11749,11 @@ def cron_push_ready_sos():
                                 "error": f"SS createorder failed: {create_r.status_code} {create_r.text[:300]}"})
                 continue
             results.append({"so": so_number, "success": True,
-                            "recreatedAfterCancel": bool(existing),
+                            "supplement": supp_have is not None,
+                            "recreatedAfterCancel": bool(existing) and supp_have is None,
                             "ssOrderId": create_r.json().get("orderId"),
                             "itemCount": len(items)})
-            print(f"[push-ready-sos] pushed {so_number} ({len(items)} items, recreated={bool(existing)})", flush=True)
+            print(f"[push-ready-sos] pushed {so_number} ({len(items)} items, supplement={supp_have is not None}, recreated={bool(existing)})", flush=True)
         except Exception as so_err:
             results.append({"so": so_number, "success": False, "error": str(so_err)})
             print(f"[push-ready-sos] {so_number} ERROR: {so_err}", flush=True)
