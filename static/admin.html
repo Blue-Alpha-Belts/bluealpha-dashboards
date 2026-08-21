@@ -574,6 +574,19 @@
     </div>
   </div>
 
+  <!-- Edit Invoice Modal -->
+  <div class="modal-overlay" id="editInvoiceModal">
+    <div class="modal" style="max-width:640px;">
+      <h3 id="editInvoiceTitle">Edit Invoice</h3>
+      <div id="editInvoiceBody" style="max-height:60vh;overflow-y:auto;"><div class="loading">Loading…</div></div>
+      <div id="editInvoiceMsg"></div>
+      <div class="modal-btns" style="margin-top:14px;">
+        <button class="btn btn-outline" onclick="closeEditInvoiceModal()">Cancel</button>
+        <button class="btn btn-primary" id="editInvoiceSubmitBtn" onclick="submitEditInvoice()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     let allApps   = [];
     let denyAppId = null;
@@ -1735,13 +1748,14 @@
         + '<col style="width:85px">'    // Total
         + '<col style="width:72px">'    // Status
         + '<col style="width:62px">'    // PDF
+        + '<col style="width:62px">'    // Edit
         + '<col style="width:110px">'   // Payment
         + '<col style="width:100px">'   // Resend
         + '<col style="width:110px">'   // Overdue
         + '<col style="width:100px">'   // Stripe
         + '</colgroup><thead><tr>'
         + '<th><input type="checkbox" id="selectAllOverdue" title="Select all unpaid" onchange="toggleSelectAllOverdue(this)"></th>'
-        + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Payment</th><th>Resend</th><th style="white-space:normal;line-height:1.3;">Overdue<br>Notices</th><th>Stripe</th>'
+        + '<th>Invoice #</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th><th>PDF</th><th>Edit</th><th>Payment</th><th>Resend</th><th style="white-space:normal;line-height:1.3;">Overdue<br>Notices</th><th>Stripe</th>'
         + '</tr></thead><tbody>';
       invoices.forEach(inv => {
         const statusBadge = inv.is_paid
@@ -1769,6 +1783,11 @@
 
         const pdfCell = `<button class="btn btn-outline btn-sm" ${_btn} onclick="openPdfViewer('${esc(inv.record_id)}','${esc(inv.inv_number)}')">📄 PDF</button>`;
 
+        // Edit only while unpaid — paid invoices are locked (backend enforces too)
+        const editCell = !inv.is_paid
+          ? `<button class="btn btn-outline btn-sm" ${_btn} onclick="openEditInvoiceModal('${esc(inv.record_id)}','${esc(inv.inv_number)}')">✏️ Edit</button>`
+          : '<small style="color:var(--muted);">—</small>';
+
         const checkboxCell = !inv.is_paid
           ? `<td style="text-align:center;"><input type="checkbox" class="overdue-select" data-id="${esc(inv.record_id)}" data-inv="${esc(inv.inv_number)}" data-email="${esc(inv.billing_email||'')}" data-customer="${esc(inv.customer_name||'')}" onchange="updateBulkBar()"></td>`
           : `<td></td>`;
@@ -1781,6 +1800,7 @@
           <td style="white-space:nowrap;">$${inv.total.toFixed(2)}</td>
           <td>${statusBadge}</td>
           <td>${pdfCell}</td>
+          <td>${editCell}</td>
           <td>${paymentCell}</td>
           <td>${resendCell}</td>
           <td>${overdueCell}</td>
@@ -1827,6 +1847,183 @@
     function closeMarkPaidModal() {
       markPaidRecordId = null;
       document.getElementById('markPaidModal').classList.remove('show');
+    }
+
+    // ── Edit Invoice Modal ────────────────────────────────────────────────────
+    let _editInvRecordId  = null;
+    let _editInvItems     = [];     // {lineItemId, name, qty, unitPrice, removed}
+    let _editInvHasStripe = false;
+
+    async function openEditInvoiceModal(recordId, invNumber) {
+      _editInvRecordId = recordId;
+      document.getElementById('editInvoiceTitle').textContent = `Edit ${invNumber}`;
+      const body = document.getElementById('editInvoiceBody');
+      body.innerHTML = '<div class="loading">Loading…</div>';
+      document.getElementById('editInvoiceMsg').innerHTML = '';
+      const btn = document.getElementById('editInvoiceSubmitBtn');
+      btn.disabled = false; btn.textContent = 'Save Changes';
+      document.getElementById('editInvoiceModal').classList.add('show');
+      try {
+        const resp = await fetch(`/api/admin/invoices/${recordId}/line-items`);
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        if (data.isPaid) {
+          body.innerHTML = '<div class="alert alert-error">This invoice is already paid and can\'t be edited.</div>';
+          btn.disabled = true;
+          return;
+        }
+        _editInvItems     = (data.lineItems || []).map(li => ({...li, removed: false}));
+        _editInvHasStripe = !!data.hasStripe;
+        body.innerHTML = `
+          <div style="display:flex;gap:12px;margin-bottom:14px;">
+            <div style="flex:1;"><label>Invoice Date</label>
+              <input type="date" id="editInvDate" value="${esc(data.date || '')}" style="width:100%;box-sizing:border-box;"></div>
+            <div style="flex:1;"><label>PO #</label>
+              <input type="text" id="editInvPo" value="${esc(data.poNumber || '')}" autocomplete="off" style="width:100%;box-sizing:border-box;"></div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:0.86rem;">
+            <thead><tr style="border-bottom:1px solid #ddd;">
+              <th style="text-align:left;padding:6px 4px;">Item</th>
+              <th style="text-align:right;padding:6px 4px;width:64px;">Qty</th>
+              <th style="text-align:right;padding:6px 4px;width:96px;">Unit Price</th>
+              <th style="text-align:right;padding:6px 4px;width:84px;">Total</th>
+              <th style="width:34px;"></th>
+            </tr></thead>
+            <tbody id="editInvRows"></tbody>
+            <tfoot>
+              <tr>
+                <td colspan="3" style="padding:8px 4px;text-align:right;color:var(--muted);">Add shipping fee: $</td>
+                <td style="padding:8px 4px;text-align:right;">
+                  <input type="number" id="editInvShipping" value="0" min="0" step="0.01"
+                         style="width:80px;margin:0;padding:4px 6px;text-align:right;" oninput="updateEditInvTotal()"></td>
+                <td></td>
+              </tr>
+              <tr style="border-top:2px solid #333;font-weight:700;">
+                <td colspan="3" style="padding:8px 4px;text-align:right;">Invoice Total:</td>
+                <td style="padding:8px 4px;text-align:right;white-space:nowrap;" id="editInvGrandTotal"></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+          <p style="margin:12px 0 0;font-size:0.8rem;color:#777;">
+            Saving updates the invoice PDF immediately.${_editInvHasStripe
+              ? ' If amounts change, the old Stripe payment links are voided and new ones created automatically.' : ''}
+            Use 📧 Resend afterwards to email the customer the updated invoice.</p>`;
+        renderEditInvRows();
+      } catch (e) {
+        body.innerHTML = `<div class="alert alert-error">Failed to load: ${esc(e.message)}</div>`;
+        btn.disabled = true;
+      }
+    }
+
+    function renderEditInvRows() {
+      const tb = document.getElementById('editInvRows');
+      if (!tb) return;
+      tb.innerHTML = _editInvItems.map((li, i) => li.removed
+        ? `<tr style="opacity:0.5;">
+             <td style="padding:6px 4px;text-decoration:line-through;">${esc(li.name)}</td>
+             <td colspan="3" style="padding:6px 4px;text-align:right;font-size:0.78rem;color:#7B2318;">removed</td>
+             <td style="padding:6px 4px;text-align:center;">
+               <button style="background:none;border:none;cursor:pointer;color:#155724;font-size:1rem;"
+                       onclick="toggleEditInvRemove(${i})" title="Restore line">↩</button></td>
+           </tr>`
+        : `<tr>
+             <td style="padding:6px 4px;">${esc(li.name)}</td>
+             <td style="padding:6px 4px;text-align:right;">
+               <input type="number" id="editInvQty${i}" value="${li.qty}" min="1" step="1"
+                      style="width:56px;margin:0;padding:4px 6px;text-align:right;" oninput="updateEditInvTotal()"></td>
+             <td style="padding:6px 4px;text-align:right;">
+               <input type="number" id="editInvPrice${i}" value="${(+li.unitPrice).toFixed(2)}" min="0" step="0.01"
+                      style="width:84px;margin:0;padding:4px 6px;text-align:right;" oninput="updateEditInvTotal()"></td>
+             <td style="padding:6px 4px;text-align:right;white-space:nowrap;" id="editInvRowTotal${i}">$${(li.qty * li.unitPrice).toFixed(2)}</td>
+             <td style="padding:6px 4px;text-align:center;">
+               <button style="background:none;border:none;cursor:pointer;color:#7B2318;font-size:1rem;"
+                       onclick="toggleEditInvRemove(${i})" title="Remove line">✕</button></td>
+           </tr>`
+      ).join('');
+      updateEditInvTotal();
+    }
+
+    // Pull current input values back into _editInvItems (before any re-render)
+    function captureEditInvInputs() {
+      _editInvItems.forEach((li, i) => {
+        if (li.removed) return;
+        const q = document.getElementById(`editInvQty${i}`);
+        const p = document.getElementById(`editInvPrice${i}`);
+        if (q) li.qty = parseInt(q.value, 10) || 0;
+        if (p) { const v = parseFloat(p.value); li.unitPrice = isNaN(v) ? -1 : v; }
+      });
+    }
+
+    function toggleEditInvRemove(i) {
+      captureEditInvInputs();
+      _editInvItems[i].removed = !_editInvItems[i].removed;
+      renderEditInvRows();
+    }
+
+    function updateEditInvTotal() {
+      let total = 0;
+      _editInvItems.forEach((li, i) => {
+        if (li.removed) return;
+        const q = parseInt(document.getElementById(`editInvQty${i}`)?.value, 10) || 0;
+        const p = parseFloat(document.getElementById(`editInvPrice${i}`)?.value) || 0;
+        const rowEl = document.getElementById(`editInvRowTotal${i}`);
+        if (rowEl) rowEl.textContent = `$${(q * p).toFixed(2)}`;
+        total += q * p;
+      });
+      total += parseFloat(document.getElementById('editInvShipping')?.value || 0) || 0;
+      const el = document.getElementById('editInvGrandTotal');
+      if (el) el.textContent = `$${total.toFixed(2)}`;
+    }
+
+    function closeEditInvoiceModal() {
+      _editInvRecordId = null;
+      _editInvItems = [];
+      document.getElementById('editInvoiceModal').classList.remove('show');
+    }
+
+    async function submitEditInvoice() {
+      if (!_editInvRecordId) return;
+      captureEditInvInputs();
+      const msgEl = document.getElementById('editInvoiceMsg');
+      msgEl.innerHTML = '';
+      const shipping = parseFloat(document.getElementById('editInvShipping')?.value || 0) || 0;
+      const active   = _editInvItems.filter(li => !li.removed);
+      if (!active.length && shipping <= 0) {
+        msgEl.innerHTML = '<div class="alert alert-error" style="margin-top:10px;">An invoice needs at least one line item.</div>';
+        return;
+      }
+      if (active.some(li => li.qty < 1 || li.unitPrice < 0)) {
+        msgEl.innerHTML = '<div class="alert alert-error" style="margin-top:10px;">Quantities must be at least 1 and prices can\'t be negative.</div>';
+        return;
+      }
+      const btn = document.getElementById('editInvoiceSubmitBtn');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const resp = await fetch(`/api/admin/invoices/${_editInvRecordId}/edit`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            date:        document.getElementById('editInvDate').value || null,
+            poNumber:    document.getElementById('editInvPo').value.trim(),
+            addShipping: shipping,
+            lineItems:   _editInvItems.map(li => ({
+              lineItemId: li.lineItemId, qty: li.qty, unitPrice: li.unitPrice, remove: !!li.removed,
+            })),
+          }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+        closeEditInvoiceModal();
+        let note = `${data.invNumber || 'Invoice'} updated — new total $${(data.total || 0).toFixed(2)}.`;
+        if (data.stripeRecreated) note += ' Stripe payment links were voided and recreated.';
+        if (data.stripeError)     note += ` ⚠ Stripe links could NOT be updated (${data.stripeError}) — use ⚡ Create on the invoice row.`;
+        alert(note);
+        loadInvoices();
+      } catch (e) {
+        msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${esc(e.message)}</div>`;
+        btn.disabled = false; btn.textContent = 'Save Changes';
+      }
     }
 
     // ── In-page PDF viewer (no new browser tab) ──────────────────────────────

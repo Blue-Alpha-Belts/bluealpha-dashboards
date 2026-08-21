@@ -13631,6 +13631,274 @@ def admin_mark_invoice_paid_check(record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+@app.route("/api/admin/invoices/<record_id>/line-items", methods=["GET", "OPTIONS"])
+def admin_invoice_line_items(record_id):
+    """Fetch an invoice's line items (with record ids) for the admin edit modal."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "GET"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": "Invoice not found"}), status=404, headers=c, mimetype="application/json")
+        fields = r.json().get("fields", {})
+        if fields.get("Order Type") != "Invoice":
+            return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
+
+        def _first(lst):
+            return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
+        cc_status  = (fields.get("Stripe Invoice Status (CC)", "") or "").lower()
+        ach_status = (fields.get("Stripe Invoice Status (ACH)", "") or "").lower()
+        is_paid    = bool(fields.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" \
+                     or bool(fields.get("Check #"))
+
+        line_items = []
+        for li_id in fields.get("MO Line Items", []):
+            lr = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+                headers=at_headers(read_token), timeout=10,
+            )
+            if not lr.ok:
+                continue
+            lf = lr.json().get("fields", {})
+            pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
+                    _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
+            qty        = lf.get("Qty.", 0)
+            unit_price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+            line_items.append({"lineItemId": li_id, "name": pname, "qty": qty,
+                               "unitPrice": unit_price,
+                               "lineTotal": float(lf.get("Confirmed Line Item Total") or (qty * unit_price))})
+
+        return Response(json.dumps({
+            "invNumber": fields.get("Document ID", ""),
+            "date":      fields.get("Date", ""),
+            "poNumber":  fields.get("Purchase Order #", ""),
+            "isPaid":    is_paid,
+            "hasStripe": bool(fields.get("Stripe Invoice URL (CC)", "") or fields.get("Stripe Invoice URL (ACH)", "")),
+            "lineItems": line_items,
+        }), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/invoices/<record_id>/edit", methods=["PATCH", "OPTIONS"])
+def admin_edit_invoice(record_id):
+    """Edit an unpaid invoice: line item qtys/prices, remove lines, add a shipping
+    fee line, invoice date, and PO # (Patty 2026-08-21). The PDF renders on demand
+    from Airtable so it picks up edits automatically. If amounts changed and Stripe
+    invoices exist, the old ones are voided and new ones created with the new totals
+    (customer gets fresh links via the Resend button — old emailed links show voided)."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "PATCH"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        write_token = RETURNS_WRITE_TOKEN
+        body = request.get_json(silent=True) or {}
+
+        # Fetch invoice record
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": "Invoice not found"}), status=404, headers=c, mimetype="application/json")
+        fields = r.json().get("fields", {})
+        if fields.get("Order Type") != "Invoice":
+            return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
+
+        cc_status  = (fields.get("Stripe Invoice Status (CC)", "") or "").lower()
+        ach_status = (fields.get("Stripe Invoice Status (ACH)", "") or "").lower()
+        if bool(fields.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" or fields.get("Check #"):
+            return Response(json.dumps({"error": "This invoice is already paid and can't be edited"}),
+                            status=400, headers=c, mimetype="application/json")
+
+        def _first(lst):
+            return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
+        # ── Validate the whole edit before touching anything ──────────────
+        valid_ids    = set(fields.get("MO Line Items", []))
+        li_edits     = [e for e in (body.get("lineItems") or []) if e.get("lineItemId") in valid_ids]
+        add_shipping = round(float(body.get("addShipping") or 0), 2)
+        keeps = 0
+        for e in li_edits:
+            if e.get("remove"):
+                continue
+            qty   = int(e.get("qty") or 0)
+            price = float(e.get("unitPrice") if e.get("unitPrice") is not None else -1)
+            if qty < 1 or price < 0:
+                return Response(json.dumps({"error": "Quantities must be at least 1 and prices can't be negative"}),
+                                status=400, headers=c, mimetype="application/json")
+            keeps += 1
+        untouched = len(valid_ids) - len(li_edits)
+        if keeps + untouched == 0 and add_shipping <= 0:
+            return Response(json.dumps({"error": "An invoice needs at least one line item"}),
+                            status=400, headers=c, mimetype="application/json")
+
+        # ── Apply line item edits ──────────────────────────────────────────
+        amounts_changed = False
+        for e in li_edits:
+            li_id = e["lineItemId"]
+            li_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}"
+            if e.get("remove"):
+                req_lib.delete(li_url, headers=at_headers(write_token), timeout=15)
+                amounts_changed = True
+                continue
+            qty   = int(e.get("qty") or 0)
+            price = round(float(e.get("unitPrice") or 0), 2)
+            lr = req_lib.get(li_url, headers=at_headers(read_token), timeout=10)
+            lf = lr.json().get("fields", {}) if lr.ok else {}
+            cur_qty   = lf.get("Qty.", None)
+            cur_price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+            if cur_qty == qty and abs(cur_price - price) < 0.005:
+                continue  # unchanged — skip the write
+            patch = req_lib.patch(
+                li_url, headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {"Qty.": qty,
+                                 "Confirmed Unit Price":      price,
+                                 "Confirmed Adj. Unit Price": price}},
+                timeout=15,
+            )
+            if not patch.ok:
+                return Response(json.dumps({"error": f"Line item update failed: {patch.text[:200]}"}),
+                                status=500, headers=c, mimetype="application/json")
+            amounts_changed = True
+
+        # ── Add shipping fee line (same SKU record the convert flow uses) ─
+        _SHIPPING_SKU_RECORD_ID = "recvxAfBvDgM1HEpw"
+        if add_shipping > 0:
+            ship_r = req_lib.post(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {
+                    "Manual Order":              [record_id],
+                    "Product SKU":               [_SHIPPING_SKU_RECORD_ID],
+                    "Qty.":                      1,
+                    "Confirmed Unit Price":      add_shipping,
+                    "Confirmed Adj. Unit Price": add_shipping,
+                }}, timeout=15,
+            )
+            if not ship_r.ok:
+                return Response(json.dumps({"error": f"Shipping line create failed: {ship_r.text[:200]}"}),
+                                status=500, headers=c, mimetype="application/json")
+            amounts_changed = True
+
+        # ── Header fields (date / PO #) ────────────────────────────────────
+        header_patch = {}
+        if body.get("date"):
+            header_patch["Date"] = str(body["date"]).strip()
+        if "poNumber" in body and (body.get("poNumber") or "").strip() != (fields.get("Purchase Order #", "") or ""):
+            header_patch["Purchase Order #"] = (body.get("poNumber") or "").strip()
+        if header_patch:
+            hp = req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": header_patch}, timeout=15,
+            )
+            if not hp.ok:
+                return Response(json.dumps({"error": f"Invoice update failed: {hp.text[:200]}"}),
+                                status=500, headers=c, mimetype="application/json")
+
+        # ── Re-fetch the edited invoice for totals + Stripe recreate ──────
+        rf = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15,
+        )
+        new_fields = rf.json().get("fields", {}) if rf.ok else fields
+        li_items = []
+        for li_id in new_fields.get("MO Line Items", []):
+            lr = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+                headers=at_headers(read_token), timeout=10,
+            )
+            if not lr.ok:
+                continue
+            lf = lr.json().get("fields", {})
+            pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
+                    _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
+            qty        = lf.get("Qty.", 0)
+            unit_price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+            li_items.append({"name": pname, "qty": qty, "unit_price": unit_price,
+                             "line_total": float(lf.get("Confirmed Line Item Total") or (qty * unit_price))})
+        new_total = round(sum(i["line_total"] for i in li_items), 2)
+
+        # ── Void + recreate Stripe invoices if the amounts changed ────────
+        stripe_recreated = False
+        stripe_error     = ""
+        has_stripe = bool(fields.get("Stripe Invoice URL (CC)", "") or fields.get("Stripe Invoice URL (ACH)", ""))
+        if amounts_changed and has_stripe:
+            try:
+                ss_auth = (STRIPE_SECRET_KEY, "")
+                for id_field, url_field in (("Stripe Invoice ID (CC)", "Stripe Invoice URL (CC)"),
+                                            ("Stripe Invoice ID (ACH)", "Stripe Invoice URL (ACH)")):
+                    stripe_id = (fields.get(id_field, "") or "").strip()
+                    if not stripe_id and fields.get(url_field):
+                        # Older records may lack the ID — find it by hosted URL
+                        list_r = req_lib.get("https://api.stripe.com/v1/invoices",
+                                             params={"limit": 100}, auth=ss_auth, timeout=15)
+                        if list_r.ok:
+                            for s_inv in list_r.json().get("data", []):
+                                if s_inv.get("hosted_invoice_url") == fields[url_field]:
+                                    stripe_id = s_inv["id"]
+                                    break
+                    if not stripe_id:
+                        continue
+                    st_r = req_lib.get(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
+                    if st_r.ok and st_r.json().get("status") in ("open", "draft"):
+                        void_r = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_id}/void",
+                                              auth=ss_auth, timeout=15)
+                        print(f"[edit-invoice] voided {stripe_id}: {void_r.status_code}")
+
+                billing_email = _first(fields.get("Bill-To Contact Email (from Customer)", []))
+                billing_name  = _first(fields.get("Bill-To Contact Name (from Customer)", []))
+                org_name      = _first(fields.get("Bill-To Org Name (from Customer)", []))
+                if not billing_email:
+                    raise Exception("no billing email on record")
+                _create_stripe_invoices_for_record(write_token, record_id, billing_email,
+                                                   billing_name, org_name, li_items)
+                stripe_recreated = True
+            except Exception as stripe_err:
+                # Non-fatal: the invoice edits are saved. Clear the stale (now-voided)
+                # Stripe fields so the ⚡ Create button reappears on the invoice row.
+                stripe_error = str(stripe_err)
+                print(f"[edit-invoice] Stripe recreate failed for {record_id}: {stripe_err}")
+                try:
+                    req_lib.patch(
+                        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                        headers={**at_headers(write_token), "Content-Type": "application/json"},
+                        json={"fields": {"Stripe Invoice URL (CC)": "", "Stripe Invoice URL (ACH)": "",
+                                         "Stripe Invoice ID (CC)": "", "Stripe Invoice ID (ACH)": ""}},
+                        timeout=15,
+                    )
+                except Exception:
+                    pass
+
+        _INVOICES_CACHE.clear()
+        inv_number = new_fields.get("Document ID", "")
+        print(f"[edit-invoice] {inv_number} edited — total ${new_total}, "
+              f"amounts_changed={amounts_changed}, stripe_recreated={stripe_recreated}", flush=True)
+        return Response(json.dumps({
+            "ok":              True,
+            "invNumber":       inv_number,
+            "total":           new_total,
+            "stripeRecreated": stripe_recreated,
+            "stripeError":     stripe_error,
+        }), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
 @app.route("/api/admin/invoices/<record_id>/resend", methods=["POST", "OPTIONS"])
 def admin_resend_invoice(record_id):
     """Resend the invoice email (with PDF) for an existing invoice record."""
