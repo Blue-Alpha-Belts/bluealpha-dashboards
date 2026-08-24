@@ -23,6 +23,7 @@ def _get_return_items_lock(record_id: str) -> threading.Lock:
 _BUILD_VERSION = "catalog-live"
 
 AIRTABLE_OPS_TOKEN      = os.environ.get("AIRTABLE_OPS_TOKEN", "")
+AIRTABLE_TEAM_TOKEN     = os.environ.get("AIRTABLE_TEAM_TOKEN", "")
 AIRTABLE_BASE_TOKEN     = os.environ.get("AIRTABLE_BASE_TOKEN", "")
 AIRTABLE_WRITE_TOKEN    = os.environ.get("AIRTABLE_WRITE_TOKEN", "")
 RETURNS_WRITE_TOKEN     = os.environ.get("AIRTABLE_WRITE_TOKEN_2", AIRTABLE_WRITE_TOKEN)
@@ -207,19 +208,19 @@ def cs_returns():
 @app.route("/<name>")
 @require_auth
 def dashboard(name):
-    if name in DASHBOARDS:
-        return send_from_directory("static", DASHBOARDS[name])
-    if name in OPS_DASHBOARDS:
-        filepath = os.path.join(app.static_folder, OPS_DASHBOARDS[name])
-        with open(filepath, "r") as f:
-            content = f.read()
-        content = content.replace("%%AIRTABLE_OPS_TOKEN%%", AIRTABLE_OPS_TOKEN)
-        return Response(content, mimetype="text/html", headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        })
-    abort(404)
+    filename = DASHBOARDS.get(name) or OPS_DASHBOARDS.get(name)
+    if not filename:
+        abort(404)
+    filepath = os.path.join(app.static_folder, filename)
+    with open(filepath, "r") as f:
+        content = f.read()
+    content = content.replace("%%AIRTABLE_OPS_TOKEN%%", AIRTABLE_OPS_TOKEN)
+    content = content.replace("%%AIRTABLE_TEAM_TOKEN%%", AIRTABLE_TEAM_TOKEN)
+    return Response(content, mimetype="text/html", headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    })
 
 def ss_headers():
     creds = base64.b64encode(f"{SHIPSTATION_KEY}:{SHIPSTATION_SECRET}".encode()).decode()

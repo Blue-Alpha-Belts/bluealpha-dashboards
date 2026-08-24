@@ -55,7 +55,7 @@ Internal dashboards for Blue Alpha (bluealphabelts.com) — a ~$5M/year tactical
 All dashboards pull data client-side directly from Airtable via the REST API.
 
 **Base ID:** `appTCZwoETAInVuiX`
-**Token:** `pat3wxVXHb3JhDBBn.e0ca55ff285ba026b093f4232320f63fff16252679f6a4c08cc85ea3425c4954`
+**Token:** injected server-side from the `AIRTABLE_TEAM_TOKEN` Railway env var via the `%%AIRTABLE_TEAM_TOKEN%%` placeholder (authed `/<name>` route in app.py) — never hardcode tokens in these files.
 
 ### Key Tables
 | Table | Purpose |
