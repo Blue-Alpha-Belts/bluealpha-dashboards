@@ -7284,7 +7284,10 @@ def _ship_contact_line(fields):
     officer = str(fields.get("Officer Name") or "").strip()
     if officer:
         badge = str(fields.get("Badge Number") or fields.get("Badge #") or "").strip()
-        return f"{officer} — Badge {badge}" if badge else officer
+        line = f"{officer} - Badge {badge}" if badge else officer
+        # Core Helvetica in fpdf2 is latin-1 only — free-typed officer names with
+        # smart quotes/dashes would crash the PDF render, so degrade them safely.
+        return line.encode("latin-1", "replace").decode("latin-1")
     main_contact = fields.get("Main Contact Name (from Customer)", [])
     return main_contact[0] if isinstance(main_contact, list) and main_contact else (main_contact or "")
 
