@@ -11962,12 +11962,12 @@ _INVOICES_CACHE_TTL = 60   # seconds
 
 
 @app.route("/api/portal/admin/shipped-orders")
-@portal_login_required
-def portal_admin_shipped_orders(user):
-    """List shipped (tracking available) approved SOs with invoiced status. Admin only."""
+def portal_admin_shipped_orders():
+    """List shipped (tracking available) approved SOs with invoiced status. STAFF only —
+    returns data across all customers, so customer-org admins must never pass this gate."""
     c = cors()
-    if not portal_can(user, "manage_team"):
-        return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
     try:
         import time as _time_mod
         read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -12191,16 +12191,16 @@ def _fetch_so_line_items(record_id, split_order_number=None):
 
 
 @app.route("/api/portal/admin/so-line-items/<record_id>", methods=["GET", "OPTIONS"])
-@portal_login_required
-def portal_admin_so_line_items(user, record_id):
-    """Fetch line items for a Sales Order (for invoice item selection). Admin only.
+def portal_admin_so_line_items(record_id):
+    """Fetch line items for a Sales Order (for invoice item selection). STAFF only —
+    takes any SO record_id with no per-customer ownership check.
     Optional ?split=SO-0337-1 to pre-check/qty from ShipStation split order."""
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
                                      "Access-Control-Allow-Methods": "GET"})
     c = cors()
-    if not portal_can(user, "manage_team"):
-        return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
     try:
         split_order_number = request.args.get("split") or None
         line_items, err = _fetch_so_line_items(record_id, split_order_number)
@@ -12212,17 +12212,17 @@ def portal_admin_so_line_items(user, record_id):
 
 
 @app.route("/api/portal/admin/convert-to-invoice/<record_id>", methods=["POST", "OPTIONS"])
-@portal_login_required
-def portal_admin_convert_to_invoice(user, record_id):
-    """Convert an approved SO into an Invoice record and send invoice email. Admin only.
+def portal_admin_convert_to_invoice(record_id):
+    """Convert an approved SO into an Invoice record and send invoice email. STAFF only —
+    takes any SO record_id with no per-customer ownership check.
     Optional body: {"lineItems": [{"lineItemId": "...", "qty": N}]} to invoice a subset/adjusted qtys.
     If omitted, all line items are copied at their original quantities."""
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
                                      "Access-Control-Allow-Methods": "POST"})
     c = cors()
-    if not portal_can(user, "manage_team"):
-        return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
     try:
         # Parse optional body: selected line items + split suffix
         selected_items = None  # None = use all
