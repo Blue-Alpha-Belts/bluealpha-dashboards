@@ -12473,7 +12473,7 @@ def portal_invoices(user):
             fields=["Document ID", "Order ID", "Date", "MO Line Items",
                     "Sales Order Status", "Go-to PDF", "Customer",
                     "Stripe Invoice Status (CC)", "Stripe Invoice Status (ACH)",
-                    "Invoice Paid", "Check #", "Hidden from Customer", "Tracking", "Tracking #", "Purchase Order #"],
+                    "Invoice Paid", "Check #", "Check Payment Amount", "Hidden from Customer", "Tracking", "Tracking #", "Purchase Order #"],
             formula='{Order Type}="Invoice"',
         )
         # Filter to this customer, excluding hidden records
@@ -12518,8 +12518,11 @@ def portal_invoices(user):
             go_to_pdf_url   = go_to_pdf_field.get("url", "") if isinstance(go_to_pdf_field, dict) else ""
             cc_status  = f.get("Stripe Invoice Status (CC)", "")
             ach_status = f.get("Stripe Invoice Status (ACH)", "")
+            # A check payment only counts as paid when it covers the full total (partials stay unpaid)
+            _check_amt = float(f.get("Check Payment Amount") or 0)
+            check_full = total > 0 and _check_amt >= total - 0.005
             is_paid    = bool(f.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" \
-                         or bool(f.get("Check #"))
+                         or check_full
             invoices.append({
                 "record_id":  rec["id"],
                 "inv_number": inv_number,
@@ -13496,8 +13499,10 @@ def admin_invoices():
             total        = round(sum(li_total_map.get(lid, 0) for lid in li_ids), 2)
             cc_status    = f.get("Stripe Invoice Status (CC)", "")
             ach_status   = f.get("Stripe Invoice Status (ACH)", "")
+            _check_amt   = float(f.get("Check Payment Amount") or 0)
+            check_full   = total > 0 and _check_amt >= total - 0.005
             is_paid      = bool(f.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" \
-                           or bool(f.get("Check #"))
+                           or check_full
             check_number = f.get("Check #", "") or ""
             check_date   = f.get("Check Date", "") or ""
             check_amt_raw = f.get("Check Payment Amount")
@@ -13656,6 +13661,7 @@ def admin_mark_invoice_paid_check(record_id):
         )
     try:
         write_token = RETURNS_WRITE_TOKEN
+        read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
         r = req_lib.patch(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
             headers={**at_headers(write_token), "Content-Type": "application/json"},
@@ -13672,7 +13678,88 @@ def admin_mark_invoice_paid_check(record_id):
                 status=500, headers=c, mimetype="application/json",
             )
         _INVOICES_CACHE.clear()
-        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+
+        # ── Stripe reconciliation ──────────────────────────────────────────────
+        # Full check → settle the open Stripe invoices out-of-band so the links
+        # show $0 due. Partial check → void them and reissue a fresh CC/ACH pair
+        # for the remainder. The check recording above must never fail on a
+        # Stripe hiccup, so everything below only affects the response note.
+        stripe_note = ""
+        try:
+            rec_r = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                headers=at_headers(read_token), timeout=15,
+            )
+            fields = rec_r.json().get("fields", {}) if rec_r.ok else {}
+            li_ids = fields.get("MO Line Items", [])
+            total  = 0.0
+            if li_ids:
+                or_formula = "OR(" + ",".join(f"RECORD_ID()='{lid}'" for lid in li_ids) + ")"
+                li_recs = at_get_all(MO_LINE_ITEMS_TABLE_ID, read_token,
+                                     fields=["Confirmed Line Item Total"], formula=or_formula)
+                total = round(sum(float(lr.get("fields", {}).get("Confirmed Line Item Total") or 0)
+                                  for lr in li_recs), 2)
+            cc_id      = fields.get("Stripe Invoice ID (CC)", "")
+            ach_id     = fields.get("Stripe Invoice ID (ACH)", "")
+            cc_status  = (fields.get("Stripe Invoice Status (CC)") or "").lower()
+            ach_status = (fields.get("Stripe Invoice Status (ACH)") or "").lower()
+            full = total > 0 and float(check_amount) >= total - 0.005
+
+            if not (cc_id or ach_id):
+                stripe_note = "No Stripe invoices on record — nothing to update."
+            elif total <= 0:
+                stripe_note = "Could not compute the invoice total — Stripe links left unchanged."
+            elif full:
+                status_patch = {}
+                for sid, label, cur in ((cc_id, "CC", cc_status), (ach_id, "ACH", ach_status)):
+                    if not sid or cur in ("paid", "void"):
+                        continue
+                    pr = req_lib.post(f"https://api.stripe.com/v1/invoices/{sid}/pay",
+                                      data={"paid_out_of_band": "true"},
+                                      auth=(STRIPE_SECRET_KEY, ""), timeout=15)
+                    if pr.ok:
+                        status_patch[f"Stripe Invoice Status ({label})"] = "paid"
+                    else:
+                        print(f"[mark-paid] Stripe pay-out-of-band failed ({label} {sid}): {pr.status_code} {pr.text[:200]}")
+                if status_patch:
+                    req_lib.patch(
+                        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                        headers={**at_headers(write_token), "Content-Type": "application/json"},
+                        json={"fields": status_patch}, timeout=15,
+                    )
+                    stripe_note = "Full payment — Stripe links now show $0 due."
+                else:
+                    stripe_note = "Full payment — Stripe invoices were already settled or voided."
+            else:
+                remainder = round(total - float(check_amount), 2)
+                for sid in (cc_id, ach_id):
+                    if not sid:
+                        continue
+                    vr = req_lib.post(f"https://api.stripe.com/v1/invoices/{sid}/void",
+                                      data={}, auth=(STRIPE_SECRET_KEY, ""), timeout=15)
+                    if not vr.ok:
+                        print(f"[mark-paid] Stripe void failed ({sid}): {vr.status_code} {vr.text[:200]}")
+
+                def _first(lst):
+                    return lst[0] if isinstance(lst, list) and lst else (lst or "")
+                bill_email = _first(fields.get("Bill-To Contact Email (from Customer)", []))
+                bill_name  = _first(fields.get("Bill-To Contact Name (from Customer)", []))
+                org_name   = _first(fields.get("Bill-To Org Name (from Customer)", []))
+                doc_id     = fields.get("Document ID", "")
+                if bill_email:
+                    _create_stripe_invoices_for_record(
+                        write_token, record_id, bill_email, bill_name, org_name,
+                        [{"name": f"{doc_id} balance due — payment {check_number} of ${float(check_amount):.2f} received {check_date}",
+                          "qty": 1, "unit_price": remainder, "line_total": remainder}])
+                    stripe_note = f"Partial payment — Stripe links reissued for the ${remainder:.2f} remainder."
+                else:
+                    stripe_note = "Partial payment — old Stripe links voided, but no billing email on record to reissue new ones."
+            _INVOICES_CACHE.clear()
+        except Exception as se:
+            print(f"[mark-paid] Stripe reconciliation error: {se}")
+            stripe_note = f"Check saved, but the Stripe update failed: {se}"
+
+        return Response(json.dumps({"ok": True, "note": stripe_note}), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
@@ -13703,8 +13790,7 @@ def admin_invoice_line_items(record_id):
 
         cc_status  = (fields.get("Stripe Invoice Status (CC)", "") or "").lower()
         ach_status = (fields.get("Stripe Invoice Status (ACH)", "") or "").lower()
-        is_paid    = bool(fields.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" \
-                     or bool(fields.get("Check #"))
+        is_paid    = bool(fields.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid"
 
         line_items = []
         for li_id in fields.get("MO Line Items", []):
@@ -13722,6 +13808,13 @@ def admin_invoice_line_items(record_id):
             line_items.append({"lineItemId": li_id, "name": pname, "qty": qty,
                                "unitPrice": unit_price,
                                "lineTotal": float(lf.get("Confirmed Line Item Total") or (qty * unit_price))})
+
+        # A check payment only counts as paid when it covers the full total
+        if not is_paid:
+            _total = round(sum(li["lineTotal"] for li in line_items), 2)
+            _chk   = float(fields.get("Check Payment Amount") or 0)
+            if _total > 0 and _chk >= _total - 0.005:
+                is_paid = True
 
         return Response(json.dumps({
             "invNumber": fields.get("Document ID", ""),

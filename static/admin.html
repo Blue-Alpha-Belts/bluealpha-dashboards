@@ -559,12 +559,13 @@
   <div class="modal-overlay" id="markPaidModal">
     <div class="modal">
       <h3>Mark Paid by Check</h3>
-      <p>Enter the check details to record this invoice as paid.</p>
-      <label>Check #</label>
-      <input type="text" id="checkNumber" placeholder="e.g. 1042" autocomplete="off">
-      <label style="margin-top:10px;">Check Date</label>
+      <div id="markPaidContext" style="background:#eef4ff;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:0.92rem;"></div>
+      <p>Enter the payment details. A full amount settles the Stripe links ($0 due); a partial amount voids them and reissues links for the remainder.</p>
+      <label>Check / Reference #</label>
+      <input type="text" id="checkNumber" placeholder="e.g. 1042, or ACH date" autocomplete="off">
+      <label style="margin-top:10px;">Payment Date</label>
       <input type="date" id="checkDate" style="width:100%;box-sizing:border-box;">
-      <label style="margin-top:10px;">Check Amount ($)</label>
+      <label style="margin-top:10px;">Amount Received ($)</label>
       <input type="number" id="checkAmount" placeholder="0.00" step="0.01" min="0" style="width:100%;box-sizing:border-box;">
       <div id="markPaidMsg"></div>
       <div class="modal-btns" style="margin-top:14px;">
@@ -1773,7 +1774,7 @@
         const _btn = 'style="padding:5px 10px;font-size:0.8rem;white-space:nowrap;width:100%;box-sizing:border-box;"';
         const paymentCell = inv.is_paid
           ? (inv.check_number ? `<small style="color:var(--muted);">✓ Check #${esc(inv.check_number)}</small>` : '<small style="color:var(--muted);">—</small>')
-          : `<button class="btn btn-outline btn-sm" ${_btn} onclick="openMarkPaidModal('${esc(inv.record_id)}')">Mark Paid</button>`;
+          : `<button class="btn btn-outline btn-sm" ${_btn} onclick="openMarkPaidModal('${esc(inv.record_id)}','${esc(inv.inv_number)}',${Number(inv.total) || 0})">Mark Paid</button>`;
 
         const resendCell = `<button class="btn btn-outline btn-sm" ${_btn} onclick="openResendModal('${esc(inv.record_id)}','${esc(inv.inv_number)}','${esc(inv.billing_email||'')}')">📧 Resend</button>`;
 
@@ -1840,11 +1841,13 @@
       if (master) master.checked = all.length > 0 && checked.length === all.length;
     }
 
-    function openMarkPaidModal(recordId) {
+    function openMarkPaidModal(recordId, invNumber, invTotal) {
       markPaidRecordId = recordId;
+      document.getElementById('markPaidContext').innerHTML =
+        `<strong>${esc(invNumber || '')}</strong> — Total: <strong>$${(Number(invTotal) || 0).toFixed(2)}</strong>`;
       document.getElementById('checkNumber').value = '';
       document.getElementById('checkDate').value = '';
-      document.getElementById('checkAmount').value = '';
+      document.getElementById('checkAmount').value = invTotal ? Number(invTotal).toFixed(2) : '';
       document.getElementById('markPaidMsg').innerHTML = '';
       const btn = document.getElementById('markPaidSubmitBtn');
       btn.disabled = false;
@@ -2293,6 +2296,7 @@
           closeMarkPaidModal();
           invoicesLoaded = false;
           loadInvoices();
+          if (data.note) alert('Payment recorded. ' + data.note);
         } else {
           msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${data.error || 'Failed to save.'}</div>`;
           btn.disabled = false;
