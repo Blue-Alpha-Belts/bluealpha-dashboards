@@ -6825,6 +6825,16 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
     _qnum_ref = q_number
 
     class QuotePDF(FPDF):
+        # Sanitize every rendered string at one chokepoint — core Helvetica is
+        # latin-1 only, and free-typed text (org names, notes, product variations)
+        # with smart quotes/em dashes would otherwise crash pdf.output().
+        # Param names match fpdf2 2.7.9 signatures ('text', not 'txt').
+        def cell(self, w=None, h=None, text="", *args, **kwargs):
+            return super().cell(w, h, _pdf_safe(text), *args, **kwargs)
+        def multi_cell(self, w, h=None, text="", *args, **kwargs):
+            return super().multi_cell(w, h, _pdf_safe(text), *args, **kwargs)
+        def write(self, h=None, text="", *args, **kwargs):
+            return super().write(h, _pdf_safe(text), *args, **kwargs)
         def header(self):
             if self.page_no() <= 1:
                 return
@@ -7268,9 +7278,15 @@ def order_pdf(record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=cors(), mimetype="application/json")
 
 
+def _pdf_safe(s):
+    """Coerce text to latin-1 for fpdf2 core fonts — Helvetica can't encode
+    smart quotes/em dashes from free-typed input; unsupported chars become '?'."""
+    return str(s if s is not None else "").encode("latin-1", "replace").decode("latin-1")
+
+
 def _pdf_fit_line(pdf, text, max_w):
     """Truncate text with '...' so it fits within max_w mm at the current font."""
-    text = str(text or "")
+    text = _pdf_safe(text)
     if pdf.get_string_width(text) <= max_w:
         return text
     while text and pdf.get_string_width(text + "...") > max_w:
@@ -7340,6 +7356,13 @@ def _build_invoice_pdf_bytes(inv):
     _inv_ref = inv_number
 
     class InvPDF(FPDF):
+        # Same latin-1 chokepoint sanitization as QuotePDF (see there).
+        def cell(self, w=None, h=None, text="", *args, **kwargs):
+            return super().cell(w, h, _pdf_safe(text), *args, **kwargs)
+        def multi_cell(self, w, h=None, text="", *args, **kwargs):
+            return super().multi_cell(w, h, _pdf_safe(text), *args, **kwargs)
+        def write(self, h=None, text="", *args, **kwargs):
+            return super().write(h, _pdf_safe(text), *args, **kwargs)
         def header(self):
             if self.page_no() <= 1:
                 return
