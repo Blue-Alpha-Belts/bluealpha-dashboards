@@ -379,7 +379,7 @@
       <div class="tab-panel" id="tab-invoices">
         <div id="fulfillmentDrafts" style="display:none;margin-bottom:18px;"></div>
         <div style="margin-bottom:10px;">
-          <input type="text" id="invoiceSearch" placeholder="Search customer or invoice #…" oninput="applyInvoiceFilters()" style="max-width:320px;margin-bottom:0;">
+          <input type="text" id="invoiceSearch" placeholder="Search customer, invoice #, or total…" oninput="applyInvoiceFilters()" style="max-width:320px;margin-bottom:0;">
         </div>
         <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           <button class="filter-btn active" onclick="filterInvoices(this,'all')">All</button>
@@ -1728,11 +1728,16 @@
         !i.is_paid && i.due_date && i.due_date < today
       );
 
-      // Text search: customer name or invoice #
-      if (q) filtered = filtered.filter(i =>
-        (i.customer_name || '').toLowerCase().includes(q) ||
-        (i.inv_number    || '').toLowerCase().includes(q)
-      );
+      // Text search: customer name, invoice #, or total amount ($ and commas ignored)
+      if (q) {
+        const qNum = q.replace(/[$,]/g, '');
+        const numOk = /^\d[\d.]*$/.test(qNum);
+        filtered = filtered.filter(i =>
+          (i.customer_name || '').toLowerCase().includes(q) ||
+          (i.inv_number    || '').toLowerCase().includes(q) ||
+          (numOk && i.total != null && Number(i.total).toFixed(2).includes(qNum))
+        );
+      }
 
       renderInvoices(filtered);
     }

@@ -421,7 +421,7 @@
             <span>From</span><input class="filter-date" type="date" id="invoicesDateFrom" onchange="filterInvoicesDate()">
             <span>To</span><input class="filter-date" type="date" id="invoicesDateTo" onchange="filterInvoicesDate()">
           </div>
-          <input class="filter-search" id="invoicesSearch" type="search" placeholder="Search invoice #, PO #…" oninput="searchInvoices(this.value)">
+          <input class="filter-search" id="invoicesSearch" type="search" placeholder="Search invoice #, PO #, total…" oninput="searchInvoices(this.value)">
         </div>
         <div id="invoicesList"><div class="loading">Loading…</div></div>
       </div>
@@ -991,7 +991,11 @@
         :                                invoices.filter(i => !i.is_paid);
       const _iq = _invoicesSearch.toLowerCase().trim();
       const _isearched = _iq
-        ? _statusFiltered.filter(i => [i.inv_number, i.so_number, i.po_number].some(v => (v||'').toLowerCase().includes(_iq)))
+        ? _statusFiltered.filter(i => {
+            if ([i.inv_number, i.so_number, i.po_number].some(v => (v||'').toLowerCase().includes(_iq))) return true;
+            const _qNum = _iq.replace(/[$,]/g, '');   // also match on total ($ and commas ignored)
+            return /^\d[\d.]*$/.test(_qNum) && i.total != null && Number(i.total).toFixed(2).includes(_qNum);
+          })
         : _statusFiltered;
       const _idf = _invoicesDateFrom ? new Date(_invoicesDateFrom + 'T00:00:00') : null;
       const _idt = _invoicesDateTo   ? new Date(_invoicesDateTo   + 'T23:59:59') : null;
