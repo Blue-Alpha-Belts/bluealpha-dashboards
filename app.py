@@ -12301,7 +12301,8 @@ def portal_admin_convert_to_invoice(user, record_id):
         # Copy snapshot fields so invoice shows correct billing/shipping regardless of
         # future customer record changes
         for _sf in ("Snapshot Org", "Snapshot Contact", "Snapshot Email",
-                    "Snapshot Phone", "Snapshot Addr 1", "Snapshot Addr 2"):
+                    "Snapshot Phone", "Snapshot Addr 1", "Snapshot Addr 2",
+                    "Officer Name", "Badge Number"):
             if so_fields.get(_sf):
                 inv_fields[_sf] = so_fields[_sf]
         inv_body = {"fields": inv_fields}
@@ -12901,7 +12902,8 @@ def admin_convert_to_invoice(record_id):
             # "Invoice Status" = "Approved" is what drives MO Is Approved for invoice records.
         }
         for _sf in ("Snapshot Org", "Snapshot Contact", "Snapshot Email",
-                    "Snapshot Phone", "Snapshot Addr 1", "Snapshot Addr 2"):
+                    "Snapshot Phone", "Snapshot Addr 1", "Snapshot Addr 2",
+                    "Officer Name", "Badge Number"):
             if so_fields.get(_sf):
                 inv_fields[_sf] = so_fields[_sf]
         inv_body = {"fields": inv_fields}
