@@ -1777,6 +1777,7 @@ async function saveChanges() {
     const data = await r.json();
     if (!r.ok || !data.success) throw new Error(data.error || 'Save failed');
     savedItems = editItems.map(i => ({ ...i }));
+    quoteData.lineItems = editItems.map(i => ({ ...i }));
     savedNotes = notesVal;
     markClean();  // disables btnSave
     btn.textContent = 'Save Changes';
@@ -1838,20 +1839,20 @@ async function confirmOrder() {
   btn.innerHTML = '<span class="spinner-sm"></span>Placing Order\u2026';
   const poNumber = (document.getElementById('modalPoNumber').value || '').trim();
 
-  // Read PDF attachment if provided
-  let pdfBase64 = null, pdfFilename = null;
-  const pdfFile = document.getElementById('modalPdfFile').files[0];
-  if (pdfFile) {
-    pdfBase64  = await new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload  = () => res(r.result.split(',')[1]);
-      r.onerror = rej;
-      r.readAsDataURL(pdfFile);
-    });
-    pdfFilename = pdfFile.name;
-  }
-
   try {
+    // Read PDF attachment if provided
+    let pdfBase64 = null, pdfFilename = null;
+    const pdfFile = document.getElementById('modalPdfFile').files[0];
+    if (pdfFile) {
+      pdfBase64  = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload  = () => res(r.result.split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(pdfFile);
+      });
+      pdfFilename = pdfFile.name;
+    }
+
     const payload = {};
     if (poNumber)  payload.poNumber   = poNumber;
     if (pdfBase64) { payload.pdfBase64 = pdfBase64; payload.pdfFilename = pdfFilename; }
@@ -1886,7 +1887,9 @@ async function confirmOrder() {
       }
     }, 800);
   } catch(e) {
-    closeModal();
+    // Keep the modal open so the typed PO number isn't lost; restore the button
+    btn.disabled = false;
+    btn.innerHTML = 'Place Order';
     alert('Error: ' + e.message);
   }
 }

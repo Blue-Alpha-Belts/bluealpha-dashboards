@@ -752,12 +752,12 @@
     }
 
     // ── Admin applications tables ─────────────────────────────────────────────
-    function renderTable(apps, container, showActions) {
+    function renderTable(apps, container, showActions, showPortalCol) {
       if (!apps.length) {
         document.getElementById(container).innerHTML = '<div class="empty-state">No applications found.</div>';
         return;
       }
-      const isApproved = !showActions; // approved tab has no approve/deny actions
+      const isApproved = !!showPortalCol; // only the Approved tab shows the Portal Account column / Send Invite
       let html = '<table><thead><tr><th>Company</th><th>Applied</th><th>Status</th>' +
         (isApproved ? '<th>Portal Account</th>' : '') +
         '<th></th></tr></thead><tbody>';
@@ -872,9 +872,9 @@
       }
     }
 
-    function renderPending()  { renderTable(allApps.filter(a => a.status === 'Pending'),  'pendingContent',  true); }
-    function renderApproved() { renderTable(allApps.filter(a => a.status === 'Approved'), 'approvedContent', false); }
-    function renderDenied()   { renderTable(allApps.filter(a => a.status === 'Denied'),   'deniedContent',   false); }
+    function renderPending()  { renderTable(allApps.filter(a => a.status === 'Pending'),  'pendingContent',  true,  false); }
+    function renderApproved() { renderTable(allApps.filter(a => a.status === 'Approved'), 'approvedContent', false, true); }
+    function renderDenied()   { renderTable(allApps.filter(a => a.status === 'Denied'),   'deniedContent',   false, false); }
 
     // Registered = self-registered portal accounts (quote-only) that haven't applied for ordering access
     function renderRegistered() {
@@ -1445,6 +1445,9 @@
       if (!tn) return '#';
       const t = tn.replace(/\s/g, '');
       if (/^1Z/i.test(t)) return `https://www.ups.com/track?tracknum=${t}`;
+      if (/^\d{22}$/.test(t) || /^9[2-4]\d{20}$/.test(t) || /^9[0-9]{15,21}$/.test(t))
+        return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${t}`;
+      if (/^[0-9]{12,15}$/.test(t)) return `https://www.fedex.com/fedextrack/?tracknumbers=${t}`;
       return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${t}`;
     }
 

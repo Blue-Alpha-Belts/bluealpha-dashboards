@@ -1240,6 +1240,7 @@
         renderAccountInfoView(_accountInfo);
         cancelEditAccount();
         msg.textContent = '';
+        btn.disabled = false; btn.textContent = 'Save Changes';
       } catch(e) {
         msg.textContent = 'Error: ' + (e.message || 'Could not save.');
         msg.style.color = 'var(--red)';

@@ -560,9 +560,11 @@ function render(inv) {
     if (inv.shipDate) shipHTML += metaKV('Ship Date', fmtDate(inv.shipDate));
     if (inv.tracking) {
       const tn = inv.tracking.trim();
-      const url = /^1Z/i.test(tn.replace(/\s/g, ''))
-        ? `https://www.ups.com/track?tracknum=${encodeURIComponent(tn)}`
-        : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(tn)}`;
+      const t = tn.replace(/\s/g, '');
+      let url;
+      if (/^1Z/i.test(t)) url = `https://www.ups.com/track?tracknum=${encodeURIComponent(t)}`;
+      else if (/^[0-9]{12,15}$/.test(t)) url = `https://www.fedex.com/fedextrack/?tracknumbers=${encodeURIComponent(t)}`;
+      else url = `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(t)}`;
       shipHTML += metaKV('Tracking', `<a href="${url}" target="_blank" rel="noopener" style="color:var(--navy);">${escHtml(tn)}</a>`);
     }
     shipHTML += '</div>';
