@@ -7277,6 +7277,18 @@ def _pdf_fit_line(pdf, text, max_w):
     return text.rstrip() + "..."
 
 
+def _ship_contact_line(fields):
+    """Second Ship To line: officer name + badge # when the order has one (department
+    orders where Main Contact Name (from Customer) is just the department name again —
+    e.g. Newnan PD), else fall back to the customer's Main Contact Name."""
+    officer = str(fields.get("Officer Name") or "").strip()
+    if officer:
+        badge = str(fields.get("Badge Number") or fields.get("Badge #") or "").strip()
+        return f"{officer} — Badge {badge}" if badge else officer
+    main_contact = fields.get("Main Contact Name (from Customer)", [])
+    return main_contact[0] if isinstance(main_contact, list) and main_contact else (main_contact or "")
+
+
 def _build_invoice_pdf_bytes(inv):
     """Generate PDF bytes for an invoice matching the quote/SO PDF style."""
     import os, tempfile
@@ -7745,7 +7757,7 @@ def invoice_pdf(record_id):
             "addr1":        _first(fields.get("Bill-To Address (Line 1) (from Customer)", [])),
             "addr2":        _first(fields.get("Bill-To Address (Line 2) (from Customer)", [])),
             "shipOrg":      _first(fields.get("Organization Name (from Customer)", [])),
-            "shipName":     _first(fields.get("Main Contact Name (from Customer)", [])),
+            "shipName":     _ship_contact_line(fields),
             "shipAddr1":    _first(fields.get("Customer Address (Line 1) (from Customer)", [])),
             "shipAddr2":    _first(fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz,
             "tracking":     tracking,
@@ -12369,7 +12381,7 @@ def portal_admin_convert_to_invoice(user, record_id):
                     "addr1":        _fso(so_fields.get("Bill-To Address (Line 1) (from Customer)", [])),
                     "addr2":        _fso(so_fields.get("Bill-To Address (Line 2) (from Customer)", [])),
                     "shipOrg":      _fso(so_fields.get("Organization Name (from Customer)", [])),
-                    "shipName":     _fso(so_fields.get("Main Contact Name (from Customer)", [])),
+                    "shipName":     _ship_contact_line(so_fields),
                     "shipAddr1":    _fso(so_fields.get("Customer Address (Line 1) (from Customer)", [])),
                     "shipAddr2":    _fso(so_fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz,
                     "tracking":     tracking,
@@ -12544,7 +12556,7 @@ def invoice_detail(record_id):
         ship_zip    = _first(fields.get("Customer Zip Code (from Customer)", []))
         ship_csz    = ", ".join(filter(None, [ship_city, f"{ship_state} {ship_zip}".strip()]))
         ship_org    = _first(fields.get("Organization Name (from Customer)", []))
-        ship_name   = _first(fields.get("Main Contact Name (from Customer)", []))
+        ship_name   = _ship_contact_line(fields)
         ship_addr1  = _first(fields.get("Customer Address (Line 1) (from Customer)", []))
         ship_addr2  = _first(fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz
 
@@ -12977,7 +12989,7 @@ def admin_convert_to_invoice(record_id):
                     "addr1":        _first(so_fields.get("Bill-To Address (Line 1) (from Customer)", [])),
                     "addr2":        _first(so_fields.get("Bill-To Address (Line 2) (from Customer)", [])),
                     "shipOrg":      _first(so_fields.get("Organization Name (from Customer)", [])),
-                    "shipName":     _first(so_fields.get("Main Contact Name (from Customer)", [])),
+                    "shipName":     _ship_contact_line(so_fields),
                     "shipAddr1":    _first(so_fields.get("Customer Address (Line 1) (from Customer)", [])),
                     "shipAddr2":    _first(so_fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz,
                     "tracking":     tracking,
@@ -13989,7 +14001,7 @@ def admin_resend_invoice(record_id):
             "addr1":        _first(fields.get("Bill-To Address (Line 1) (from Customer)", [])),
             "addr2":        _first(fields.get("Bill-To Address (Line 2) (from Customer)", [])),
             "shipOrg":      _first(fields.get("Organization Name (from Customer)", [])),
-            "shipName":     _first(fields.get("Main Contact Name (from Customer)", [])),
+            "shipName":     _ship_contact_line(fields),
             "shipAddr1":    _first(fields.get("Customer Address (Line 1) (from Customer)", [])),
             "shipAddr2":    _first(fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz,
             "tracking":     tracking,
