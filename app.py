@@ -12473,7 +12473,7 @@ def portal_invoices(user):
             fields=["Document ID", "Order ID", "Date", "MO Line Items",
                     "Sales Order Status", "Go-to PDF", "Customer",
                     "Stripe Invoice Status (CC)", "Stripe Invoice Status (ACH)",
-                    "Invoice Paid", "Hidden from Customer", "Tracking", "Tracking #", "Purchase Order #"],
+                    "Invoice Paid", "Check #", "Hidden from Customer", "Tracking", "Tracking #", "Purchase Order #"],
             formula='{Order Type}="Invoice"',
         )
         # Filter to this customer, excluding hidden records
@@ -12518,7 +12518,8 @@ def portal_invoices(user):
             go_to_pdf_url   = go_to_pdf_field.get("url", "") if isinstance(go_to_pdf_field, dict) else ""
             cc_status  = f.get("Stripe Invoice Status (CC)", "")
             ach_status = f.get("Stripe Invoice Status (ACH)", "")
-            is_paid    = bool(f.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid"
+            is_paid    = bool(f.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" \
+                         or bool(f.get("Check #"))
             invoices.append({
                 "record_id":  rec["id"],
                 "inv_number": inv_number,
@@ -13495,7 +13496,8 @@ def admin_invoices():
             total        = round(sum(li_total_map.get(lid, 0) for lid in li_ids), 2)
             cc_status    = f.get("Stripe Invoice Status (CC)", "")
             ach_status   = f.get("Stripe Invoice Status (ACH)", "")
-            is_paid      = bool(f.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid"
+            is_paid      = bool(f.get("Invoice Paid")) or cc_status == "paid" or ach_status == "paid" \
+                           or bool(f.get("Check #"))
             check_number = f.get("Check #", "") or ""
             check_date   = f.get("Check Date", "") or ""
             check_amt_raw = f.get("Check Payment Amount")
