@@ -1776,7 +1776,7 @@
         const paymentCell = inv.is_paid
           ? (inv.check_number
               ? `<div><small style="color:var(--muted);">✓ Check #${esc(inv.check_number)}</small><br>
-                 <a href="#" style="font-size:0.75rem;color:#1a6fc4;" onclick="openMarkPaidModal(${_mpArgs});return false;">edit payment</a></div>`
+                 <small style="color:var(--muted);">${fmt(inv.check_date)}</small></div>`
               : '<small style="color:var(--muted);">—</small>')
           : `<button class="btn btn-outline btn-sm" ${_btn} onclick="openMarkPaidModal(${_mpArgs})">Mark Paid</button>`;
 
