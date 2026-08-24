@@ -624,6 +624,8 @@
     // ── Upgrade mode: logged-in quote-only account applying for ordering access ──
     window.isUpgradeApplication = false;
     (async () => {
+      const form      = document.getElementById('applyForm');
+      const alertArea = document.getElementById('alertArea');
       let me = null;
       try {
         const r = await fetch('/api/portal/me', { credentials: 'same-origin' });
