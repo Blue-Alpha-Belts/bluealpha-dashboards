@@ -10155,7 +10155,7 @@ def admin_add_user():
     pw_hash = _hash_password(password)
     fields = {
         "Portal Username":    username,
-        "Portal Hash":      pw_hash,
+        "Password Hash":      pw_hash,
         "Quote Portal Admin": role == "admin",
         "Quote Portal CS":    role == "cs",
     }
@@ -12266,6 +12266,9 @@ def portal_admin_convert_to_invoice(user, record_id):
         if selected_items is not None:
             li_ids = [lid for lid in li_ids if lid in selected_items]
 
+        def _first(lst):
+            return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
         email_line_items = []
         for li_id in li_ids:
             li_r = req_lib.get(
@@ -14110,7 +14113,7 @@ def admin_send_overdue_notice(record_id):
                 for old_id in [old_cc_id, old_ach_id]:
                     if old_id:
                         req_lib.post(f"https://api.stripe.com/v1/invoices/{old_id}/void",
-                                     auth=(STRIPE_KEY, ""), data={}, timeout=15)
+                                     auth=(STRIPE_SECRET_KEY, ""), data={}, timeout=15)
                 # Create fresh ones (new customer, fresh due date)
                 _create_stripe_invoices_for_record(write_token, record_id, to_email, to_name, org_name, line_items)
                 # Re-fetch updated URLs from Airtable
