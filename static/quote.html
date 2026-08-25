@@ -1495,7 +1495,7 @@ function populateAddons(parentId, colorId, sizeId, featureVarId = '', preferredA
   // If "None" is the only add-on (and no base SKU), hide the row — nothing to choose
   if (!hasBase && addons.length === 1 && noneAddonEntry) {
     addonRow.classList.add('hidden');
-    addonSel.innerHTML = `<option value="${noneAddonEntry[0]}">None</option>`;
+    addonSel.innerHTML = `<option value="${escHtml(noneAddonEntry[0])}">None</option>`;
     addonSel.value = noneAddonEntry[0];
     _updatePrice(parentId);
     return;
@@ -1957,11 +1957,12 @@ function showError(msg) {
 }
 
 function escHtml(str) {
-  return String(str)
+  return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 </script>
 </body>

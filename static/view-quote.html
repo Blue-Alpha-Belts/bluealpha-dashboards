@@ -1633,7 +1633,7 @@ function vOnFvar(forcedFvarId) {
   } else if (addons.length === 1) {
     // Only one add-on, no base — auto-select silently (no row needed)
     const addonSel = document.getElementById('vAddon');
-    addonSel.innerHTML = `<option value="${addons[0][0]}">${addons[0][1]}</option>`;
+    addonSel.innerHTML = `<option value="${escHtml(addons[0][0])}">${escHtml(addons[0][1])}</option>`;
     addonSel.value = addons[0][0];
   }
   document.getElementById('vQtyAddRow').classList.remove('hidden');
@@ -1900,11 +1900,12 @@ function daysBetween(d1, d2) {
 }
 
 function escHtml(str) {
-  return String(str)
+  return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 </script>
 </body>

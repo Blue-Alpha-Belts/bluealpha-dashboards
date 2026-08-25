@@ -795,7 +795,7 @@
     function fmt(dateStr) {
       if (!dateStr) return '—';
       try { return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }); }
-      catch { return dateStr; }
+      catch { return escHtml(dateStr); }
     }
 
     // 10 digits only — strips non-digits, caps at 10, formats as (XXX) XXX-XXXX
@@ -845,12 +845,12 @@
                       : q.is_expired  ? '<span class="badge badge-expired">Expired</span>'
                       :                 '<span class="badge badge-pending">Open</span>';
           return `<tr>
-            <td><strong>${q.quote_number || '—'}</strong></td>
+            <td><strong>${escHtml(q.quote_number) || '—'}</strong></td>
             <td>${fmt(q.date)}</td>
             <td>${fmt(q.expiry_date)}</td>
             <td>${money(q.total)}</td>
             <td>${badge}</td>
-            <td><button class="btn-sm" onclick="openViewQuote('${q.record_id}')">View →</button></td>
+            <td><button class="btn-sm" onclick="openViewQuote('${escHtml(q.record_id)}')">View →</button></td>
           </tr>`;
         }).join('')) +
         '</tbody></table>';
@@ -922,22 +922,22 @@
           const badge = shipped ? '<span class="badge badge-shipped">Shipped</span>'
                                 : '<span class="badge badge-active">Confirmed</span>';
           return `<tr>
-            <td><strong>${o.so_number || '—'}</strong></td>
-            <td>${o.po_number || '<span style="color:var(--text-muted)">—</span>'}</td>
+            <td><strong>${escHtml(o.so_number) || '—'}</strong></td>
+            <td>${escHtml(o.po_number) || '<span style="color:var(--text-muted)">—</span>'}</td>
             <td>${fmt(o.date)}</td>
             <td>${money(o.total)}</td>
             <td>${(() => {
               const seen = new Set(); const parts = [];
               const add = (trk, title) => {
                 if (!trk || seen.has(trk)) return; seen.add(trk);
-                parts.push(`<a class="tracking-info" href="${trackingUrl(trk)}" target="_blank" rel="noopener"${title ? ` title="${title}"` : ''}>${trk}</a>`);
+                parts.push(`<a class="tracking-info" href="${trackingUrl(trk)}" target="_blank" rel="noopener"${title ? ` title="${escHtml(title)}"` : ''}>${escHtml(trk)}</a>`);
               };
               add(o.tracking);
               (o.splitShipments || []).forEach(s => add(s.tracking, s.splitNum));
               return parts.length ? parts.join('<br>') : '<span style="color:var(--text-muted)">—</span>';
             })()}</td>
             <td>${badge}</td>
-            <td><button class="btn-sm" onclick="openViewOrder('${o.record_id}')">View →</button></td>
+            <td><button class="btn-sm" onclick="openViewOrder('${escHtml(o.record_id)}')">View →</button></td>
           </tr>`;
         }).join('')) +
         '</tbody></table>';
@@ -1017,13 +1017,13 @@
             ? '<span class="badge badge-accepted">Paid</span>'
             : '<span class="badge badge-pending">Unpaid</span>';
           return `<tr>
-            <td><strong>${inv.inv_number || '—'}</strong></td>
-            <td>${inv.po_number || '<span style="color:var(--text-muted)">—</span>'}</td>
+            <td><strong>${escHtml(inv.inv_number) || '—'}</strong></td>
+            <td>${escHtml(inv.po_number) || '<span style="color:var(--text-muted)">—</span>'}</td>
             <td>${fmt(inv.date)}</td>
             <td>${money(inv.total)}</td>
-            <td>${inv.tracking ? `<a class="tracking-info" href="${trackingUrl(inv.tracking)}" target="_blank" rel="noopener">${inv.tracking}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+            <td>${inv.tracking ? `<a class="tracking-info" href="${trackingUrl(inv.tracking)}" target="_blank" rel="noopener">${escHtml(inv.tracking)}</a>` : '<span style="color:var(--text-muted)">—</span>'}</td>
             <td>${badge}</td>
-            <td><button class="btn-sm" onclick="openViewInvoice('${inv.record_id}')">View →</button></td>
+            <td><button class="btn-sm" onclick="openViewInvoice('${escHtml(inv.record_id)}')">View →</button></td>
           </tr>`;
         }).join('')) +
         '</tbody></table>';
@@ -1298,7 +1298,7 @@
     }
 
     function escHtml(str) {
-      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     }
 
     async function addTeamMember() {

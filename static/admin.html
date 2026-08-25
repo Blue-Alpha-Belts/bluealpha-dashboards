@@ -679,7 +679,7 @@
           if (appsResp.ok) loadApplications(await appsResp.json());
           if (currentRole === 'admin') loadUsers();
         } else {
-          errEl.innerHTML = `<div class="alert alert-error">${data.error || 'Invalid username or password.'}</div>`;
+          errEl.innerHTML = `<div class="alert alert-error">${esc(data.error) || 'Invalid username or password.'}</div>`;
         }
       } catch (e) {
         errEl.innerHTML = '<div class="alert alert-error">Network error.</div>';
@@ -1044,7 +1044,7 @@
           closeResetModal();
           alert('Password updated successfully.');
         } else {
-          document.getElementById('resetPwMsg').innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${data.error || 'Failed.'}</div>`;
+          document.getElementById('resetPwMsg').innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${esc(data.error) || 'Failed.'}</div>`;
         }
       } catch (e) {
         document.getElementById('resetPwMsg').innerHTML = '<div class="alert alert-error" style="margin-top:10px;">Network error.</div>';
@@ -1098,7 +1098,7 @@
           msg.innerHTML = `<div style="color:#1a7a3c;font-size:0.85rem;margin-bottom:10px;">✅ Catalog updated — ${d.parents} products, ${d.skus} SKUs.</div>`;
           _setCatalogTs(d.ts);
         } else {
-          msg.innerHTML = `<div style="color:var(--red);font-size:0.85rem;margin-bottom:10px;">❌ Refresh failed: ${d.error}</div>`;
+          msg.innerHTML = `<div style="color:var(--red);font-size:0.85rem;margin-bottom:10px;">❌ Refresh failed: ${esc(d.error)}</div>`;
         }
       } catch(e) {
         msg.innerHTML = `<div style="color:var(--red);font-size:0.85rem;margin-bottom:10px;">❌ Error: ${e.message}</div>`;
@@ -1133,7 +1133,7 @@
           document.getElementById('newRole').value = 'cs';
           loadUsers();
         } else {
-          msgEl.innerHTML = `<div class="alert alert-error">${data.error || 'Failed to add user.'}</div>`;
+          msgEl.innerHTML = `<div class="alert alert-error">${esc(data.error) || 'Failed to add user.'}</div>`;
         }
       } catch (e) {
         msgEl.innerHTML = '<div class="alert alert-error">Network error.</div>';
@@ -1163,7 +1163,7 @@
           document.getElementById('pwNew').value = '';
           document.getElementById('pwConfirm').value = '';
         } else {
-          msgEl.innerHTML = `<div class="alert alert-error">${data.error || 'Failed to update password.'}</div>`;
+          msgEl.innerHTML = `<div class="alert alert-error">${esc(data.error) || 'Failed to update password.'}</div>`;
         }
       } catch (e) {
         msgEl.innerHTML = '<div class="alert alert-error">Network error.</div>';
@@ -2101,7 +2101,7 @@
           btn.textContent = '✓ Sent';
           setTimeout(() => closeResendModal(), 1500);
         } else {
-          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${data.error || 'Failed to send.'}</div>`;
+          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${esc(data.error) || 'Failed to send.'}</div>`;
           btn.disabled = false;
           btn.textContent = 'Send';
         }
@@ -2243,7 +2243,7 @@
           btn.textContent = '✓ Sent';
           setTimeout(() => { closeOverdueModal(); invoicesLoaded = false; loadInvoices(); }, 1800);
         } else {
-          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${data.error || 'Failed to send.'}</div>`;
+          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${esc(data.error) || 'Failed to send.'}</div>`;
           btn.disabled = false;
           btn.textContent = 'Send Notice';
         }
@@ -2305,7 +2305,7 @@
           loadInvoices();
           if (data.note) alert('Payment recorded. ' + data.note);
         } else {
-          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${data.error || 'Failed to save.'}</div>`;
+          msgEl.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${esc(data.error) || 'Failed to save.'}</div>`;
           btn.disabled = false;
           btn.textContent = 'Save';
         }
