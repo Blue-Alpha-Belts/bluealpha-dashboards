@@ -913,6 +913,27 @@
     });
   });
 
+  // ── Session-expiry guard: any portal-API 401/403 re-checks the session and
+  //    bounces to login if it's gone. The /api/portal/me re-check avoids
+  //    redirect loops on genuine role-permission 403s. ──
+  let _authRedirecting = false;
+  const _rawFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts) => {
+    const resp = await _rawFetch(url, opts);
+    const guarded = typeof url === 'string' && url !== '/api/portal/me' &&
+      (url.startsWith('/api/portal/') || url.startsWith('/api/contract-catalog') || url.startsWith('/api/create-quote'));
+    if ((resp.status === 401 || resp.status === 403) && guarded && !_authRedirecting) {
+      try {
+        const me = await _rawFetch('/api/portal/me', { credentials: 'same-origin' });
+        if (!me.ok) {
+          _authRedirecting = true;
+          window.location = '/login?next=' + encodeURIComponent('/contract');
+        }
+      } catch (_) {}
+    }
+    return resp;
+  };
+
   // ── Init: load portalMe ───────────────────────────────────────────────────
   (async () => {
     try {

@@ -617,8 +617,18 @@
     window.fetch = async (url, opts) => {
       const resp = await _rawFetch(url, opts);
       const isAdminApi = typeof url === 'string' &&
-        url.startsWith('/api/admin/') && url !== '/api/admin/login';
+        ((url.startsWith('/api/admin/') && url !== '/api/admin/login') ||
+         url === '/api/portal/change-password');
       if (resp.status === 401 && isAdminApi && currentRole !== null) {
+        // change-password also 401s on a wrong current password — that's not an
+        // expired session, so let the form show the error instead of logging out.
+        if (url === '/api/portal/change-password') {
+          try {
+            const body = await resp.clone().json();
+            const msg = body.error || '';
+            if (msg !== 'Unauthorized' && !msg.includes('log in again')) return resp;
+          } catch (_) { return resp; }
+        }
         showSessionExpired();
         // Rewrite the error so handlers that alert/display it say something
         // accurate instead of a bare "Unauthorized".
