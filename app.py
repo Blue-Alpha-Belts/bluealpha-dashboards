@@ -6221,11 +6221,17 @@ def _reprice_items_or_error(items, read_token, pricing="standard"):
         auth_price = price_map.get(sid)
         if auth_price is None:
             return f"Item '{item.get('name', '?')}' is no longer available — please remove it and re-add it from the catalog."
-        price_key = "unit_price" if "unit_price" in item else "unitPrice"
-        client_price = float(item.get(price_key) or 0)
+        try:
+            client_price = float(item.get("unitPrice") or item.get("unit_price") or 0)
+        except (TypeError, ValueError):
+            client_price = 0.0
         if abs(client_price - auth_price) > 0.005:
             print(f"[reprice] SKU {sid}: client sent {client_price}, using catalog price {auth_price}")
-        item[price_key] = auth_price
+        # Overwrite EVERY price key the downstream writers might read, not just one.
+        # A request carrying both unitPrice and unit_price must not be able to leave
+        # a forged value in the key reprice didn't touch (the write sites read "unitPrice").
+        item["unitPrice"]  = auth_price
+        item["unit_price"] = auth_price
     return None
 
 
@@ -13791,6 +13797,11 @@ def admin_mark_invoice_paid_check(record_id):
             json.dumps({"error": "checkNumber, checkDate, and checkAmount are required"}),
             status=400, headers=c, mimetype="application/json",
         )
+    try:
+        check_amount = float(check_amount)
+    except (TypeError, ValueError):
+        return Response(json.dumps({"error": "checkAmount must be a number"}),
+                        status=400, headers=c, mimetype="application/json")
     try:
         write_token = RETURNS_WRITE_TOKEN
         read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
