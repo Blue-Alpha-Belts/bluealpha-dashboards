@@ -6158,6 +6158,51 @@ def quote_catalog():
                     headers={**cors()}, mimetype="application/json")
 
 
+def _reprice_items_or_error(items, read_token, pricing="standard"):
+    """Server-side re-pricing: replace every item's unit price with the SKU's current
+    price straight from Airtable. The browser's price is display-only — customers
+    must not be able to set their own prices. Mutates items in place; returns an
+    error string (for a 400) if any item has no SKU id or its SKU doesn't resolve
+    to a price, None on success.
+    pricing="standard"   → Sale Price; Contract-category SKUs may be $0.
+    pricing="department" → Newnan PD Price, falling back to Sale Price, else $0
+                           (mirrors /api/department/catalog)."""
+    sku_ids = []
+    for item in items:
+        sid = (item.get("skuRecordId") or item.get("recordId") or item.get("sku_record_id") or "").strip()
+        if not sid:
+            return f"Item '{item.get('name', '?')}' has no product reference — please rebuild it from the catalog."
+        sku_ids.append(sid)
+    price_map = {}
+    uniq = list({s for s in sku_ids})
+    for i in range(0, len(uniq), 50):
+        batch = uniq[i:i+50]
+        formula = "OR(" + ",".join(f"RECORD_ID()='{sid}'" for sid in batch) + ")"
+        recs = at_get_all(PRODUCT_SKUS_TABLE_ID, read_token,
+                          fields=["Sale Price", "Newnan PD Price", "Category"], formula=formula)
+        for r in recs:
+            f = r.get("fields", {})
+            if pricing == "department":
+                price_map[r["id"]] = float(f.get("Newnan PD Price") or f.get("Sale Price") or 0)
+            else:
+                p = f.get("Sale Price")
+                if p is not None:
+                    price_map[r["id"]] = float(p)
+                elif f.get("Category", "") == "Contract":
+                    # Contract SKUs may legitimately have no Sale Price (ordered at $0)
+                    price_map[r["id"]] = 0.0
+    for item, sid in zip(items, sku_ids):
+        auth_price = price_map.get(sid)
+        if auth_price is None:
+            return f"Item '{item.get('name', '?')}' is no longer available — please remove it and re-add it from the catalog."
+        price_key = "unit_price" if "unit_price" in item else "unitPrice"
+        client_price = float(item.get(price_key) or 0)
+        if abs(client_price - auth_price) > 0.005:
+            print(f"[reprice] SKU {sid}: client sent {client_price}, using catalog price {auth_price}")
+        item[price_key] = auth_price
+    return None
+
+
 @app.route("/api/create-quote", methods=["POST", "OPTIONS"])
 def create_quote():
     if request.method == "OPTIONS":
@@ -6211,6 +6256,14 @@ def create_quote():
 
     try:
         read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+
+        # Server-side re-pricing for customer sessions (staff keep submitted prices).
+        # Runs before any record is created so a bad item can't leave an orphan MO.
+        if not _is_staff:
+            _reprice_err = _reprice_items_or_error(items, read_token)
+            if _reprice_err:
+                return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
+
         # 1. Use provided customer ID if available, otherwise find/create by email
         # Build address lines (shared by both paths)
         _line1 = address1
@@ -6458,6 +6511,13 @@ def update_quote(record_id):
             return Response(json.dumps({"error": "Not a quote"}), status=400, headers=c, mimetype="application/json")
         if mo_fields.get("MO Is Approved"):
             return Response(json.dumps({"error": "Quote already accepted"}), status=400, headers=c, mimetype="application/json")
+
+        # Server-side re-pricing for customer sessions (staff keep submitted prices).
+        # Runs BEFORE the delete below so a bad item can't wipe the quote's line items.
+        if not _is_staff:
+            _reprice_err = _reprice_items_or_error(items, read_token)
+            if _reprice_err:
+                return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
 
         # Delete existing line items in batches of 10 (Airtable limit)
         existing_li_ids = mo_fields.get("MO Line Items", [])
@@ -8752,6 +8812,11 @@ def department_order_create(user):
 
     read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
     write_token = RETURNS_WRITE_TOKEN
+
+    # Server-side re-pricing (department price list) — browser prices are display-only
+    _reprice_err = _reprice_items_or_error(line_items, read_token, pricing="department")
+    if _reprice_err:
+        return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
 
     # 1. Generate order ID
     try:
