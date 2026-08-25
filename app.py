@@ -299,13 +299,14 @@ def at_get_all(table_id, token, fields=None, formula=None, base_id=None, view=No
 # Portal Auth Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_portal_token(user_id, customer_id, is_primary, role=None):
+def create_portal_token(user_id, customer_id, is_primary, role=None, via="password"):
     from datetime import datetime, timezone, timedelta
     payload = {
         "user_id":     user_id,
         "customer_id": customer_id,
         "is_primary":  is_primary,
         "role":        role,   # None = legacy primary (treated as admin)
+        "via":         via,    # "magic" = signed in via emailed link (email ownership proven)
         "exp": datetime.now(timezone.utc) + timedelta(days=30),
     }
     return pyjwt.encode(payload, QUOTE_SECRET_KEY, algorithm="HS256")
@@ -8622,7 +8623,7 @@ def auth_magic_link(token):
     try:
         records = at_get_all(
             CUSTOMERS_TABLE_ID, read_token,
-            fields=["Magic Token", "Token Expiry", "Application Status", "Portal Role"],
+            fields=["Magic Token", "Token Expiry", "Application Status", "Portal Role", "Parent Company"],
             formula=f"{{Magic Token}}='{token}'",
         )
         if not records:
@@ -8652,10 +8653,13 @@ def auth_magic_link(token):
         if datetime.now(timezone.utc) > exp_dt:
             return send_from_directory("static", "auth-error.html"), 401
 
-        # Customer record ID is both user_id and customer_id for magic-link users
-        user_id     = user_rec["id"]
-        customer_id = user_rec["id"]
-        is_primary  = True
+        # user_id is always the login record; customer_id resolves to the Parent
+        # Company for sub-users (so a team member sees their org's data, matching
+        # password login in _lookup_portal_customer). Own record if no parent.
+        user_id       = user_rec["id"]
+        _parent_ids   = uf.get("Parent Company", [])
+        customer_id   = _parent_ids[0] if _parent_ids else user_rec["id"]
+        is_primary    = not bool(_parent_ids)
 
         # Fetch Portal Role from Customer record (legacy users with no role → admin)
         portal_role = None
@@ -8685,8 +8689,9 @@ def auth_magic_link(token):
         except Exception as e:
             print(f"[auth_magic_link] token clear failed: {e}")
 
-        # Create JWT session cookie
-        jwt_token = create_portal_token(user_id, customer_id, is_primary, role=portal_role)
+        # Create JWT session cookie (marked as a magic-link session so the portal
+        # can offer a no-old-password reset — the emailed link proves email ownership)
+        jwt_token = create_portal_token(user_id, customer_id, is_primary, role=portal_role, via="magic")
         resp = make_response(redirect("/portal"))
         resp.set_cookie(
             "ba_portal_session",
@@ -9122,6 +9127,7 @@ def portal_me(user):
         "canViewOrders":   can_view_orders,
         "canViewInvoices": can_view_invoices,
         "hasCredentials":  has_credentials,
+        "viaMagic":        user.get("via") == "magic",   # signed in via emailed link → can set a new password
         # Account status: "Approved" (or legacy "") = full ordering; "Registered" = quote-only,
         # may apply for ordering access; "Pending" = ordering application under review.
         "accountStatus":       account_status if account_status is not None else "",
@@ -9558,6 +9564,38 @@ def portal_set_password(user):
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{user_id}",
             headers={**at_headers(write_token), "Content-Type": "application/json"},
             json={"fields": {"Portal Username": username, "Portal Hash": pw_hash}},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/portal/reset-password", methods=["POST"])
+@portal_login_required
+def portal_reset_password(user):
+    """Set a NEW password for a user who forgot theirs, WITHOUT the old password —
+    allowed only for a magic-link session (the emailed link already proved email
+    ownership, which is what a password reset verifies). Keeps the existing username.
+    Password-based sessions must use /api/portal/change-password (old password required)."""
+    c = cors()
+    if user.get("via") != "magic":
+        return Response(json.dumps({"error": "Password reset requires signing in through an email login link."}),
+                        status=403, headers=c, mimetype="application/json")
+    data   = request.get_json() or {}
+    new_pw = (data.get("newPassword") or "").strip()
+    err = _validate_password(new_pw)
+    if err:
+        return Response(json.dumps({"error": err}), status=400, headers=c, mimetype="application/json")
+    user_id = user.get("user_id", "")
+    if not user_id:
+        return Response(json.dumps({"error": "Invalid session"}), status=401, headers=c, mimetype="application/json")
+    try:
+        r = req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{user_id}",
+            headers={**at_headers(RETURNS_WRITE_TOKEN), "Content-Type": "application/json"},
+            json={"fields": {"Portal Hash": _hash_password(new_pw)}},
             timeout=10,
         )
         r.raise_for_status()

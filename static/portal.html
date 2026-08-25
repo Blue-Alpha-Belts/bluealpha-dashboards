@@ -319,6 +319,19 @@
     </div>
   </div>
 
+  <!-- Reset-password banner — shown when signed in via an email link and a password already exists -->
+  <div id="resetPwBanner" style="display:none; background:#eef4ff; border-bottom:2px solid #3b6fb5; padding:12px 24px;">
+    <div style="max-width:900px; margin:0 auto; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+      <span style="font-size:1.1rem;">🔑</span>
+      <div style="flex:1; min-width:200px;">
+        <strong style="color:#1a3a6c; font-size:0.92rem;">Signed in with an email link</strong>
+        <span style="color:#274b7a; font-size:0.88rem; margin-left:8px;">Want to set a new password so you can sign in without the link next time?</span>
+      </div>
+      <button onclick="openResetPwModal()" style="background:#1B2438; color:#fff; border:none; border-radius:6px; padding:8px 18px; font-weight:700; font-size:0.88rem; cursor:pointer; white-space:nowrap;">Set a password</button>
+      <button onclick="dismissResetPwBanner()" title="Dismiss" style="background:none; border:none; color:#274b7a; font-size:1.2rem; cursor:pointer; padding:2px 8px;">&times;</button>
+    </div>
+  </div>
+
   <!-- Ordering-access banner — shown for quote-only (Registered) and under-review (Pending) accounts -->
   <div id="orderingBanner" style="display:none; background:#eef4ff; border-bottom:2px solid #3b82c4; padding:12px 24px;">
     <div style="max-width:900px; margin:0 auto; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
@@ -699,6 +712,10 @@
         // Show credentials banner if user has no username/password set up
         if (!portalMe.hasCredentials) {
           document.getElementById('credentialsBanner').style.display = '';
+        } else if (portalMe.viaMagic && localStorage.getItem('ba_resetpw_dismissed') !== '1') {
+          // Signed in via email link but already has a password — likely forgot it.
+          // Offer a no-old-password reset (dismissible, remembered across visits).
+          document.getElementById('resetPwBanner').style.display = '';
         }
 
         // Ordering-access banner for quote-only / under-review accounts
@@ -1541,6 +1558,27 @@
     </div>
   </div>
 
+  <!-- Reset Password Modal (magic-link users who forgot their password) -->
+  <div class="modal-overlay" id="resetPwModal">
+    <div class="modal-box" style="max-width:420px;">
+      <h3>Set a New Password</h3>
+      <p style="font-size:0.88rem;color:#555;margin:-10px 0 20px;">Choose a new password. You'll use it with your existing username to sign in next time.</p>
+      <div class="modal-field">
+        <label>New Password</label>
+        <input type="password" id="rpNew" autocomplete="new-password" placeholder="At least 8 characters">
+      </div>
+      <div class="modal-field">
+        <label>Confirm Password</label>
+        <input type="password" id="rpConfirm" autocomplete="new-password" placeholder="Re-enter password">
+      </div>
+      <div class="modal-msg" id="rpMsg"></div>
+      <div class="modal-actions">
+        <button class="btn-save" id="rpSaveBtn" onclick="submitResetPw()">Save Password</button>
+        <button class="btn-cancel" onclick="closeResetPwModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Account Settings Modal -->
   <div class="modal-overlay" id="changePwModal">
     <div class="modal-box" style="max-width:440px;">
@@ -1782,6 +1820,59 @@
 
   document.getElementById('setupCredentialsModal').addEventListener('click', function(e) {
     if (e.target === this) closeSetupCredentialsModal();
+  });
+
+  // ─── Reset password (magic-link users who forgot theirs) ─────────────────
+  function dismissResetPwBanner() {
+    document.getElementById('resetPwBanner').style.display = 'none';
+    localStorage.setItem('ba_resetpw_dismissed', '1');
+  }
+  function openResetPwModal() {
+    document.getElementById('rpNew').value = '';
+    document.getElementById('rpConfirm').value = '';
+    const msg = document.getElementById('rpMsg');
+    msg.className = 'modal-msg'; msg.textContent = '';
+    document.getElementById('rpSaveBtn').disabled = false;
+    document.getElementById('rpSaveBtn').textContent = 'Save Password';
+    document.getElementById('resetPwModal').classList.add('open');
+    setTimeout(() => document.getElementById('rpNew').focus(), 50);
+  }
+  function closeResetPwModal() {
+    document.getElementById('resetPwModal').classList.remove('open');
+  }
+  async function submitResetPw() {
+    const newPw   = document.getElementById('rpNew').value;
+    const confirm = document.getElementById('rpConfirm').value;
+    const msg     = document.getElementById('rpMsg');
+    const btn     = document.getElementById('rpSaveBtn');
+    msg.className = 'modal-msg'; msg.textContent = '';
+    if (newPw.length < 8)   { msg.className = 'modal-msg error'; msg.textContent = 'Password must be at least 8 characters.'; return; }
+    if (newPw !== confirm)  { msg.className = 'modal-msg error'; msg.textContent = 'Passwords do not match.'; return; }
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const r = await fetch('/api/portal/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword: newPw }),
+        credentials: 'same-origin',
+      });
+      const d = await r.json();
+      if (r.ok && d.ok) {
+        msg.className = 'modal-msg success'; msg.textContent = 'Password saved. Use it with your username next time you sign in.';
+        btn.textContent = 'Done';
+        localStorage.setItem('ba_resetpw_dismissed', '1');
+        setTimeout(() => { closeResetPwModal(); document.getElementById('resetPwBanner').style.display = 'none'; }, 1800);
+      } else {
+        msg.className = 'modal-msg error'; msg.textContent = d.error || 'Could not save password.';
+        btn.disabled = false; btn.textContent = 'Save Password';
+      }
+    } catch (e) {
+      msg.className = 'modal-msg error'; msg.textContent = 'Network error. Please try again.';
+      btn.disabled = false; btn.textContent = 'Save Password';
+    }
+  }
+  document.getElementById('resetPwModal').addEventListener('click', function(e) {
+    if (e.target === this) closeResetPwModal();
   });
   </script>
 </body>
