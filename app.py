@@ -109,6 +109,13 @@ def redirect_http_to_https():
 @app.after_request
 def add_security_headers(response):
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # Don't let the browser MIME-sniff responses into a different content type.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Block other sites from framing our pages (clickjacking). SAMEORIGIN, not
+    # DENY, because the portal embeds /quote-builder and /view-quote in same-origin iframes.
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    # Don't leak full URLs (which can carry record ids) to third-party sites.
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
 
 # In-memory status cache for return submissions (cleared on restart, only needed during ~60s poll window)
