@@ -1743,6 +1743,7 @@
               <select class="role-select" onchange="changeTeamRole('${escHtml(u.id)}', this)"
                       style="border:1px solid var(--border);border-radius:5px;padding:5px 8px;font-size:0.82rem;font-family:'Lato',sans-serif;">
                 <option value="Read Only"   ${u.role==='read_only'   ?'selected':''}>Read Only</option>
+                <option value="Orders"      ${u.role==='orders'      ?'selected':''}>Orders</option>
                 <option value="Invoices"    ${u.role==='invoices'    ?'selected':''}>Invoices</option>
                 <option value="Full Access" ${u.role==='full_access' ?'selected':''}>Full Access</option>
                 <option value="Admin"       ${u.role==='admin'       ?'selected':''}>Admin</option>

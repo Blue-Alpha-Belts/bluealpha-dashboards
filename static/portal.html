@@ -530,6 +530,7 @@
                   <option value="Orders">Orders</option>
                   <option value="Invoices">Invoices</option>
                   <option value="Full Access" selected>Full Access</option>
+                  <option value="Admin">Admin</option>
                 </select>
               </div>
             </div>
@@ -1257,6 +1258,7 @@
                   <option value="Orders"      ${u.role==='orders'?'selected':''}>Orders</option>
                   <option value="Invoices"    ${u.role==='invoices'?'selected':''}>Invoices</option>
                   <option value="Full Access" ${u.role==='full_access'?'selected':''}>Full Access</option>
+                  <option value="Admin"       ${u.role==='admin'?'selected':''}>Admin</option>
                 </select>
                 ${u.pendingSetup
                   ? `<button class="btn-sm" style="background:transparent;color:var(--navy);border:1px solid var(--navy);"
