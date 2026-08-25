@@ -58,7 +58,12 @@ CS_ADMIN_PASSWORD    = os.environ.get("CS_ADMIN_PASSWORD", "")
 
 QUOTE_ADMIN_PASSWORD     = os.environ.get("QUOTE_ADMIN_PASSWORD", "")
 QUOTE_CS_PASSWORD        = os.environ.get("QUOTE_CS_PASSWORD", "")
-QUOTE_SECRET_KEY         = os.environ.get("QUOTE_SECRET_KEY", "change-me-ba-portal-2024")
+QUOTE_SECRET_KEY         = os.environ.get("QUOTE_SECRET_KEY", "")
+if not QUOTE_SECRET_KEY:
+    # Fail fast rather than silently signing every portal/admin JWT with a public
+    # default — a blank secret would let anyone forge sessions. Set QUOTE_SECRET_KEY
+    # in the environment (it is set in production).
+    raise RuntimeError("QUOTE_SECRET_KEY environment variable is required and is not set")
 
 STRIPE_SECRET_KEY        = os.environ.get("STRIPE_SECRET_KEY", "")
 
@@ -324,17 +329,31 @@ def portal_login_required(f):
     return decorated
 
 
+_PBKDF2_ITERATIONS = 210000  # PBKDF2-HMAC-SHA256 work factor (OWASP-range, stdlib only)
+
 def _hash_password(password, salt=None):
+    """Hash a password with PBKDF2-HMAC-SHA256. Format: pbkdf2$iters$salt$hexhash.
+    (Legacy sha256$salt$hash hashes are still accepted by _check_password so no
+    existing login breaks; a password change/reset upgrades that account.)"""
     import hashlib, secrets as sec
     if salt is None:
         salt = sec.token_hex(16)
-    h = hashlib.sha256((salt + password).encode()).hexdigest()
-    return f"sha256${salt}${h}"
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _PBKDF2_ITERATIONS)
+    return f"pbkdf2${_PBKDF2_ITERATIONS}${salt}${dk.hex()}"
 
 def _check_password(password, stored_hash):
+    import hashlib, hmac
     try:
-        _, salt, _ = stored_hash.split("$")
-        return _hash_password(password, salt) == stored_hash
+        parts = stored_hash.split("$")
+        if parts[0] == "pbkdf2":
+            _, iters, salt, want = parts
+            dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(iters))
+            return hmac.compare_digest(dk.hex(), want)
+        if parts[0] == "sha256":
+            _, salt, want = parts
+            got = hashlib.sha256((salt + password).encode()).hexdigest()
+            return hmac.compare_digest(got, want)
+        return False
     except Exception:
         return False
 
@@ -8181,7 +8200,10 @@ def login_page():
         except Exception as e:
             print(f"[login] magic link error: {e}")
 
-    if email:
+    # Throttle to prevent email-bombing (per-IP and per-email); response is
+    # identical either way so it leaks nothing.
+    _ml_blocked = _auth_throttled("magic_ip", _client_ip(request), 15) or _auth_throttled("magic_email", email, 4)
+    if email and not _ml_blocked:
         threading.Thread(target=_try_send_magic_link, args=(email,), daemon=True).start()
 
     return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
@@ -8277,6 +8299,32 @@ def _register_throttled(ip):
         return True
     attempts.append(now)
     _REGISTER_ATTEMPTS[ip] = attempts
+    return False
+
+
+# Generic sliding-window throttle for auth endpoints (login, magic-link).
+# In-memory and per-worker (like _register_throttled) — imperfect under multi-worker
+# gunicorn but still meaningfully slows brute-force/email-bombing. Buckets are keyed
+# by purpose so an IP limit and an account limit don't collide.
+_AUTH_ATTEMPTS: dict = {}   # "bucket:key" -> [timestamps]
+
+def _client_ip(req):
+    return (req.headers.get("X-Forwarded-For") or req.remote_addr or "").split(",")[0].strip()
+
+def _auth_throttled(bucket, key, limit, window=900):
+    """Record an attempt and return True if (bucket, key) is over `limit` within the
+    last `window` seconds. A blank key is ignored (never throttles)."""
+    if not key:
+        return False
+    import time as _t
+    now = _t.time()
+    k = f"{bucket}:{key}"
+    hits = [t for t in _AUTH_ATTEMPTS.get(k, []) if now - t < window]
+    if len(hits) >= limit:
+        _AUTH_ATTEMPTS[k] = hits
+        return True
+    hits.append(now)
+    _AUTH_ATTEMPTS[k] = hits
     return False
 
 
@@ -9401,6 +9449,11 @@ def portal_request_magic_link():
     data  = request.get_json() or {}
     email = (data.get("email") or "").strip().lower()
 
+    # Throttle to prevent email-bombing a victim address (per-IP and per-email).
+    # Return the same generic success below regardless, so this doesn't leak
+    # whether the throttle tripped or whether the address exists.
+    _ml_blocked = _auth_throttled("magic_ip", _client_ip(request), 15) or _auth_throttled("magic_email", email, 4)
+
     def _send(email):
         try:
             read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -9419,7 +9472,7 @@ def portal_request_magic_link():
         except Exception as ex:
             print(f"[request_magic_link] error: {ex}")
 
-    if email:
+    if email and not _ml_blocked:
         threading.Thread(target=_send, args=(email,), daemon=True).start()
     return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
 
@@ -9441,6 +9494,10 @@ def portal_login():
     if not username or not password:
         return Response(json.dumps({"error": "Username and password are required"}),
                         status=400, headers=c, mimetype="application/json")
+    # Throttle brute-force: per-IP (broad) and per-username (tight)
+    if _auth_throttled("plogin_ip", _client_ip(request), 30) or _auth_throttled("plogin_user", username, 8):
+        return Response(json.dumps({"error": "Too many attempts. Please wait a few minutes and try again."}),
+                        status=429, headers=c, mimetype="application/json")
     rec, role, customer_id = _lookup_portal_customer(username, password)
     if not rec:
         return Response(json.dumps({"error": "Invalid username or password"}),
@@ -10411,6 +10468,9 @@ def admin_login():
     data = request.get_json() or {}
     username = (data.get("username") or "").strip().lower()
     pw       = (data.get("password") or "").strip()
+    # Throttle brute-force: per-IP (broad) and per-username (tight)
+    if _auth_throttled("alogin_ip", _client_ip(request), 30) or _auth_throttled("alogin_user", username, 8):
+        return Response(json.dumps({"error": "Too many attempts. Please wait a few minutes and try again."}), status=429, headers=c, mimetype="application/json")
     rec, role = _lookup_portal_user(username, pw)
     if not rec:
         return Response(json.dumps({"error": "Invalid username or password"}), status=401, headers=c, mimetype="application/json")
