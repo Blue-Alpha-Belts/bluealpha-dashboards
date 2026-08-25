@@ -8718,9 +8718,14 @@ def portal_logout():
 @app.route("/portal")
 @portal_login_required
 def portal_page(user):
-    # Department/law enforcement accounts go to their own portal
+    # Invoices-only accounts land on the customer portal's invoices view (scoped
+    # to their parent company by customer_id). portal.html hides the quote/order/
+    # team tabs for this role and lands on Invoices. Served directly so no
+    # department/contract redirect can send them somewhere without an invoices view.
     if (user.get("role") or "").lower() == "invoices":
-        return redirect("/department")
+        resp = send_from_directory("static", "portal.html")
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return resp
     # If this customer has contract SKUs, redirect them to the contract portal
     customer_id = user.get("customer_id", "")
     if customer_id:
