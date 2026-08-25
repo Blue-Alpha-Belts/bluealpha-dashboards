@@ -12279,7 +12279,9 @@ def _li_qty_key(lf):
     skus = lf.get("Product SKU", [])
     if skus:
         return skus[0]
-    names = lf.get("Product Name (from Product SKU)", [])
+    # NB: MO Line Items has NO "Product Name (from Product SKU)" field — the only
+    # name lookup is "Name + Variations" (unknown names in fields[] 422 the list API)
+    names = lf.get("Name + Variations (from Product SKU)", [])
     return ((names[0] if names else "") or "?").strip().upper()
 
 
@@ -12291,7 +12293,7 @@ def _fetch_li_fields_batch(li_ids, read_token):
         formula = "OR(" + ",".join(f'RECORD_ID()="{lid}"' for lid in batch) + ")"
         recs.extend(at_get_all(MO_LINE_ITEMS_TABLE_ID, read_token,
                                fields=["Product SKU", "Qty.", "SKU ID (from Product SKU)",
-                                       "Product Name (from Product SKU)"],
+                                       "Name + Variations (from Product SKU)"],
                                formula=formula))
     return recs
 
@@ -12332,7 +12334,7 @@ def _partial_invoice_overbill_error(so_fields, base_order_id, selected_items, re
         k = _li_qty_key(lf)
         so_line_qty = float(lf.get("Qty.") or 0)
         so_total[k] = so_total.get(k, 0) + so_line_qty
-        pn = lf.get("Product Name (from Product SKU)", [])
+        pn = lf.get("Name + Variations (from Product SKU)", [])
         names.setdefault(k, (pn[0] if pn else "") or str(k))
         if selected_items is None:
             req[k] = req.get(k, 0) + so_line_qty
