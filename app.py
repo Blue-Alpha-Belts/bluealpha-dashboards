@@ -12270,6 +12270,88 @@ def portal_admin_shipped_orders():
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+def _li_qty_key(lf):
+    """Stable key for matching line items across SO/invoice copies: SKU string,
+    falling back to Product SKU record id, then product name."""
+    sku_ids = lf.get("SKU ID (from Product SKU)", [])
+    if sku_ids and (sku_ids[0] or "").strip():
+        return sku_ids[0].strip().upper()
+    skus = lf.get("Product SKU", [])
+    if skus:
+        return skus[0]
+    names = lf.get("Product Name (from Product SKU)", [])
+    return ((names[0] if names else "") or "?").strip().upper()
+
+
+def _fetch_li_fields_batch(li_ids, read_token):
+    """Batch-fetch line item records (SKU/qty/name fields) via RECORD_ID() OR formulas."""
+    recs = []
+    for i in range(0, len(li_ids), 100):
+        batch = li_ids[i:i + 100]
+        formula = "OR(" + ",".join(f'RECORD_ID()="{lid}"' for lid in batch) + ")"
+        recs.extend(at_get_all(MO_LINE_ITEMS_TABLE_ID, read_token,
+                               fields=["Product SKU", "Qty.", "SKU ID (from Product SKU)",
+                                       "Product Name (from Product SKU)"],
+                               formula=formula))
+    return recs
+
+
+def _invoiced_qty_by_key(base_order_id, read_token):
+    """Quantities already billed per line-item key across ALL invoices for an order —
+    the base invoice (Order ID = '0265') plus any splits ('0265-1', '0265-2', ...)."""
+    prior_invs = at_get_all(
+        MANUAL_ORDERS_TABLE_ID, read_token,
+        fields=["MO Line Items"],
+        formula=(f'AND({{Order Type}}="Invoice",'
+                 f'OR({{Order ID}}="{base_order_id}",'
+                 f'FIND("{base_order_id}-",{{Order ID}}&"")=1))'),
+    )
+    inv_li_ids = []
+    for inv in prior_invs:
+        inv_li_ids.extend(inv.get("fields", {}).get("MO Line Items", []))
+    invoiced = {}
+    for rec in _fetch_li_fields_batch(inv_li_ids, read_token):
+        lf = rec.get("fields", {})
+        k = _li_qty_key(lf)
+        invoiced[k] = invoiced.get(k, 0) + float(lf.get("Qty.") or 0)
+    return invoiced
+
+
+def _partial_invoice_overbill_error(so_fields, base_order_id, selected_items, read_token):
+    """Over-billing guard for convert-to-invoice: across ALL invoices for an order
+    (base + '-N' splits), no item may be billed beyond the SO's quantity. Returns an
+    error string to reject the request, or None if OK. Runs BEFORE the invoice record
+    is created, so any Airtable error here also blocks the conversion (fail closed) —
+    double-billing a customer is worse than a retry (IN-0265-1/IN-0276-1, 2026-08-25)."""
+    so_li_ids = so_fields.get("MO Line Items", [])
+    if not so_li_ids:
+        return None
+    so_total, req, names = {}, {}, {}
+    for rec in _fetch_li_fields_batch(so_li_ids, read_token):
+        lf = rec.get("fields", {})
+        k = _li_qty_key(lf)
+        so_line_qty = float(lf.get("Qty.") or 0)
+        so_total[k] = so_total.get(k, 0) + so_line_qty
+        pn = lf.get("Product Name (from Product SKU)", [])
+        names.setdefault(k, (pn[0] if pn else "") or str(k))
+        if selected_items is None:
+            req[k] = req.get(k, 0) + so_line_qty
+        elif rec["id"] in selected_items:
+            req[k] = req.get(k, 0) + float(selected_items[rec["id"]] or 0)
+    if not req:
+        return None
+    invoiced = _invoiced_qty_by_key(base_order_id, read_token)
+    over = []
+    for k, want in req.items():
+        remaining = max(0.0, so_total.get(k, 0) - invoiced.get(k, 0))
+        if want > remaining + 1e-9:
+            over.append(f"{names.get(k, k)} (requested {want:g}, un-invoiced {remaining:g})")
+    if over:
+        return ("Blocked to prevent double-billing — already invoiced on this order: "
+                + "; ".join(over) + ". Adjust quantities to the un-invoiced remainder.")
+    return None
+
+
 def _fetch_so_line_items(record_id, split_order_number=None):
     """Shared helper: fetch Airtable line items for an SO record.
     If split_order_number is given (e.g. 'SO-0337-1'), fetches that ShipStation order's
@@ -12318,6 +12400,8 @@ def _fetch_so_line_items(record_id, split_order_number=None):
             "unit_price":    float(price),
             "sku":           sku_str,
             "defaultChecked": True,   # default: all checked; may be overridden for splits
+            "_key":          _li_qty_key(lf),      # internal: match key vs prior invoices
+            "_soQty":        lf.get("Qty.", 0),    # internal: original SO qty (pre-SS override)
         })
 
     def _ss_items_for_order(order_num):
@@ -12367,6 +12451,36 @@ def _fetch_so_line_items(record_id, split_order_number=None):
                     for li in line_items:
                         if li["sku"] in ss_items:
                             li["qty"] = ss_items[li["sku"]]
+
+    # Cap defaults at the un-invoiced remainder: qty so far = what shipped in THIS
+    # order (SS quantities, per the split/main logic above); now subtract what other
+    # invoices for this order (base + splits) already billed, so the modal prompts
+    # with only the shipped-and-not-yet-billed quantities. Items fully billed
+    # elsewhere default to qty 0, unchecked. (IN-0265-1/IN-0276-1, 2026-08-25)
+    try:
+        base_order_id = str(so_fields.get("Order ID", "")).strip()
+        invoiced = _invoiced_qty_by_key(base_order_id, read_token) if base_order_id else {}
+    except Exception as _ge:
+        print(f"[so-line-items] invoiced-qty lookup failed: {_ge}")
+        invoiced = {}
+    if invoiced:
+        # Per key, an order may still bill (SO total - already invoiced); split that
+        # allowance across this SO's lines in order.
+        so_total = {}
+        for li in line_items:
+            so_total[li["_key"]] = so_total.get(li["_key"], 0) + float(li["_soQty"] or 0)
+        allowed = {k: max(0.0, t - float(invoiced.get(k, 0))) for k, t in so_total.items()}
+        for li in line_items:
+            k = li["_key"]
+            take = min(float(li["qty"] or 0), allowed.get(k, 0.0))
+            allowed[k] = allowed.get(k, 0.0) - take
+            if take != float(li["qty"] or 0):
+                li["qty"] = int(take) if take == int(take) else take
+                if take <= 0:
+                    li["defaultChecked"] = False
+    for li in line_items:
+        li.pop("_key", None)
+        li.pop("_soQty", None)
 
     return line_items, None
 
@@ -12449,6 +12563,12 @@ def portal_admin_convert_to_invoice(record_id):
             inv_num = existing_inv[0].get("fields", {}).get("Document ID", "")
             return Response(json.dumps({"error": f"Already invoiced as {inv_num}"}),
                             status=400, headers=c, mimetype="application/json")
+
+        # Over-billing guard: a partial/split invoice may only bill quantities not
+        # already on ANY other invoice for this order (base + splits)
+        guard_err = _partial_invoice_overbill_error(so_fields, base_order_id, selected_items, read_token)
+        if guard_err:
+            return Response(json.dumps({"error": guard_err}), status=400, headers=c, mimetype="application/json")
 
         # Get tracking and ship date (use split order number for splits)
         tracking_order_num = f"{so_number}-{split_suffix}" if split_suffix else so_number
@@ -13077,6 +13197,12 @@ def admin_convert_to_invoice(record_id):
         if existing:
             inv_doc = existing[0]["fields"].get("Document ID", f"IN-{order_id_str}")
             return Response(json.dumps({"error": f"Already invoiced as {inv_doc}"}), status=400, headers=c, mimetype="application/json")
+
+        # Over-billing guard: a partial/split invoice may only bill quantities not
+        # already on ANY other invoice for this order (base + splits)
+        guard_err = _partial_invoice_overbill_error(so_fields, base_order_id, selected_items, read_token)
+        if guard_err:
+            return Response(json.dumps({"error": guard_err}), status=400, headers=c, mimetype="application/json")
 
         # Get tracking and ship date (use split order number for splits)
         tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
