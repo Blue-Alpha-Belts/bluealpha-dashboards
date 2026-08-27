@@ -97,6 +97,19 @@ FEATURE_VARIATIONS_TABLE_ID = "tblwbWDNFSjJSV9hh"
 ADDONS_TABLE_ID             = "tblW8N35cbaXQDuQv"
 QUOTE_BASE_URL           = os.environ.get("QUOTE_BASE_URL", "https://quote.bluealphabelts.com")
 
+# Magic-link login tuning.
+#   EXPIRY_HOURS   — how long an emailed login link stays valid. This clock is NOT
+#                    affected by anything opening the link: /auth only signs a
+#                    person in on the confirm button's POST, so a mail filter that
+#                    prefetches the URL to scan it can't consume the link. Before
+#                    that split, agency scanners (.gov/.org especially) burned the
+#                    link on delivery and the customer got "expired" every single
+#                    time. See the Waterville PD ticket, 2026-08-27.
+#   GRACE_MINUTES  — how long the link keeps working after a successful sign-in, so
+#                    a double-submit or back-button doesn't strand anyone.
+MAGIC_LINK_EXPIRY_HOURS   = 48
+MAGIC_LINK_GRACE_MINUTES  = 15
+
 app = Flask(__name__, static_folder="static")
 
 @app.before_request
@@ -573,7 +586,7 @@ def get_portal_record_id(req):
         return None
 
 
-def generate_magic_link(portal_user_record_id, expiry_hours=0.25):
+def generate_magic_link(portal_user_record_id, expiry_hours=MAGIC_LINK_EXPIRY_HOURS):
     from datetime import datetime, timezone, timedelta
     token = secrets.token_urlsafe(32)
     expiry = datetime.now(timezone.utc) + timedelta(hours=expiry_hours)
@@ -8209,7 +8222,7 @@ def login_page():
                 return
             user_rec = records[0]
             user_id  = user_rec["id"]  # Customer record ID is both user_id and customer_id
-            magic_link = generate_magic_link(user_id, expiry_hours=48)
+            magic_link = generate_magic_link(user_id, expiry_hours=MAGIC_LINK_EXPIRY_HOURS)
             send_magic_link_email(email, magic_link)
         except Exception as e:
             print(f"[login] magic link error: {e}")
@@ -8616,30 +8629,86 @@ def portal_setup_account():
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
-@app.route("/auth/<token>")
+# Reasons the /auth page can fail, and what we actually tell the customer. Until
+# 2026-08-27 every one of these rendered the same "Login Link Expired" screen,
+# which sent people to request another link when the real fix was usually "log in
+# with the password you already have."
+_AUTH_ERROR_COPY = {
+    "invalid": (
+        "Login Link No Longer Valid",
+        "This link may have already been used, or it may have expired — login links last "
+        f"{MAGIC_LINK_EXPIRY_HOURS} hours. If you've already set up your account, sign in with your "
+        "username and password instead. If not, request a new link below.",
+        "Go to Login",
+    ),
+    "noaccess": (
+        "Account Not Active Yet",
+        "This account isn't approved for portal access yet. Email orders@bluealpha.us or call "
+        "678-961-3304 and we'll get you sorted out.",
+        "Back to Login",
+    ),
+    "error": (
+        "Something Went Wrong",
+        "We couldn't process this login link. Please try again in a moment, or email "
+        "orders@bluealpha.us if it keeps happening.",
+        "Back to Login",
+    ),
+}
+
+
+def _auth_confirm_page(token, email=""):
+    """Render the 'Confirm Sign In' interstitial for a valid, unconsumed magic link."""
+    import html as _html
+    try:
+        with open(os.path.join(app.static_folder, "auth-continue.html"), encoding="utf-8") as fh:
+            page = fh.read()
+    except Exception as e:
+        print(f"[auth_confirm_page] template read failed: {e}")
+        return _auth_error_page("error", status=500)
+    suffix = f" as {_html.escape(email)}" if email else ""
+    page = page.replace("{{TOKEN}}", _html.escape(token)).replace("{{EMAIL}}", suffix)
+    return Response(page, mimetype="text/html")
+
+
+def _auth_error_page(reason, status=401):
+    """Render the /auth failure page with copy specific to what actually failed."""
+    headline, message, btn = _AUTH_ERROR_COPY.get(reason, _AUTH_ERROR_COPY["invalid"])
+    try:
+        with open(os.path.join(app.static_folder, "auth-error.html"), encoding="utf-8") as fh:
+            html = fh.read()
+    except Exception:
+        return Response(f"{headline} — {message}", status=status, mimetype="text/plain")
+    html = (html.replace("{{HEADLINE}}", headline)
+                .replace("{{MESSAGE}}", message)
+                .replace("{{BTN_TEXT}}", btn))
+    return Response(html, status=status, mimetype="text/html")
+
+
+@app.route("/auth/<token>", methods=["GET", "POST"])
 def auth_magic_link(token):
     from datetime import datetime, timezone
     read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
     try:
         records = at_get_all(
             CUSTOMERS_TABLE_ID, read_token,
-            fields=["Magic Token", "Token Expiry", "Application Status", "Portal Role", "Parent Company"],
+            fields=["Magic Token", "Token Expiry", "Application Status", "Portal Role",
+                    "Parent Company", "Main Contact Email"],
             formula=f"{{Magic Token}}='{token}'",
         )
         if not records:
-            return send_from_directory("static", "auth-error.html"), 401
+            return _auth_error_page("invalid")
 
         user_rec = records[0]
         uf = user_rec.get("fields", {})
         expiry_str = uf.get("Token Expiry", "")
         if not expiry_str:
-            return send_from_directory("static", "auth-error.html"), 401
+            return _auth_error_page("invalid")
 
         # Check Application Status (Registered/Pending = self-serve quote-only accounts;
         # blank = legacy customer, allowed — matches password login in _lookup_portal_customer)
         _app_status = uf.get("Application Status", "")
         if _app_status and _app_status not in ("Approved", "Registered", "Pending"):
-            return send_from_directory("static", "auth-error.html"), 401
+            return _auth_error_page("noaccess")
 
         # Check expiry
         try:
@@ -8648,10 +8717,20 @@ def auth_magic_link(token):
                 from datetime import timezone as tz
                 exp_dt = exp_dt.replace(tzinfo=tz.utc)
         except Exception:
-            return send_from_directory("static", "auth-error.html"), 401
+            return _auth_error_page("invalid")
 
         if datetime.now(timezone.utc) > exp_dt:
-            return send_from_directory("static", "auth-error.html"), 401
+            return _auth_error_page("invalid")
+
+        # A plain GET must not consume the link. Agency mail filters (.gov/.org
+        # especially) open every emailed URL to scan it, and that peek used to
+        # count as the sign-in — burning the link before the customer ever
+        # clicked. So GET only renders a confirm page; nothing is consumed until
+        # the button POSTs back, and scanners don't submit forms. Same shape as
+        # the setup-account flow, which is why setup links always survived these
+        # filters while login links did not. (Waterville PD, 2026-08-27.)
+        if request.method == "GET":
+            return _auth_confirm_page(token, uf.get("Main Contact Email", ""))
 
         # user_id is always the login record; customer_id resolves to the Parent
         # Company for sub-users (so a team member sees their org's data, matching
@@ -8674,20 +8753,26 @@ def auth_magic_link(token):
         except Exception:
             portal_role = None
 
-        # Clear magic token + update last login
+        # Signed in for real (this is the POST). Rather than clearing the token
+        # outright, shorten its remaining life to a short grace window so a
+        # double-submit, a back-button, or a browser retry still works, then let
+        # the expiry check above retire it. min() so repeat submits can never
+        # extend the window.
+        from datetime import timedelta
+        _now = datetime.now(timezone.utc)
+        _grace_end = min(exp_dt, _now + timedelta(minutes=MAGIC_LINK_GRACE_MINUTES))
         try:
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{user_id}",
                 headers={**at_headers(RETURNS_WRITE_TOKEN), "Content-Type": "application/json"},
                 json={"fields": {
-                    "Magic Token":  "",
-                    "Token Expiry": None,
-                    "Last Login":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    "Token Expiry": _grace_end.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    "Last Login":   _now.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                 }},
                 timeout=10,
             )
         except Exception as e:
-            print(f"[auth_magic_link] token clear failed: {e}")
+            print(f"[auth_magic_link] grace-window write failed: {e}")
 
         # Create JWT session cookie (marked as a magic-link session so the portal
         # can offer a no-old-password reset — the emailed link proves email ownership)
@@ -8705,7 +8790,7 @@ def auth_magic_link(token):
 
     except Exception as e:
         print(f"[auth_magic_link] error: {e}")
-        return send_from_directory("static", "auth-error.html"), 500
+        return _auth_error_page("error", status=500)
 
 
 @app.route("/logout")
@@ -9485,13 +9570,19 @@ def portal_request_magic_link():
             # (password login already allows them), so the magic link must send too.
             records = at_get_all(
                 CUSTOMERS_TABLE_ID, read_token,
-                fields=["Main Contact Email", "Application Status"],
+                fields=["Main Contact Email", "Application Status", "Portal Hash"],
                 formula=(f"AND(LOWER({{Main Contact Email}})='{email}',"
                          f"OR({{Application Status}}='Approved',{{Application Status}}='Registered',"
                          f"{{Application Status}}='Pending',{{Application Status}}=''))"),
             )
             if records:
-                link = generate_magic_link(records[0]["id"])
+                # Duplicate customer records sharing one email are common in this
+                # base, and this endpoint accepts blank Application Status — so
+                # records[0] can easily be a thin duplicate with no login on it,
+                # which would mail a link into an empty account. Prefer whichever
+                # record actually has a portal account.
+                target = next((r for r in records if r.get("fields", {}).get("Portal Hash")), records[0])
+                link = generate_magic_link(target["id"], expiry_hours=MAGIC_LINK_EXPIRY_HOURS)
                 send_magic_link_email(email, link)
         except Exception as ex:
             print(f"[request_magic_link] error: {ex}")
