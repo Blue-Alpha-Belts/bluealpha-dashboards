@@ -321,8 +321,16 @@
         <div class="tab admin-only" data-tab="denied">Denied</div>
         <!-- CS-only tab -->
         <div class="tab cs-only" data-tab="cs-apps" style="display:none;">Applications</div>
-        <!-- Admin-only Shipped Orders tab -->
-        <div class="tab admin-only" data-tab="shipped">📦 Shipped Orders</div>
+        <!-- Shipped Orders moved to the Blue Alpha Ops app's Quote Portal tab
+             (Patty 2026-08-27) — same list and the same convert-to-invoice flow,
+             which still calls the endpoints in app.py (so-line-items,
+             convert-to-invoice, trigger-tracking-sync). Only the tab is gone, so
+             there is one place to convert from; the panel markup and its JS stay
+             put, and restoring the tab is a matter of restoring this pill. -->
+        <a class="admin-only" href="https://cs-app-production-ea37.up.railway.app/quotes/shipped"
+           target="_blank" rel="noopener"
+           style="padding:12px 20px;font-size:0.9rem;font-weight:600;color:#6b7a8d;text-decoration:none;white-space:nowrap;"
+           title="Shipped Orders now lives in the Ops app">📦 Shipped Orders ↗</a>
         <!-- Admin-only Invoices tab -->
         <div class="tab admin-only" data-tab="invoices">📄 Invoices</div>
         <!-- Admin-only Users tab -->
