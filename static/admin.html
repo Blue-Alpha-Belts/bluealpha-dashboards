@@ -314,11 +314,18 @@
     <div class="container">
       <!-- Tabs (controlled by JS based on role) -->
       <div class="tabs" id="tabBar">
-        <!-- Admin tabs -->
-        <div class="tab admin-only active" data-tab="pending">Pending</div>
-        <div class="tab admin-only" data-tab="registered">Registered</div>
-        <div class="tab admin-only" data-tab="approved">Approved</div>
-        <div class="tab admin-only" data-tab="denied">Denied</div>
+        <!-- The four application tabs (Pending / Registered / Approved /
+             Denied) moved to the Blue Alpha Ops app's Quote Portal tab, where
+             approve / deny / send-invite are audited against the person who
+             clicked (Patty 2026-08-27). They still run through the endpoints in
+             app.py, so nothing there changed. The CS read-only Applications tab
+             below stays: CS logins do not have that section in the Ops app yet.
+             Panels and JS for the removed tabs are left in place — restoring
+             these four pills restores the tabs. -->
+        <a class="admin-only" href="https://cs-app-production-ea37.up.railway.app/quotes"
+           target="_blank" rel="noopener"
+           style="padding:12px 20px;font-size:0.9rem;font-weight:600;color:#6b7a8d;text-decoration:none;white-space:nowrap;"
+           title="Applications now live in the Ops app">📋 Applications ↗</a>
         <!-- CS-only tab -->
         <div class="tab cs-only" data-tab="cs-apps" style="display:none;">Applications</div>
         <!-- Shipped Orders moved to the Blue Alpha Ops app's Quote Portal tab
@@ -339,8 +346,8 @@
         <div class="tab" data-tab="password" id="pwTab">🔑 Change Password</div>
       </div>
 
-      <!-- Admin: Pending -->
-      <div class="tab-panel active" id="tab-pending">
+      <!-- Admin: Pending (tab retired 2026-08-27 — see the tab bar above) -->
+      <div class="tab-panel" id="tab-pending">
         <div class="card">
           <div id="pendingContent" class="loading">Loading…</div>
         </div>
@@ -712,8 +719,10 @@
         // Show admin-only tabs, hide cs-only
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
         document.querySelectorAll('.cs-only').forEach(el => el.style.display = 'none');
-        // Make Pending the first active tab
-        activateTab('pending');
+        // Invoices is the first tab now that applications and shipped orders
+        // live in the Ops app (Patty 2026-08-27).
+        activateTab('invoices');
+        loadInvoices();
       } else {
         // CS role: hide admin-only tabs, show cs-only
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
