@@ -3523,15 +3523,25 @@ def mark_all_received(record_id):
         # status there. Never overwritten — a partial receipt keeps its original date when the
         # rest checks in later. ET calendar day, matching the Ops app (the portal's other date
         # stamps use UTC, which would disagree with it for a few hours every evening).
+        #
+        # The status moves with it. In the Ops app CS no longer types a status at all: it is
+        # derived from the items ticked (all of them -> Item(s) Received, some -> Partial
+        # Received). This button ticks EVERY item at full quantity, so the same rule can only
+        # ever land on Item(s) Received. Without this, the two buttons that both say "mark all
+        # received" left the return in two different states. Refunded and Closed are terminal
+        # and left alone, exactly as the Ops app leaves them.
+        patch_fields = {}
         if not ret_fields.get("Received Date"):
             from zoneinfo import ZoneInfo
             from datetime import datetime as _dt_now
+            patch_fields["Received Date"] = _dt_now.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        if ret_fields.get("Status") not in ("Refunded", "Closed", "Item(s) Received"):
+            patch_fields["Status"] = "Item(s) Received"
+        if patch_fields:
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
                 headers={**at_headers(write_token), "Content-Type": "application/json"},
-                json={"fields": {
-                    "Received Date": _dt_now.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
-                }},
+                json={"fields": patch_fields},
                 timeout=10,
             )
 
@@ -3541,6 +3551,7 @@ def mark_all_received(record_id):
 h2{{color:#2d7a2d}}ul{{text-align:left;display:inline-block}}
 p{{color:#555;margin-top:20px}}</style></head><body>
 <h2>✓ All Items Marked as Received</h2>
+<p>The return's status and received date were updated too.</p>
 <ul>{items}</ul>
 <p>You can close this tab and refresh the interface.</p>
 </body></html>""".format(items="".join(f"<li>{name}</li>" for name in updated))
