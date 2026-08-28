@@ -3470,8 +3470,9 @@ def _create_inventory_adjustment_for_return(sku_text, qty, read_token, write_tok
 
 @app.route("/api/mark-all-received/<record_id>")
 def mark_all_received(record_id):
-    """Mark all Return Items as Received (Qty Received = Qty Submitted), create inventory
-    adjustments for each, and update the parent Returns status to 'Items Received'."""
+    """Mark all Return Items as Received (Qty Received = Qty Submitted) and stamp the
+    parent return's Received Date if it has none yet. (The parent Status is NOT set here
+    — CS sets that from the Ops app; the docstring used to claim otherwise.)"""
     if not RETURN_ITEMS_TABLE_ID or not AIRTABLE_OPS_TOKEN:
         return Response("<h2>Not configured</h2>", status=500, mimetype="text/html")
     try:
@@ -3484,7 +3485,8 @@ def mark_all_received(record_id):
             headers={"Authorization": f"Bearer {read_token}"},
             timeout=10,
         )
-        item_ids = ret_r.json().get("fields", {}).get("Return Items", [])
+        ret_fields = ret_r.json().get("fields", {})
+        item_ids = ret_fields.get("Return Items", [])
         if not item_ids:
             return Response("<h2 style='font-family:sans-serif'>No items found for this return.</h2>",
                             status=404, mimetype="text/html")
@@ -3514,6 +3516,24 @@ def mark_all_received(record_id):
                 timeout=10,
             )
             updated.append(item_name)
+
+        # Received Date (Patty 2026-08-28). Returns carries no timestamp of its own for a
+        # status move, so the day the box actually arrived is stamped the first time anything
+        # records a receipt: this button, or the Ops app's write seam when CS sets a receipt
+        # status there. Never overwritten — a partial receipt keeps its original date when the
+        # rest checks in later. ET calendar day, matching the Ops app (the portal's other date
+        # stamps use UTC, which would disagree with it for a few hours every evening).
+        if not ret_fields.get("Received Date"):
+            from zoneinfo import ZoneInfo
+            from datetime import datetime as _dt_now
+            req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {
+                    "Received Date": _dt_now.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
+                }},
+                timeout=10,
+            )
 
         html = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">
