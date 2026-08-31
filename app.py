@@ -15923,6 +15923,16 @@ def _warranty_webhook_inner(record_id, trigger, c):
                 )
 
             repair_info    = _WARRANTY_REPAIR_MAP[approval]
+            # Items Received (Patty 2026-08-31): more than one belt can arrive
+            # on one warranty request. The CS app writes the count at check-in;
+            # the repair order carries that many units, which is what makes
+            # Airtable build one production batch per belt (WARR-EDC/WARR-RIG
+            # have Batch Amount 1). Absent or junk means one, as before.
+            try:
+                _items_qty = int(fields.get("Items Received") or 1)
+            except (TypeError, ValueError):
+                _items_qty = 1
+            _items_qty = max(1, min(6, _items_qty))
             today_str      = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000")
             _customer_addr = {
                 "name":       f"{first_name} {last_name}".strip(),
@@ -15945,7 +15955,7 @@ def _warranty_webhook_inner(record_id, trigger, c):
                     "sku":       repair_info["sku"],
                     "name":      repair_info["name"],
                     "productId": repair_info["productId"],
-                    "quantity":  1,
+                    "quantity":  _items_qty,
                     "unitPrice": 0,
                 }],
                 "advancedOptions": {"storeId": 241180},
