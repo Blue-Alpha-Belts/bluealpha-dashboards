@@ -8189,34 +8189,50 @@ def apply_page():
         if upgrade_rec_id:
             _ACCT_STATUS_CACHE.pop(upgrade_rec_id, None)  # status changed → refresh overlay promptly
 
-        # Upload tax exemption certificate to Airtable if provided (only for tax-exempt applicants)
-        # Strategy: upload file to tmpfiles.org → get public URL → PATCH Airtable record
+        # Upload the tax exemption certificate straight into Airtable.
+        #
+        # It used to go to tmpfiles.org first and hand Airtable that URL to
+        # fetch — but tmpfiles' upload API returns the human-facing PAGE url,
+        # not the /dl/ file url, so Airtable fetched the landing HTML and
+        # stored THAT under the customer's .pdf filename. Every certificate
+        # collected between 2026-04-24 and 2026-08-28 (29 of them) is ~2.6 KB
+        # of text/html, and tmpfiles deletes after 60 minutes, so those PDFs
+        # are unrecoverable. Found 2026-08-31 when a "View PDF" click in the
+        # ops app rendered the tmpfiles landing page.
+        #
+        # uploadAttachment is the same fix the warranty photos got in July:
+        # the bytes go in synchronously — no third party, no async fetch
+        # window, and a hard status code when it fails. 5 MB cap; a cert over
+        # that is logged and left unattached rather than routed back through a
+        # host that loses it.
+        _CERT_FIELD_ID   = "fldjhp5RMGjtSSRoS"  # Customers → Tax Exemption Certificate
+        _CERT_UPLOAD_MAX = 5 * 1024 * 1024
         if tax_exempt and cert_file and cert_file.filename and record_id:
             try:
-                file_bytes = cert_file.read()
-                filename   = cert_file.filename or "exemption-certificate"
-                # 1. Upload to tmpfiles.org to get a public URL
-                tmp_resp = req_lib.post(
-                    "https://tmpfiles.org/api/v1/upload",
-                    files={"file": (filename, file_bytes, cert_file.content_type or "application/octet-stream")},
-                    timeout=30,
-                )
-                if tmp_resp.status_code == 200:
-                    tmp_data = tmp_resp.json()
-                    tmp_url  = tmp_data.get("data", {}).get("url", "")
-                    # tmpfiles.org returns http:// — Airtable needs https://
-                    if tmp_url.startswith("http://"):
-                        tmp_url = "https://" + tmp_url[7:]
-                    if tmp_url:
-                        # 2. PATCH Airtable record with the attachment URL
-                        req_lib.patch(
-                            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{record_id}",
-                            headers={**at_headers(APPLY_WRITE_TOKEN), "Content-Type": "application/json"},
-                            json={"fields": {"Tax Exemption Certificate": [{"url": tmp_url, "filename": filename}]}},
-                            timeout=15,
-                        )
-            except Exception:
-                pass  # Don't fail the whole application if cert upload fails
+                file_bytes   = cert_file.read()
+                filename     = cert_file.filename or "exemption-certificate"
+                content_type = cert_file.content_type or "application/octet-stream"
+                if len(file_bytes) > _CERT_UPLOAD_MAX:
+                    print(f"[apply] cert NOT attached to {record_id} — {filename} is "
+                          f"{len(file_bytes)} bytes, over the {_CERT_UPLOAD_MAX} upload cap")
+                else:
+                    up_resp = req_lib.post(
+                        f"https://content.airtable.com/v0/{AIRTABLE_BASE_ID}/{record_id}/{_CERT_FIELD_ID}/uploadAttachment",
+                        headers={**at_headers(APPLY_WRITE_TOKEN), "Content-Type": "application/json"},
+                        json={"contentType": content_type,
+                              "file": base64.b64encode(file_bytes).decode("ascii"),
+                              "filename": filename},
+                        timeout=30,
+                    )
+                    if up_resp.ok:
+                        print(f"[apply] cert attached to {record_id}: {filename} "
+                              f"({len(file_bytes)} bytes, {content_type})")
+                    else:
+                        print(f"[apply] cert upload FAILED {up_resp.status_code} for "
+                              f"{record_id} / {filename}: {up_resp.text[:200]}")
+            except Exception as cert_err:
+                # Never fail the application over the certificate — but say so.
+                print(f"[apply] cert upload error for {record_id}: {cert_err}")
 
         # Send confirmation email to applicant
         threading.Thread(
