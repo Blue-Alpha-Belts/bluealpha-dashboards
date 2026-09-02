@@ -3916,9 +3916,16 @@ def send_exchange_reminder_email(to_email, first_name, stage, ship_date=None,
                 "the return label already attached. Put the original inside, seal it, and drop "
                 "it at any post office or in a USPS mailbox.\n\n"
                 "If the mailer's gone missing, reply and we'll sort you out.\n\n"
-                "And if something else is going on — the original got damaged, you'd rather "
-                "keep both, or you're not sure what we're asking for — just reply and tell us. "
-                "We'd much rather hear from you than keep sending reminders.\n\n"
+                # Must not read as "keep it, no charge" (Patty 2026-09-02). The
+                # replacement went out against the original coming back, so
+                # keeping both is a purchase — offered plainly, and without
+                # threatening a charge nobody has decided to make.
+                "We sent the replacement on the understanding that the original comes back to "
+                "us. If you've decided to keep it as well, just reply and we'll send you an "
+                "invoice for it.\n\n"
+                "And if something else is going on — the original was damaged, or you're not "
+                "sure what we're asking for — reply and tell us. We'd much rather hear from "
+                "you than keep sending reminders.\n\n"
                 "If you've already sent it and it's on its way, thank you.\n\n"
                 "Thanks,\n"
                 "Blue Alpha"
