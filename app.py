@@ -3923,9 +3923,13 @@ def send_exchange_reminder_email(to_email, first_name, stage, ship_date=None,
                 "We sent the replacement on the understanding that the original comes back to "
                 "us. If you've decided to keep it as well, just reply and we'll send you an "
                 "invoice for it.\n\n"
-                "And if something else is going on — the original was damaged, or you're not "
-                "sure what we're asking for — reply and tell us. We'd much rather hear from "
-                "you than keep sending reminders.\n\n"
+                # No worked example of "something else" (Patty 2026-09-02):
+                # naming one — damage, say — hands over an excuse the customer
+                # may not otherwise have reached for. The invitation is open;
+                # let them supply their own reason.
+                "And if something else is going on, or you're not sure what we're asking for, "
+                "just reply and tell us. We'd much rather hear from you than keep sending "
+                "reminders.\n\n"
                 "If you've already sent it and it's on its way, thank you.\n\n"
                 "Thanks,\n"
                 "Blue Alpha"
