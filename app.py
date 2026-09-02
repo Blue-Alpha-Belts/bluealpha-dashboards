@@ -3864,6 +3864,248 @@ def resend_return_label(record_id):
                         status=500, mimetype="application/json")
 
 
+# ── Exchange reminders (Patty 2026-09-02) ────────────────────────────────────
+# A size exchange ships with a bubble mailer that already has the return label
+# stuck to it, so the customer's whole job is: belt in, seal, drop off. They do
+# it — 292 of 293 settled June/July labels came back, 0.3% abandonment — but
+# slowly: median 8 days, tail out to 79. So the CS app chases the stragglers at
+# day 14 and day 25 and these send the mail.
+#
+# Nothing is ever voided. An exchange label stays live however long the
+# customer takes, which is why neither template mentions an expiry (the return
+# label email does, because those really are voided on day 27).
+#
+# Both endpoints take a CALLER-CHOSEN recipient, so like /api/send-invoice they
+# require the X-BA-CS-Key shared secret. Without it they are an open relay for
+# anything that can reach the URL.
+
+def _exchange_item_phrase(item_name):
+    """What to call the belt. Several lines on the -E order, or none named, and
+    the CS app sends null — stay generic rather than guess."""
+    name = (item_name or "").strip()
+    return name if name else "belt"
+
+
+def send_exchange_reminder_email(to_email, first_name, item_name, stage, ship_date=None,
+                                 original_order=""):
+    """Day-14 or day-25 nudge for an exchange whose original has not come back.
+    Returns (success, error_message)."""
+    if not SENDGRID_API_KEY:
+        return False, "SendGrid not configured"
+    try:
+        first = (first_name or "").strip() or "there"
+        item = _exchange_item_phrase(item_name)
+        when = ""
+        if ship_date:
+            try:
+                from datetime import datetime
+                when = datetime.strptime(str(ship_date)[:10], "%Y-%m-%d").strftime("%B %-d")
+            except Exception:
+                try:
+                    from datetime import datetime
+                    when = datetime.strptime(str(ship_date)[:10], "%Y-%m-%d").strftime("%B %d").replace(" 0", " ")
+                except Exception:
+                    when = ""
+
+        if int(stage) >= 25:
+            subject = f"Still waiting on your original {item}"
+            if original_order:
+                subject += f" — order {original_order}"
+            body = (
+                f"Hi {first},\n\n"
+                f"We still haven't seen your original {item} come back. It's been about three "
+                "weeks since your replacement shipped, so we wanted to check in.\n\n"
+                "Everything you need was in the box with your new belt — a bubble mailer with "
+                "the return label already attached. Put the original inside, seal it, and drop "
+                "it at any post office or in a USPS mailbox.\n\n"
+                "If the mailer's gone missing, reply and we'll sort you out.\n\n"
+                "And if something else is going on — the original got damaged, you'd rather "
+                "keep both, or you're not sure what we're asking for — just reply and tell us. "
+                "We'd much rather hear from you than keep sending reminders.\n\n"
+                "If you've already sent it and it's on its way, thank you.\n\n"
+                "Thanks,\n"
+                "Blue Alpha"
+            )
+        else:
+            subject = f"Don't forget to send your original {item} back"
+            went_out = f"went out on {when}" if when else "has shipped"
+            body = (
+                f"Hi {first},\n\n"
+                f"Your new {item} {went_out}, so you should have it by now — we hope the fit "
+                "is right this time.\n\n"
+                "Just a reminder to send the original one back. We included a bubble mailer "
+                "with the return label already on it — put the original belt inside, seal it "
+                "up, and drop it at any post office or in a USPS mailbox.\n\n"
+                "Already sent it? Thank you — you can ignore this.\n\n"
+                "Can't find the mailer? Just reply and we'll get you a new one.\n\n"
+                "Thanks!\n"
+                "Blue Alpha"
+            )
+
+        actual_to = TEST_EMAIL_OVERRIDE or to_email
+        r = req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": actual_to}]}],
+                "from": {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                "reply_to": {"email": CS_FROM_EMAIL},
+                "subject": subject,
+                "content": [{"type": "text/plain", "value": body}],
+            },
+            timeout=15,
+        )
+        if r.status_code == 202:
+            return True, None
+        return False, f"SendGrid {r.status_code}: {r.text}"
+    except Exception as e:
+        return False, str(e)
+
+
+def send_exchange_label_email(to_email, first_name, item_name, exchange_order, label_pdf_b64):
+    """Re-send an exchange return label to a customer who lost the mailer.
+
+    It is the SAME label — exchange labels are never voided — so the tracking
+    number does not change and no postage is bought. They will need their own
+    packaging this time, which the copy says plainly."""
+    if not SENDGRID_API_KEY:
+        return False, "SendGrid not configured"
+    try:
+        first = (first_name or "").strip() or "there"
+        item = _exchange_item_phrase(item_name)
+        body = (
+            f"Hi {first},\n\n"
+            f"Here's your return label again for the original {item}.\n\n"
+            "Print it and tape it to any box or padded envelope, then drop it at any post "
+            "office or in a USPS mailbox. Postage is already paid.\n\n"
+            "If the original bubble mailer we sent turns up, that label still works too — "
+            "it's the same one, so use whichever is easier.\n\n"
+            "Thanks!\n"
+            "Blue Alpha"
+        )
+        actual_to = TEST_EMAIL_OVERRIDE or to_email
+        r = req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": actual_to}]}],
+                "from": {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                "reply_to": {"email": CS_FROM_EMAIL},
+                "subject": f"Your Blue Alpha return label — exchange {exchange_order}",
+                "content": [{"type": "text/plain", "value": body}],
+                "attachments": [{
+                    "content": label_pdf_b64,
+                    "type": "application/pdf",
+                    "filename": f"return-label-{exchange_order}.pdf",
+                    "disposition": "attachment",
+                }],
+            },
+            timeout=15,
+        )
+        if r.status_code == 202:
+            return True, None
+        return False, f"SendGrid {r.status_code}: {r.text}"
+    except Exception as e:
+        return False, str(e)
+
+
+@app.route("/api/send-exchange-reminder/<tracking>", methods=["POST"])
+def send_exchange_reminder(tracking):
+    """Day-14 / day-25 exchange reminder (CS app job, Patty 2026-09-02).
+
+    Body: {"stage": 14|25, "email": ..., "firstName": ..., "itemName": ...,
+           "shipDate": "YYYY-MM-DD", "originalOrder": ..., "exchangeOrder": ...}
+
+    The CS app decides WHO gets chased — it re-reads the carrier's tracking
+    events live and only sends when the label has never been scanned. This
+    endpoint just renders and sends."""
+    if CS_INVOICE_SHARED_SECRET and request.headers.get("X-BA-CS-Key", "") != CS_INVOICE_SHARED_SECRET:
+        return Response(json.dumps({"ok": False, "error": "Forbidden"}),
+                        status=403, mimetype="application/json")
+    if not SENDGRID_API_KEY:
+        return Response(json.dumps({"ok": False, "error": "Email not configured"}),
+                        status=500, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    to_email = (body.get("email") or "").strip()
+    if not to_email or "@" not in to_email:
+        return Response(json.dumps({"ok": False, "error": "Valid recipient email required"}),
+                        status=400, mimetype="application/json")
+    try:
+        stage = int(body.get("stage") or 14)
+    except (TypeError, ValueError):
+        stage = 14
+    if stage not in (14, 25):
+        return Response(json.dumps({"ok": False, "error": f"Unknown reminder stage {stage}"}),
+                        status=400, mimetype="application/json")
+    sent, err = send_exchange_reminder_email(
+        to_email=to_email,
+        first_name=body.get("firstName"),
+        item_name=body.get("itemName"),
+        stage=stage,
+        ship_date=body.get("shipDate"),
+        original_order=(body.get("originalOrder") or ""),
+    )
+    if not sent:
+        return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
+                        status=500, mimetype="application/json")
+    print(f"[exchange-reminder] day-{stage} sent to {to_email} for {tracking}", flush=True)
+    return Response(json.dumps({"ok": True, "sentTo": to_email}),
+                    status=200, mimetype="application/json")
+
+
+@app.route("/api/resend-exchange-label/<tracking>", methods=["POST"])
+def resend_exchange_label(tracking):
+    """Email an exchange customer their return label again (CS app button).
+
+    Body: {"email": ..., "firstName": ..., "itemName": ..., "exchangeOrder": ...,
+           "labelPdf": "https://api.shipstation.com/v2/downloads/..."}
+
+    labelPdf is ShipStation's signed download link for the label that already
+    exists; it fetches without an API key. Nothing new is bought and the
+    tracking number does not change."""
+    if CS_INVOICE_SHARED_SECRET and request.headers.get("X-BA-CS-Key", "") != CS_INVOICE_SHARED_SECRET:
+        return Response(json.dumps({"ok": False, "error": "Forbidden"}),
+                        status=403, mimetype="application/json")
+    if not SENDGRID_API_KEY:
+        return Response(json.dumps({"ok": False, "error": "Email not configured"}),
+                        status=500, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    to_email = (body.get("email") or "").strip()
+    pdf_url = (body.get("labelPdf") or "").strip()
+    exchange_order = (body.get("exchangeOrder") or tracking).strip()
+    if not to_email or "@" not in to_email:
+        return Response(json.dumps({"ok": False, "error": "Valid recipient email required"}),
+                        status=400, mimetype="application/json")
+    # Only ShipStation's own download host, so a caller cannot make this fetch
+    # and mail out an arbitrary file.
+    if not pdf_url.startswith("https://api.shipstation.com/v2/downloads/"):
+        return Response(json.dumps({"ok": False, "error": "labelPdf must be a ShipStation download URL"}),
+                        status=400, mimetype="application/json")
+    try:
+        got = req_lib.get(pdf_url, timeout=20)
+        if got.status_code != 200 or not got.content:
+            return Response(json.dumps({"ok": False, "error": f"Label PDF fetch failed ({got.status_code})"}),
+                            status=502, mimetype="application/json")
+        import base64 as _b64
+        pdf_b64 = _b64.b64encode(got.content).decode("ascii")
+        sent, err = send_exchange_label_email(
+            to_email=to_email,
+            first_name=body.get("firstName"),
+            item_name=body.get("itemName"),
+            exchange_order=exchange_order,
+            label_pdf_b64=pdf_b64,
+        )
+        if not sent:
+            return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
+                            status=500, mimetype="application/json")
+        print(f"[resend-exchange-label] label re-sent to {to_email} for {exchange_order}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": to_email}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 @app.route("/api/send-invoice/<order_number>", methods=["POST"])
 def send_invoice(order_number):
     """Email a website order's PDF invoice (CS app button, Patty 2026-08-21).
