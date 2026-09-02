@@ -3879,14 +3879,12 @@ def resend_return_label(record_id):
 # require the X-BA-CS-Key shared secret. Without it they are an open relay for
 # anything that can reach the URL.
 
-def _exchange_item_phrase(item_name):
-    """What to call the belt. Several lines on the -E order, or none named, and
-    the CS app sends null — stay generic rather than guess."""
-    name = (item_name or "").strip()
-    return name if name else "belt"
-
-
-def send_exchange_reminder_email(to_email, first_name, item_name, stage, ship_date=None,
+# Never name the specific belt (Patty 2026-09-02). The only item name available
+# is off the -E order, which is the REPLACEMENT we sent — not the original we
+# are asking for. On an order with more than one belt the customer may be
+# returning one and keeping another, so naming a product risks asking for the
+# wrong thing. The order number is unambiguous; "belt" is always true.
+def send_exchange_reminder_email(to_email, first_name, stage, ship_date=None,
                                  original_order=""):
     """Day-14 or day-25 nudge for an exchange whose original has not come back.
     Returns (success, error_message)."""
@@ -3894,7 +3892,8 @@ def send_exchange_reminder_email(to_email, first_name, item_name, stage, ship_da
         return False, "SendGrid not configured"
     try:
         first = (first_name or "").strip() or "there"
-        item = _exchange_item_phrase(item_name)
+        order_bit = f" — order {original_order}" if original_order else ""
+        for_order = f" from order {original_order}" if original_order else ""
         when = ""
         if ship_date:
             try:
@@ -3908,13 +3907,11 @@ def send_exchange_reminder_email(to_email, first_name, item_name, stage, ship_da
                     when = ""
 
         if int(stage) >= 25:
-            subject = f"Still waiting on your original {item}"
-            if original_order:
-                subject += f" — order {original_order}"
+            subject = f"Still waiting on your original belt{order_bit}"
             body = (
                 f"Hi {first},\n\n"
-                f"We still haven't seen your original {item} come back. It's been about three "
-                "weeks since your replacement shipped, so we wanted to check in.\n\n"
+                f"We still haven't seen the original belt{for_order} come back. It's been about "
+                "three weeks since your replacement shipped, so we wanted to check in.\n\n"
                 "Everything you need was in the box with your new belt — a bubble mailer with "
                 "the return label already attached. Put the original inside, seal it, and drop "
                 "it at any post office or in a USPS mailbox.\n\n"
@@ -3927,13 +3924,13 @@ def send_exchange_reminder_email(to_email, first_name, item_name, stage, ship_da
                 "Blue Alpha"
             )
         else:
-            subject = f"Don't forget to send your original {item} back"
+            subject = f"Don't forget to send your original belt back{order_bit}"
             went_out = f"went out on {when}" if when else "has shipped"
             body = (
                 f"Hi {first},\n\n"
-                f"Your new {item} {went_out}, so you should have it by now — we hope the fit "
-                "is right this time.\n\n"
-                "Just a reminder to send the original one back. We included a bubble mailer "
+                f"Your replacement{for_order} {went_out}, so you should have it by now — we "
+                "hope the fit is right this time.\n\n"
+                "Just a reminder to send the original belt back. We included a bubble mailer "
                 "with the return label already on it — put the original belt inside, seal it "
                 "up, and drop it at any post office or in a USPS mailbox.\n\n"
                 "Already sent it? Thank you — you can ignore this.\n\n"
@@ -3962,7 +3959,8 @@ def send_exchange_reminder_email(to_email, first_name, item_name, stage, ship_da
         return False, str(e)
 
 
-def send_exchange_label_email(to_email, first_name, item_name, exchange_order, label_pdf_b64):
+def send_exchange_label_email(to_email, first_name, exchange_order, label_pdf_b64,
+                              original_order=""):
     """Re-send an exchange return label to a customer who lost the mailer.
 
     It is the SAME label — exchange labels are never voided — so the tracking
@@ -3972,10 +3970,10 @@ def send_exchange_label_email(to_email, first_name, item_name, exchange_order, l
         return False, "SendGrid not configured"
     try:
         first = (first_name or "").strip() or "there"
-        item = _exchange_item_phrase(item_name)
+        for_order = f" from order {original_order}" if original_order else ""
         body = (
             f"Hi {first},\n\n"
-            f"Here's your return label again for the original {item}.\n\n"
+            f"Here's your return label again for the original belt{for_order}.\n\n"
             "Print it and tape it to any box or padded envelope, then drop it at any post "
             "office or in a USPS mailbox. Postage is already paid.\n\n"
             "If the original bubble mailer we sent turns up, that label still works too — "
@@ -3991,7 +3989,7 @@ def send_exchange_label_email(to_email, first_name, item_name, exchange_order, l
                 "personalizations": [{"to": [{"email": actual_to}]}],
                 "from": {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
                 "reply_to": {"email": CS_FROM_EMAIL},
-                "subject": f"Your Blue Alpha return label — exchange {exchange_order}",
+                "subject": f"Your Blue Alpha return label — order {original_order or exchange_order}",
                 "content": [{"type": "text/plain", "value": body}],
                 "attachments": [{
                     "content": label_pdf_b64,
@@ -4013,7 +4011,7 @@ def send_exchange_label_email(to_email, first_name, item_name, exchange_order, l
 def send_exchange_reminder(tracking):
     """Day-14 / day-25 exchange reminder (CS app job, Patty 2026-09-02).
 
-    Body: {"stage": 14|25, "email": ..., "firstName": ..., "itemName": ...,
+    Body: {"stage": 14|25, "email": ..., "firstName": ...,
            "shipDate": "YYYY-MM-DD", "originalOrder": ..., "exchangeOrder": ...}
 
     The CS app decides WHO gets chased — it re-reads the carrier's tracking
@@ -4040,7 +4038,6 @@ def send_exchange_reminder(tracking):
     sent, err = send_exchange_reminder_email(
         to_email=to_email,
         first_name=body.get("firstName"),
-        item_name=body.get("itemName"),
         stage=stage,
         ship_date=body.get("shipDate"),
         original_order=(body.get("originalOrder") or ""),
@@ -4057,7 +4054,7 @@ def send_exchange_reminder(tracking):
 def resend_exchange_label(tracking):
     """Email an exchange customer their return label again (CS app button).
 
-    Body: {"email": ..., "firstName": ..., "itemName": ..., "exchangeOrder": ...,
+    Body: {"email": ..., "firstName": ..., "exchangeOrder": ..., "originalOrder": ...,
            "labelPdf": "https://api.shipstation.com/v2/downloads/..."}
 
     labelPdf is ShipStation's signed download link for the label that already
@@ -4091,9 +4088,9 @@ def resend_exchange_label(tracking):
         sent, err = send_exchange_label_email(
             to_email=to_email,
             first_name=body.get("firstName"),
-            item_name=body.get("itemName"),
             exchange_order=exchange_order,
             label_pdf_b64=pdf_b64,
+            original_order=(body.get("originalOrder") or ""),
         )
         if not sent:
             return Response(json.dumps({"ok": False, "error": f"Email failed: {err}"}),
