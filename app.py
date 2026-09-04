@@ -4220,6 +4220,120 @@ def send_invoice(order_number):
                         status=500, mimetype="application/json")
 
 
+@app.route("/api/send-po", methods=["POST"])
+def send_po():
+    """Email a purchase order to its supplier (Blue Alpha Ops app, Patty 2026-09-03:
+    "need ability to email po once it's finalized").
+
+    The PDF is built by the ops app itself and arrives here base64-encoded.
+    It has to work that way: a PO's "Open PO" field in Airtable is a BUTTON
+    onto a page-designer view (airtable.com/app.../tbl...?blocks=...&rec=...)
+    that only renders for a logged-in Airtable collaborator, so nothing
+    server-side can fetch it and attach it. This endpoint is purely the
+    SendGrid channel — it does not touch Airtable, and the ops app stamps the
+    PO's Date Emailed itself once this returns ok.
+
+    Recipients are caller-chosen (the supplier's main contact plus whoever
+    else purchasing adds), so like /api/send-invoice this REQUIRES the
+    X-BA-CS-Key shared secret — without it it would be an open relay for
+    anything that can reach the URL.
+
+    Body: {"po_number", "to": [addresses], "subject", "message" (plain text),
+    "pdf_b64", "filename"}.
+    """
+    if CS_INVOICE_SHARED_SECRET and request.headers.get("X-BA-CS-Key", "") != CS_INVOICE_SHARED_SECRET:
+        return Response(json.dumps({"ok": False, "error": "Forbidden"}),
+                        status=403, mimetype="application/json")
+    if not SENDGRID_API_KEY:
+        return Response(json.dumps({"ok": False, "error": "Email not configured"}),
+                        status=500, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    po_number = (body.get("po_number") or "").strip()
+    subject   = (body.get("subject") or "").strip()
+    message   = (body.get("message") or "").strip()
+    pdf_b64   = (body.get("pdf_b64") or "").strip()
+    filename  = (body.get("filename") or "purchase-order.pdf").strip()
+    raw_to    = body.get("to") or []
+    if isinstance(raw_to, str):
+        raw_to = [raw_to]
+    recipients = [str(e).strip() for e in raw_to if str(e).strip()]
+    if not recipients or any("@" not in e for e in recipients):
+        return Response(json.dumps({"ok": False, "error": "Valid recipient email(s) required"}),
+                        status=400, mimetype="application/json")
+    if len(recipients) > 8:
+        return Response(json.dumps({"ok": False, "error": "At most 8 recipients"}),
+                        status=400, mimetype="application/json")
+    if not subject or not message:
+        return Response(json.dumps({"ok": False, "error": "Subject and message required"}),
+                        status=400, mimetype="application/json")
+    # SendGrid's hard ceiling is 30 MB for the whole message; a PO PDF is a
+    # few KB, so anything near the cap is a bug upstream, not a real PO.
+    if not pdf_b64 or len(pdf_b64) > 8_000_000:
+        return Response(json.dumps({"ok": False, "error": "Missing or oversized PDF"}),
+                        status=400, mimetype="application/json")
+    try:
+        import html as _html
+        actual_to = [TEST_EMAIL_OVERRIDE] if TEST_EMAIL_OVERRIDE else recipients
+        # The message is composed by purchasing in the ops app, so it is
+        # plain text: escape it and keep the line breaks.
+        safe = _html.escape(message).replace("\r\n", "\n").replace("\n", "<br>")
+        html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1B2438;padding:24px 36px;">
+          <span style="font-family:Arial;font-size:20px;font-weight:800;color:#fff;letter-spacing:2px;">BLUE ALPHA</span>
+        </td></tr>
+        <tr><td style="padding:32px 36px;">
+          <p style="color:#6b7a8d;font-size:11px;letter-spacing:1px;margin:0 0 14px;">PURCHASE ORDER {_html.escape(po_number)}</p>
+          <p style="color:#1a2633;font-size:14px;line-height:1.7;margin:0;">{safe}</p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
+          <p style="color:#6b7a8d;font-size:11px;margin:0;">Blue Alpha &bull; 35 Andrew St, Newnan, GA 30263 &bull; purchasing@bluealpha.us</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+        sr = req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": e} for e in actual_to]}],
+                # POs come from purchasing@ (Patty 2026-09-03) so supplier
+                # replies — confirmations, lead times, invoices — land in the
+                # purchasing inbox. Same authenticated domain as the info@ and
+                # orders@ senders, so SendGrid needs no extra setup.
+                "from": {"email": "purchasing@bluealpha.us", "name": "Blue Alpha Purchasing"},
+                "reply_to": {"email": "purchasing@bluealpha.us", "name": "Blue Alpha Purchasing"},
+                "subject": subject,
+                "content": [
+                    {"type": "text/plain", "value": message},
+                    {"type": "text/html", "value": html_body},
+                ],
+                "attachments": [{
+                    "content": pdf_b64,
+                    "type": "application/pdf",
+                    "filename": filename if filename.lower().endswith(".pdf") else filename + ".pdf",
+                    "disposition": "attachment",
+                }],
+            },
+            timeout=20,
+        )
+        if sr.status_code not in (200, 202):
+            print(f"[send-po] {po_number}: SendGrid {sr.status_code}: {sr.text[:200]}", flush=True)
+            return Response(json.dumps({"ok": False, "error": f"SendGrid {sr.status_code}: {sr.text[:200]}"}),
+                            status=500, mimetype="application/json")
+        print(f"[send-po] {po_number} emailed to {', '.join(actual_to)}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": recipients}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 @app.route("/api/resend-warranty-label/<record_id>", methods=["POST"])
 def resend_warranty_label(record_id):
     """Re-send the warranty return-label email (CS app button). Label PDFs are
