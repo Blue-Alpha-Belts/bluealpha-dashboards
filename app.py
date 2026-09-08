@@ -3608,6 +3608,13 @@ def return_received_webhook(record_id):
             sku      = (f.get("SKU") or "").strip()
             name     = f.get("Item Name", sku)
 
+            # Unsellable came back damaged/used — received and refunded, but
+            # never restocked (Patty 2026-09-08).
+            if f.get("Unsellable"):
+                results.append({"item": name, "ok": True,
+                    "message": "Skipped — flagged unsellable"})
+                continue
+
             if not received or qty <= 0 or not sku:
                 results.append({"item": name, "ok": False,
                     "reason": "Skipped — not received, zero qty, or no SKU"})
@@ -3638,7 +3645,11 @@ def cron_return_inventory():
 
     try:
         # Fetch all received Return Items that haven't been added to inventory yet
-        filter_formula = "AND({Received}=TRUE(), NOT({Inventory Added}=TRUE()), {Qty Received}>0)"
+        # Unsellable items are received and refunded like any other, but never go
+        # back into stock (Patty 2026-09-08) — CS ticks the box on the Ops app
+        # receiving form.
+        filter_formula = ("AND({Received}=TRUE(), NOT({Inventory Added}=TRUE()), "
+                          "{Qty Received}>0, NOT({Unsellable}=TRUE()))")
         all_items = []
         offset = None
         while True:
@@ -3747,6 +3758,13 @@ def refunded_webhook(record_id):
             sku  = (f.get("SKU") or "").strip()
             name = f.get("Item Name", sku)
             qty  = int(f.get("Qty Submitted") or 0)
+
+            # Unsellable came back damaged/used — refunded, never restocked
+            # (Patty 2026-09-08).
+            if f.get("Unsellable"):
+                results.append({"item": name, "sku": sku, "ok": True,
+                    "message": "Skipped — flagged unsellable"})
+                continue
 
             # Skip if already adjusted (idempotency guard)
             if f.get("Inventory Added"):
