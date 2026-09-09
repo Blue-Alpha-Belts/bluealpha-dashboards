@@ -18376,13 +18376,30 @@ def _wps_monthly_worker():
     from zoneinfo import ZoneInfo
     from datetime import datetime as _dt, timedelta as _td
     _t.sleep(45)
+    # Only generate inside the 7 AM ET hour, once per day, and not within five
+    # minutes of this process starting.
+    #
+    # This loop used to run a generation pass 45 seconds after EVERY container
+    # start, whatever the time. That is how FATTAC's August bill was created
+    # twice: a deploy on 2026-09-01 left the outgoing container's 7 AM pass and
+    # the incoming container's startup pass running in the same second, both
+    # found no draft, and both created one — two IN-0536 records at $220.96,
+    # and approving both would have billed FATTAC twice. Same guard the
+    # warranty scan has carried for exactly this reason. Missing a day is safe:
+    # this worker is a catch-up by design and picks the month up tomorrow.
+    _last_run_day = None
+    _started = _dt.now(ZoneInfo("America/New_York"))
     while True:
         try:
             now_et = _dt.now(ZoneInfo("America/New_York"))
+            due = (now_et.hour == 7
+                   and _last_run_day != now_et.date()
+                   and (now_et - _started).total_seconds() >= 300)
             prior = (now_et.date().replace(day=1) - _td(days=1)).strftime("%Y-%m")
             # Only months after the manually-created May–July 2026 catch-up set,
             # and never before the fulfillment-basis cutover.
-            if prior >= "2026-08":
+            if due and prior >= "2026-08":
+                _last_run_day = now_et.date()
                 partners = [
                     ("wps", bool(WPS_SHIPSTATION_V2_KEY), _wps_find_draft, _wps_create_draft, _wps_update_stats),
                     ("fattac", bool(FATTAC_SHIPSTATION_KEY and FATTAC_SHIPSTATION_SECRET),
@@ -18408,6 +18425,14 @@ def _wps_monthly_worker():
             from zoneinfo import ZoneInfo as _ZI
             from datetime import datetime as _dt2, timedelta as _td2
             now_et = _dt2.now(_ZI("America/New_York"))
+            # Still inside the 7 AM hour with today's pass not yet done? That is
+            # the startup delay holding it back (a container that came up just
+            # before 7). Look again in five minutes rather than writing the day
+            # off — otherwise a deploy at 06:58 on the 1st would push the
+            # month's draft to the 2nd.
+            if now_et.hour == 7 and _last_run_day != now_et.date():
+                _t.sleep(300)
+                continue
             next_run = now_et.replace(hour=7, minute=0, second=0, microsecond=0)
             if now_et >= next_run:
                 next_run += _td2(days=1)
