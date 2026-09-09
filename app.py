@@ -13890,6 +13890,13 @@ def admin_convert_to_invoice(record_id):
         def _first(lst):
             return lst[0] if isinstance(lst, list) and lst else (lst or "")
         bill_email = _first(so_fields.get("Bill-To Contact Email (from Customer)", []))
+        # Where the invoice EMAIL goes, which CS can retype on the convert page
+        # (Patty 2026-09-09: an editable recipient wherever we send email).
+        # Staff-session-only endpoint, so no extra gate is needed here. It moves
+        # the document, not the account: bill_email still identifies the Stripe
+        # customer below, so the payment records stay tied to the billing
+        # contact on the customer record.
+        email_to = (body.get("email") or "").strip() or bill_email
         bill_name  = _first(so_fields.get("Bill-To Contact Name (from Customer)", []))
         org_name   = _first(so_fields.get("Bill-To Org Name (from Customer)", []))
         customer_ids = so_fields.get("Customer", [])
@@ -13985,8 +13992,9 @@ def admin_convert_to_invoice(record_id):
 
         total = round(sum(i["qty"] * i["unit_price"] for i in li_items_for_email), 2)
 
-        # Send invoice email with PDF attachment
-        if bill_email:
+        # Send invoice email with PDF attachment (to whoever CS named, falling
+        # back to the billing contact)
+        if email_to:
             try:
                 ship_city  = _first(so_fields.get("Customer City (from Customer)", []))
                 ship_state = _first(so_fields.get("Customer State (from Customer)", []))
@@ -14013,7 +14021,7 @@ def admin_convert_to_invoice(record_id):
                     "stripeAchUrl": "",
                 }
                 inv_pdf_bytes = _build_invoice_pdf_bytes(inv_dict)
-                send_invoice_email(bill_email, bill_name, org_name, so_number, inv_number,
+                send_invoice_email(email_to, bill_name, org_name, so_number, inv_number,
                                    li_items_for_email, total, tracking, ship_date=ship_date,
                                    pdf_bytes=inv_pdf_bytes)
             except Exception as email_err:
