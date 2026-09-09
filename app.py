@@ -5754,6 +5754,106 @@ def send_quote_accepted_email(to_email, to_name, org_name, qu_number, so_number)
         print(f"[send_quote_accepted_email] failed: {e}")
 
 
+def send_order_email(to_email, to_name, org_name, doc_number, is_order,
+                     total, pdf_bytes=None, note="", expiry_date=""):
+    """Email a Quote or Sales Order to the customer with its PDF attached.
+
+    The quote/SO twin of send_invoice_email, added 2026-09-09 for the ops app's
+    Orders page. Unlike send_quote_email (fire-and-forget inside create-quote,
+    and worded as a quote even when it carries an SO), this one RAISES on a
+    SendGrid failure: it sits behind a button someone pressed, so "sent" has to
+    mean sent. Returns the address it actually went to, which is
+    TEST_EMAIL_OVERRIDE when that is set.
+    """
+    from html import escape as html_escape
+    if not SENDGRID_API_KEY:
+        raise RuntimeError("SendGrid is not configured")
+    actual_to  = TEST_EMAIL_OVERRIDE or to_email
+    first_name = to_name.split()[0] if to_name else "there"
+    doc_label  = "Sales Order" if is_order else "Quote"
+    subject    = f"Blue Alpha {doc_label} {doc_number}"
+    intro      = (f"Your sales order is attached as a PDF. Our team will be in touch about "
+                  f"shipping and invoicing."
+                  if is_order else
+                  f"Your quote is attached as a PDF. Let us know if you'd like anything changed.")
+    note_block = ""
+    if note:
+        note_block = (f'<p style="color:#1a2633;font-size:15px;line-height:1.6;margin:0 0 20px;'
+                      f'white-space:pre-wrap;">{html_escape(note)}</p>')
+    expiry_row = ""
+    if expiry_date and not is_order:
+        expiry_row = (f'<tr><td style="padding:4px 0;color:#6b7a8d;font-size:13px;">Expires</td>'
+                      f'<td style="padding:4px 0;color:#1a2633;font-size:13px;">{expiry_date}</td></tr>')
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1B2438;padding:28px 40px;">
+          <span style="font-family:Arial,Helvetica,sans-serif;font-size:22px;font-weight:800;color:#ffffff;letter-spacing:2px;">BLUE ALPHA</span>
+        </td></tr>
+        <tr><td style="padding:36px 40px;">
+          <p style="color:#1a2633;font-size:16px;margin:0 0 8px;">Hi {html_escape(first_name)},</p>
+          <p style="color:#6b7a8d;font-size:15px;line-height:1.6;margin:0 0 20px;">{intro}</p>
+          {note_block}
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;border:1px solid #dde3ea;border-radius:8px;margin-bottom:28px;">
+            <tr><td style="padding:20px 24px;">
+              <table cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding:4px 0;color:#6b7a8d;font-size:13px;width:110px;">Organization</td>
+                  <td style="padding:4px 0;color:#1a2633;font-size:13px;">{html_escape(org_name)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;color:#6b7a8d;font-size:13px;">{doc_label}</td>
+                  <td style="padding:4px 0;color:#1a2633;font-size:13px;font-weight:700;">{html_escape(doc_number)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 0;color:#6b7a8d;font-size:13px;">Total</td>
+                  <td style="padding:4px 0;color:#1a2633;font-size:13px;">${total:,.2f}</td>
+                </tr>
+                {expiry_row}
+              </table>
+            </td></tr>
+          </table>
+          <p style="color:#6b7a8d;font-size:13px;margin:0;line-height:1.6;">
+            Questions? Contact us at <a href="mailto:orders@bluealpha.us" style="color:#1B2438;">orders@bluealpha.us</a> or 678-961-3304.
+          </p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:20px 40px;text-align:center;">
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+    payload = {
+        "personalizations": [{"to": [{"email": actual_to, "name": to_name}]}],
+        "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+        "subject": subject,
+        "content": [{"type": "text/html", "value": html_body}],
+    }
+    if pdf_bytes:
+        import base64
+        payload["attachments"] = [{
+            "content":     base64.b64encode(pdf_bytes).decode("utf-8"),
+            "type":        "application/pdf",
+            "filename":    f"{doc_number}.pdf",
+            "disposition": "attachment",
+        }]
+    sg_r = req_lib.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+        json=payload, timeout=30,
+    )
+    print(f"[send_order_email] {doc_number} to={actual_to} status={sg_r.status_code} body={sg_r.text[:200]}")
+    if sg_r.status_code >= 300:
+        raise RuntimeError(f"SendGrid rejected the message ({sg_r.status_code})")
+    return actual_to
+
+
 def _invoice_payment_buttons(cc_url, ach_url):
     """Return HTML payment button block, or empty string if no URLs."""
     if not cc_url and not ach_url:
@@ -6116,6 +6216,9 @@ def _fetch_quote_data(record_id):
         "total":         round(subtotal + tax_amount, 2),
         "invRecordId":   inv_record_id,
         "invNumber":     inv_number,
+        # Quote vs Sales Order — added 2026-09-09 so /api/admin/email-order can
+        # word itself correctly without re-reading the record.
+        "orderType":     order_type,
         # Internal: linked Customer record IDs, used by callers for ownership checks
         "_customerIds":  customer_ids,
     }
@@ -6894,13 +6997,23 @@ def create_quote():
             except Exception as pdf_err:
                 print(f"[create_quote] PDF upload error: {pdf_err}")
 
-        # 6. Send email with PDF attachment
-        try:
-            quote_data = _fetch_quote_data(mo_record_id)
-            send_quote_email(email, contact_name or org_name, org_name,
-                             quote_number, mo_record_id, expiry_str, quote_data=quote_data)
-        except Exception as email_err:
-            print(f"[create_quote] email failed: {email_err}")
+        # 6. Send email with PDF attachment.
+        # sendEmail (2026-09-09) is honoured for STAFF sessions only: the ops
+        # app creates sales orders here with the customer email off by default
+        # (Patty 2026-09-09 — created quietly, mailed on purpose with the Orders
+        # page's Email button). Customer-facing submissions are unchanged: they
+        # always get their copy.
+        _send_email = True
+        if _is_staff:
+            _flag = data.get("sendEmail")
+            _send_email = True if _flag is None else bool(_flag)
+        if _send_email:
+            try:
+                quote_data = _fetch_quote_data(mo_record_id)
+                send_quote_email(email, contact_name or org_name, org_name,
+                                 quote_number, mo_record_id, expiry_str, quote_data=quote_data)
+            except Exception as email_err:
+                print(f"[create_quote] email failed: {email_err}")
 
         # Bust quotes cache for this customer
         _QUOTES_CACHE.pop(cust_id, None)
@@ -14978,6 +15091,62 @@ def admin_resend_invoice(record_id):
                            stripe_cc_url=inv_dict.get("stripeCcUrl", ""),
                            stripe_ach_url=inv_dict.get("stripeAchUrl", ""))
         return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/email-order/<record_id>", methods=["POST", "OPTIONS"])
+def admin_email_order(record_id):
+    """Email a Quote or Sales Order to the customer, its PDF attached.
+
+    The quote/SO twin of .../invoices/<id>/resend, built 2026-09-09 for the ops
+    app's Orders page (Patty: "email orders to customers"). Until now the only
+    quote/SO email that ever left here was the one create-quote fires the moment
+    the document is created — there was no way to send it again, to send it to a
+    different address, or to send one at all for a document created elsewhere.
+
+    Body (all optional): {"email": "override@…", "note": "shown above the details"}.
+    Answers {"ok": true, "sentTo": …, "docNumber": …} — sentTo is where the mail
+    ACTUALLY went, which is TEST_EMAIL_OVERRIDE whenever that is set.
+    """
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        data = _fetch_quote_data(record_id)
+        if not data:
+            return Response(json.dumps({"error": "No quote or sales order with that record id "
+                                                 "(invoices have their own resend endpoint)"}),
+                            status=404, headers=c, mimetype="application/json")
+        body     = request.get_json(silent=True) or {}
+        cust     = data.get("customer", {}) or {}
+        to_email = (body.get("email") or "").strip() or cust.get("email", "") or cust.get("billToEmail", "")
+        if not to_email:
+            return Response(json.dumps({"error": "This order has no contact email — add one to the "
+                                                 "customer record or pass an address."}),
+                            status=400, headers=c, mimetype="application/json")
+        is_order = data.get("orderType", "") == "Sales Order"
+        try:
+            pdf_bytes = _build_quote_pdf_bytes(data, doc_type="order" if is_order else "quote")
+        except Exception as pdf_err:
+            # No silent send without the document: the PDF IS the email.
+            return Response(json.dumps({"error": f"Could not build the PDF: {pdf_err}"}),
+                            status=500, headers=c, mimetype="application/json")
+        sent_to = send_order_email(
+            to_email,
+            cust.get("contactName", "") or cust.get("billToName", ""),
+            cust.get("orgName", "") or cust.get("billToOrg", ""),
+            data.get("quoteNumber", ""), is_order,
+            float(data.get("total") or 0), pdf_bytes=pdf_bytes,
+            note=(body.get("note") or "").strip()[:2000],
+            expiry_date=data.get("expiryDate", ""),
+        )
+        return Response(json.dumps({"ok": True, "sentTo": sent_to,
+                                    "docNumber": data.get("quoteNumber", "")}),
+                        headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
