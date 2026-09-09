@@ -338,8 +338,18 @@
            target="_blank" rel="noopener"
            style="padding:12px 20px;font-size:0.9rem;font-weight:600;color:#6b7a8d;text-decoration:none;white-space:nowrap;"
            title="Shipped Orders now lives in the Ops app">📦 Shipped Orders ↗</a>
-        <!-- Admin-only Invoices tab -->
-        <div class="tab admin-only" data-tab="invoices">📄 Invoices</div>
+        <!-- Invoices moved to the Blue Alpha Ops app (Patty 2026-09-09: "turn
+             it off"). The list, past due and receive payments are tabs there;
+             resend, overdue notices, editing an invoice's lines and creating or
+             re-issuing the Stripe links are row actions; the monthly
+             fulfillment drafts have their own page. All of it still calls the
+             endpoints in app.py — only the screen moved, so there is one place
+             to raise a Stripe invoice from. Panel markup and JS stay put:
+             restoring this pill restores the tab. -->
+        <a class="admin-only" href="https://cs.bluealphaops.com/quotes/orders?tab=invoices"
+           target="_blank" rel="noopener"
+           style="padding:12px 20px;font-size:0.9rem;font-weight:600;color:#6b7a8d;text-decoration:none;white-space:nowrap;"
+           title="Invoices now live in the Ops app">📄 Invoices ↗</a>
         <!-- Admin-only Users tab -->
         <div class="tab admin-only" data-tab="users" style="margin-left:auto;">👥 Users</div>
         <!-- Password tab (both roles) -->
@@ -719,10 +729,14 @@
         // Show admin-only tabs, hide cs-only
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = '');
         document.querySelectorAll('.cs-only').forEach(el => el.style.display = 'none');
-        // Invoices is the first tab now that applications and shipped orders
-        // live in the Ops app (Patty 2026-08-27).
-        activateTab('invoices');
-        loadInvoices();
+        // Users is what is left here now that invoicing moved out too (Patty
+        // 2026-09-09). It stays because it has no home in the Ops app: this is
+        // where a portal login — including the Ops app's own service account —
+        // gets created and its password reset. Nothing is fetched on load any
+        // more; the invoice list used to be pulled in here on every admin
+        // sign-in for a screen nobody works in now.
+        activateTab('users');
+        loadUsers();
       } else {
         // CS role: hide admin-only tabs, show cs-only
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
