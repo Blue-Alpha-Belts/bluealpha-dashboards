@@ -3831,6 +3831,29 @@ def return_label_pdf(record_id):
         return Response(f"Error: {e}", status=500)
 
 
+def _cs_email_override(record_email):
+    """Let the CS app send one of these emails to an address CS typed instead of
+    the one on the record (Patty 2026-09-09: "we need to be able to edit the
+    email address before sending… anywhere we send an email"). Addresses do go
+    stale, and a customer who typed a typo at checkout cannot fix it themselves.
+
+    A caller-chosen recipient is exactly what makes an endpoint an open relay,
+    so the override — and ONLY the override — requires the X-BA-CS-Key shared
+    secret, the same gate the exchange and invoice senders already use. Falling
+    back to the address on the record stays unauthenticated, because that is
+    still just re-sending a customer their own document.
+
+    Returns (email, error_message).
+    """
+    body = request.get_json(silent=True) or {}
+    override = (body.get("email") or "").strip()
+    if not override:
+        return record_email, None
+    if CS_INVOICE_SHARED_SECRET and request.headers.get("X-BA-CS-Key", "") != CS_INVOICE_SHARED_SECRET:
+        return None, "Sending to a different address needs the CS shared secret"
+    return override, None
+
+
 @app.route("/api/resend-return-label/<record_id>", methods=["POST"])
 def resend_return_label(record_id):
     """Re-send the return-label email to the customer on file (CS app button).
@@ -3857,6 +3880,9 @@ def resend_return_label(record_id):
                             status=404, mimetype="application/json")
         f = r.json().get("fields", {})
         email = (f.get("Email Address") or "").strip()
+        email, _ovr = _cs_email_override(email)
+        if _ovr:
+            return Response(json.dumps({"ok": False, "error": _ovr}), status=401, mimetype="application/json")
         pdf_b64 = f.get("Label PDF Data") or ""
         if not email:
             return Response(json.dumps({"ok": False, "error": "No customer email on the return"}),
@@ -4372,6 +4398,9 @@ def resend_warranty_label(record_id):
                             status=404, mimetype="application/json")
         f = r.json().get("fields", {})
         email = (f.get("Email") or "").strip()
+        email, _ovr = _cs_email_override(email)
+        if _ovr:
+            return Response(json.dumps({"ok": False, "error": _ovr}), status=401, mimetype="application/json")
         pdf_b64 = f.get("Label PDF Data") or ""
         if not email:
             return Response(json.dumps({"ok": False, "error": "No customer email on the request"}),
@@ -4412,6 +4441,9 @@ def resend_warranty_confirmation(record_id):
                             status=404, mimetype="application/json")
         f = r.json().get("fields", {})
         email = (f.get("Email") or "").strip()
+        email, _ovr = _cs_email_override(email)
+        if _ovr:
+            return Response(json.dumps({"ok": False, "error": _ovr}), status=401, mimetype="application/json")
         if not email:
             return Response(json.dumps({"ok": False, "error": "No customer email on the request"}),
                             status=400, mimetype="application/json")
@@ -4530,6 +4562,9 @@ def send_warranty_clarification(record_id):
                             status=404, mimetype="application/json")
         f = r.json().get("fields", {})
         email = (f.get("Email") or "").strip()
+        email, _ovr = _cs_email_override(email)
+        if _ovr:
+            return Response(json.dumps({"ok": False, "error": _ovr}), status=401, mimetype="application/json")
         if not email:
             return Response(json.dumps({"ok": False, "error": "No customer email on the request"}),
                             status=400, mimetype="application/json")
