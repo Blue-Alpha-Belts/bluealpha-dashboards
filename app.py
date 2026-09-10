@@ -15273,31 +15273,18 @@ def admin_send_overdue_notice(record_id):
                                    "total": float(lf.get("Confirmed Line Item Total") or (qty * price))})
         total = round(sum(li["total"] for li in line_items), 2)
 
-        # Refresh Stripe invoices if due date is more than 45 days old (links go dead)
-        if days_overdue >= 45 and cc_url and line_items:
-            try:
-                old_cc_id  = fields.get("Stripe Invoice ID (CC)", "")
-                old_ach_id = fields.get("Stripe Invoice ID (ACH)", "")
-                # Void old invoices
-                for old_id in [old_cc_id, old_ach_id]:
-                    if old_id:
-                        req_lib.post(f"https://api.stripe.com/v1/invoices/{old_id}/void",
-                                     auth=(STRIPE_SECRET_KEY, ""), data={}, timeout=15)
-                # Create fresh ones (new customer, fresh due date)
-                _create_stripe_invoices_for_record(write_token, record_id, to_email, to_name, org_name, line_items)
-                # Re-fetch updated URLs from Airtable
-                refreshed = req_lib.get(
-                    f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
-                    headers=at_headers(read_token), timeout=10,
-                )
-                if refreshed.ok:
-                    rf = refreshed.json().get("fields", {})
-                    cc_url  = rf.get("Stripe Invoice URL (CC)", cc_url)
-                    ach_url = rf.get("Stripe Invoice URL (ACH)", ach_url)
-                print(f"[overdue-notice] refreshed Stripe links for {inv_number} ({days_overdue} days overdue)")
-            except Exception as refresh_err:
-                print(f"[overdue-notice] Stripe refresh failed for {inv_number}: {refresh_err}")
-                # Non-fatal — send notice with existing (possibly stale) links
+        # NO Stripe refresh here. This used to void the customer's card and
+        # ACH invoices at 45 days past due and issue fresh ones, from a time
+        # when payment went through Stripe CHECKOUT SESSIONS, which really do
+        # expire (24 hours). These are Stripe INVOICES: an open one stays
+        # payable indefinitely - IN-0214's pair has been open since 2026-05-05
+        # and still takes payment (checked 2026-09-10). So the refresh solved a
+        # problem that no longer exists and caused three of its own: it killed
+        # the link already sitting in the customer's inbox, it moved the due
+        # date so the invoice dropped off the Past due queue, and it rebuilt
+        # the 3% card fee line. Re-issuing is now only ever deliberate - the
+        # Re-issue Stripe links button on the ops app's Invoices tab, which
+        # says plainly that it voids the current links (Patty 2026-09-10).
 
         # The invoice itself, attached (Patty 2026-09-10) — a chase that makes
         # the customer go looking for the invoice is a chase answered late.
