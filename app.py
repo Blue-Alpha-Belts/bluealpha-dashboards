@@ -5741,7 +5741,7 @@ def send_quote_accepted_email(to_email, to_name, org_name, qu_number, so_number)
         <tr><td style="padding:36px 40px;">
           <p style="color:#1a2633;font-size:16px;margin:0 0 8px;">Hi {first_name},</p>
           <p style="color:#6b7a8d;font-size:15px;line-height:1.6;margin:0 0 20px;">
-            Great news \u2014 your Blue Alpha order has been confirmed! We've created your sales order and our team will be in touch about shipping and invoicing shortly.
+            Great news \u2014 your Blue Alpha order has been confirmed! We've created your sales order, and you'll get an email with tracking information as soon as it ships, then a separate email with your invoice.
           </p>
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;border:1px solid #dde3ea;border-radius:8px;margin-bottom:28px;">
             <tr><td style="padding:20px 24px;">
@@ -5766,7 +5766,7 @@ def send_quote_accepted_email(to_email, to_name, org_name, qu_number, so_number)
           </p>
         </td></tr>
         <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:20px 40px;text-align:center;">
-          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</p>
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com</p>
         </td></tr>
       </table>
     </td></tr>
