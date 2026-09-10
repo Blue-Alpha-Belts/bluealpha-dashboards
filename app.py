@@ -5807,8 +5807,8 @@ def send_order_email(to_email, to_name, org_name, doc_number, is_order,
     first_name = to_name.split()[0] if to_name else "there"
     doc_label  = "Sales Order" if is_order else "Quote"
     subject    = f"Blue Alpha {doc_label} {doc_number}"
-    intro      = (f"Your sales order is attached as a PDF. Our team will be in touch about "
-                  f"shipping and invoicing."
+    intro      = (f"Your sales order is attached as a PDF. You'll get an email with tracking "
+                  f"information as soon as it ships, and a separate email with your invoice."
                   if is_order else
                   f"Your quote is attached as a PDF. Let us know if you'd like anything changed.")
     note_block = ""
@@ -5857,7 +5857,7 @@ def send_order_email(to_email, to_name, org_name, doc_number, is_order,
           </p>
         </td></tr>
         <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:20px 40px;text-align:center;">
-          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</p>
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com</p>
         </td></tr>
       </table>
     </td></tr>
