@@ -5682,7 +5682,7 @@ def send_quote_email(to_email, to_name, company, quote_number, record_id, expiry
           </p>
         </td></tr>
         <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:20px 40px;text-align:center;">
-          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</p>
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com</p>
         </td></tr>
       </table>
     </td></tr>
@@ -6033,7 +6033,7 @@ def send_invoice_email(to_email, to_name, org_name, so_number, inv_number, line_
           </p>
         </td></tr>
         <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:20px 40px;text-align:center;">
-          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com &bull; orders@bluealpha.us &bull; 678-961-3304</p>
+          <p style="color:#6b7a8d;font-size:12px;margin:0;">Blue Alpha &bull; bluealphabelts.com</p>
         </td></tr>
       </table>
     </td></tr>
