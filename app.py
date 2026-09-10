@@ -15252,7 +15252,10 @@ def admin_send_overdue_notice(record_id):
         if not to_email:
             return Response(json.dumps({"error": "No billing email on record"}), status=400, headers=c, mimetype="application/json")
 
-        # Fetch line items for total
+        # Fetch line items — read exactly the way the invoice PDF and the
+        # resend read them (adjusted price first, the stored line total when
+        # there is one), so the amount chased and the amount on the attached
+        # invoice cannot disagree.
         li_ids = fields.get("MO Line Items", [])
         line_items = []
         for li_id in li_ids:
@@ -15262,12 +15265,13 @@ def admin_send_overdue_notice(record_id):
             )
             if lr.ok:
                 lf = lr.json().get("fields", {})
-                price = float(lf.get("Confirmed Unit Price") or 0)
                 qty   = lf.get("Qty.", 0)
+                price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
                 pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
                         _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
-                line_items.append({"name": pname, "qty": qty, "unit_price": price})
-        total = round(sum(li["qty"] * li["unit_price"] for li in line_items), 2)
+                line_items.append({"name": pname, "qty": qty, "unit_price": price,
+                                   "total": float(lf.get("Confirmed Line Item Total") or (qty * price))})
+        total = round(sum(li["total"] for li in line_items), 2)
 
         # Refresh Stripe invoices if due date is more than 45 days old (links go dead)
         if days_overdue >= 45 and cc_url and line_items:
@@ -15295,12 +15299,58 @@ def admin_send_overdue_notice(record_id):
                 print(f"[overdue-notice] Stripe refresh failed for {inv_number}: {refresh_err}")
                 # Non-fatal — send notice with existing (possibly stale) links
 
+        # The invoice itself, attached (Patty 2026-09-10) — a chase that makes
+        # the customer go looking for the invoice is a chase answered late.
+        # Non-fatal: a PDF that will not build must not hold up the chase, so
+        # the answer says whether one went with it.
+        pdf_bytes = None
+        try:
+            so_number = f"SO-{order_id}" if order_id else ""
+            tracking = ship_date = ""
+            tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
+                                        fields=["Order #", "Tracking #", "Ship Date"],
+                                        base_id=_SO_TRACKING_BASE,
+                                        formula=f'{{Order #}}="{so_number}"') if so_number else []
+            for tr in tracking_recs:
+                if tr.get("fields", {}).get("Order #", "").strip() == so_number:
+                    tracking  = tr["fields"].get("Tracking #", "")
+                    ship_date = tr["fields"].get("Ship Date", "")
+                    break
+            if not tracking:
+                tracking = fields.get("Tracking #", "") or fields.get("Tracking", "")
+            ship_city  = _first(fields.get("Customer City (from Customer)", []))
+            ship_state = _first(fields.get("Customer State (from Customer)", []))
+            ship_zip   = _first(fields.get("Customer Zip Code (from Customer)", []))
+            ship_csz   = ", ".join(filter(None, [ship_city, f"{ship_state} {ship_zip}".strip()]))
+            pdf_bytes = _build_invoice_pdf_bytes({
+                "invNumber":    inv_number,
+                "soNumber":     so_number,
+                "date":         fields.get("Date", ""),
+                "poNumber":     po_number,
+                "orgName":      org_name,
+                "contact":      to_name,
+                "addr1":        _first(fields.get("Bill-To Address (Line 1) (from Customer)", [])),
+                "addr2":        _first(fields.get("Bill-To Address (Line 2) (from Customer)", [])),
+                "shipOrg":      _first(fields.get("Organization Name (from Customer)", [])),
+                "shipName":     _ship_contact_line(fields),
+                "shipAddr1":    _first(fields.get("Customer Address (Line 1) (from Customer)", [])),
+                "shipAddr2":    _first(fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz,
+                "tracking":     tracking,
+                "shipDate":     ship_date,
+                "lineItems":    line_items,
+                "subtotal":     total,
+                "stripeCcUrl":  cc_url,
+                "stripeAchUrl": ach_url,
+            })
+        except Exception as pdf_err:
+            print(f"[overdue-notice] PDF build failed for {inv_number}: {pdf_err}")
+
         # Send overdue notice email
         _send_overdue_notice_email(
             to_email=to_email, to_name=to_name, org_name=org_name,
             inv_number=inv_number, po_number=po_number,
             total=total, days_overdue=days_overdue, due_date_str=due_date_str,
-            cc_url=cc_url, ach_url=ach_url,
+            cc_url=cc_url, ach_url=ach_url, pdf_bytes=pdf_bytes,
         )
 
         # Append today's date to Overdue Notice Dates field
@@ -15315,14 +15365,16 @@ def admin_send_overdue_notice(record_id):
         )
 
         _INVOICES_CACHE.clear()
-        return Response(json.dumps({"ok": True, "days_overdue": days_overdue}), headers=c, mimetype="application/json")
+        return Response(json.dumps({"ok": True, "days_overdue": days_overdue,
+                                    "pdfAttached": bool(pdf_bytes)}), headers=c, mimetype="application/json")
     except Exception as e:
         print(f"[overdue-notice] error for {record_id}: {e}")
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
 def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_number,
-                                total, days_overdue, due_date_str, cc_url, ach_url):
+                                total, days_overdue, due_date_str, cc_url, ach_url,
+                                pdf_bytes=None):
     """Send an overdue invoice notice email via SendGrid."""
     if not SENDGRID_API_KEY:
         return
@@ -15408,6 +15460,15 @@ def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_numbe
             {"type": "text/html",  "value": html_body},
         ],
     }
+    # The invoice rides along (Patty 2026-09-10), same as the resend.
+    if pdf_bytes:
+        import base64
+        payload["attachments"] = [{
+            "content":     base64.b64encode(pdf_bytes).decode("utf-8"),
+            "type":        "application/pdf",
+            "filename":    f"{inv_number}.pdf",
+            "disposition": "attachment",
+        }]
     req_lib.post(
         "https://api.sendgrid.com/v3/mail/send",
         headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
