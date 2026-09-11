@@ -13282,7 +13282,12 @@ def portal_admin_convert_to_invoice(record_id):
             confirmed_price = lf.get("Confirmed Unit Price")
             adj_list        = lf.get("Adj. Unit Price (from MO Line Items)", [])
             unit_price      = float(adj_price if adj_price is not None else (confirmed_price if confirmed_price is not None else (float(adj_list[0]) if adj_list else 0)))
-            li_total        = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
+            # Bill what THIS invoice covers, never what the sales order held.
+            # lf is the SO's line item, so its Confirmed Line Item Total is the
+            # full-order total — using it billed the whole SO on every partial
+            # invoice while the PDF showed the partial (Patty 2026-09-11,
+            # NeoMag). qty above is already the invoiced quantity.
+            li_total        = round(qty * unit_price, 2)
             email_line_items.append({"name": product_name, "qty": qty, "unit_price": unit_price,
                                      "line_total": li_total, "_li_fields": lf})
 
@@ -13957,7 +13962,12 @@ def admin_convert_to_invoice(record_id):
             conf_price = lf.get("Confirmed Unit Price")
             adj_list_v = lf.get("Adj. Unit Price (from MO Line Items)", [])
             unit_price = float(adj_price if adj_price is not None else (conf_price if conf_price is not None else (float(adj_list_v[0]) if adj_list_v else 0)))
-            li_total   = float(lf.get("Confirmed Line Item Total") or (qty * unit_price))
+            # Bill what THIS invoice covers, never what the sales order held.
+            # lf is the SO's line item, so its Confirmed Line Item Total is the
+            # full-order total — using it billed the whole SO on every partial
+            # invoice while the PDF showed the partial (Patty 2026-09-11,
+            # NeoMag). qty above is already the invoiced quantity.
+            li_total   = round(qty * unit_price, 2)
             pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
                     _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
             req_lib.post(
@@ -14570,30 +14580,51 @@ def admin_create_stripe_invoices(record_id):
             return Response(json.dumps({"error": "No billing email on record"}),
                             status=400, headers=c, mimetype="application/json")
 
-        # If force=true, void the existing Stripe invoices first by looking them up via URL
+        # If force=true, void the existing Stripe invoices first.
+        # Void by the STORED invoice id, the way the edit endpoint does. This
+        # used to scan the 100 most recent invoices account-wide for a matching
+        # hosted_invoice_url, which silently found nothing for anything older
+        # than a few days — the old link stayed live and payable while a second,
+        # corrected one went out (Patty 2026-09-11).
         if force_recreate and (existing_cc_url or existing_ach_url):
             ss_auth = (STRIPE_SECRET_KEY, "")
-            # Fetch all open invoices for the billing email and void ones matching stored URLs
-            for _url in [existing_cc_url, existing_ach_url]:
-                if not _url:
+            for id_field, url_field in (("Stripe Invoice ID (CC)", "Stripe Invoice URL (CC)"),
+                                        ("Stripe Invoice ID (ACH)", "Stripe Invoice URL (ACH)")):
+                stripe_id = (fields.get(id_field, "") or "").strip()
+                if not stripe_id and fields.get(url_field):
+                    # Older records predate the stored id — fall back to the scan.
+                    list_r = req_lib.get("https://api.stripe.com/v1/invoices",
+                        params={"limit": 100}, auth=ss_auth, timeout=15)
+                    if list_r.ok:
+                        for stripe_inv in list_r.json().get("data", []):
+                            if stripe_inv.get("hosted_invoice_url") == fields[url_field]:
+                                stripe_id = stripe_inv["id"]
+                                break
+                if not stripe_id:
+                    print(f"[stripe] no invoice id to void for {id_field} on {record_id}")
                     continue
-                # Try to find the invoice via Stripe list by hosted_invoice_url match
-                list_r = req_lib.get("https://api.stripe.com/v1/invoices",
-                    params={"limit": 100},
-                    auth=ss_auth, timeout=15)
-                if list_r.ok:
-                    for stripe_inv in list_r.json().get("data", []):
-                        if stripe_inv.get("hosted_invoice_url") == _url and stripe_inv.get("status") in ("open", "draft"):
-                            req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_inv['id']}/void",
-                                auth=ss_auth, timeout=15)
-                            print(f"[stripe] voided {stripe_inv['id']}")
-                            break
-            # Clear the Airtable URL fields
+                st_r = req_lib.get(f"https://api.stripe.com/v1/invoices/{stripe_id}",
+                                   auth=ss_auth, timeout=15)
+                status = st_r.json().get("status") if st_r.ok else None
+                if status == "open":
+                    v = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_id}/void",
+                                     auth=ss_auth, timeout=15)
+                    print(f"[stripe] voided {stripe_id}: {v.status_code}")
+                elif status == "draft":
+                    # A draft was never payable and cannot be voided — delete it.
+                    d = req_lib.delete(f"https://api.stripe.com/v1/invoices/{stripe_id}",
+                                       auth=ss_auth, timeout=15)
+                    print(f"[stripe] deleted draft {stripe_id}: {d.status_code}")
+                else:
+                    print(f"[stripe] left {stripe_id} alone (status {status})")
+            # Clear the Airtable URL fields. The due-date field is
+            # "Stripe Invoice Due Date"; the old "Stripe Due Date" spelling does
+            # not exist, so Airtable 422'd the whole patch and cleared nothing.
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
                 headers={**at_headers(write_token), "Content-Type": "application/json"},
                 json={"fields": {"Stripe Invoice URL (CC)": "", "Stripe Invoice URL (ACH)": "",
-                                 "Stripe Due Date": ""}},
+                                 "Stripe Invoice ID (CC)": "", "Stripe Invoice ID (ACH)": ""}},
                 timeout=15,
             )
 
