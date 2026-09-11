@@ -14660,6 +14660,84 @@ def admin_create_stripe_invoices(record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+@app.route("/api/admin/invoices/<record_id>/void-stripe", methods=["POST", "OPTIONS"])
+def admin_void_stripe_invoices(record_id):
+    """Void an invoice's Stripe CC + ACH invoices so they can no longer be paid.
+
+    Added 2026-09-11 (Patty: "if an invoice was paid by check, that should void
+    the stripe links to prevent customers from double paying"). An audit that
+    day found 112 of 127 check-paid invoices still carrying a live, payable
+    Stripe link — $136k of double-pay exposure — because recording a check in
+    the Ops app writes the Check fields to Airtable and never told Stripe.
+
+    Voids by the STORED Stripe invoice id, deletes drafts (a draft cannot be
+    voided), and leaves the URLs and ids in place so the history stays
+    readable; only the two status fields move to Void. A Stripe invoice that
+    is already paid is left strictly alone — that is a real online payment and
+    voiding it would rewrite history.
+    """
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        write_token = RETURNS_WRITE_TOKEN
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=15,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": "Invoice not found"}), status=404, headers=c, mimetype="application/json")
+        fields = r.json().get("fields", {})
+        if fields.get("Order Type") != "Invoice":
+            return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
+
+        ss_auth = (STRIPE_SECRET_KEY, "")
+        status_patch = {}
+        results = {}
+        for id_field, label in (("Stripe Invoice ID (CC)", "CC"), ("Stripe Invoice ID (ACH)", "ACH")):
+            stripe_id = (fields.get(id_field, "") or "").strip()
+            if not stripe_id:
+                results[label] = "no id on record"
+                continue
+            st = req_lib.get(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
+            status = st.json().get("status") if st.ok else None
+            if status == "open":
+                vr = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_id}/void",
+                                  auth=ss_auth, timeout=15)
+                if vr.ok:
+                    status_patch[f"Stripe Invoice Status ({label})"] = "Void"
+                    results[label] = "voided"
+                else:
+                    results[label] = f"void failed: {vr.status_code} {vr.text[:120]}"
+            elif status == "draft":
+                dr = req_lib.delete(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
+                results[label] = "draft deleted" if dr.ok else f"draft delete failed: {dr.status_code}"
+                if dr.ok:
+                    status_patch[f"Stripe Invoice Status ({label})"] = "Void"
+            elif status == "paid":
+                # Genuinely paid online — never touch it.
+                results[label] = "already paid, left alone"
+            else:
+                results[label] = f"left alone (status {status})"
+
+        if status_patch:
+            req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": status_patch}, timeout=15,
+            )
+        _INVOICES_CACHE.clear()
+        print(f"[void-stripe] {fields.get('Document ID', record_id)}: {results}", flush=True)
+        return Response(json.dumps({"ok": True, "results": results}), headers=c, mimetype="application/json")
+    except Exception as e:
+        print(f"[void-stripe] error for {record_id}: {e}", flush=True)
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
 @app.route("/api/admin/invoices/<record_id>/mark-paid-check", methods=["PATCH"])
 def admin_mark_invoice_paid_check(record_id):
     """Mark an invoice as paid by check — writes Check #, Check Date, Check Payment Amount."""
