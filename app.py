@@ -4378,6 +4378,96 @@ def send_po():
                         status=500, mimetype="application/json")
 
 
+@app.route("/api/send-rts-address-check", methods=["POST"])
+def send_rts_address_check():
+    """Email a customer whose package came back to us undelivered, showing the
+    address it was sent to and asking them to reply with any corrections
+    (Blue Alpha Ops app, Patty 2026-09-14).
+
+    Sent automatically when CS logs the RTS arrival on the order page - there
+    is no Airtable record behind it, because RTS lives entirely in the ops
+    app's own Postgres. This endpoint is purely the SendGrid channel; the ops
+    app composes the wording (Patty's approved copy) and stamps the row's
+    address_email_sent_at itself once this returns ok.
+
+    The recipient is caller-chosen (it comes from the ShipStation order), so
+    like /api/send-invoice and /api/send-po this REQUIRES the X-BA-CS-Key
+    shared secret - without it it would be an open relay.
+
+    Body: {"order_number", "to", "subject", "message" (plain text)}.
+    """
+    if CS_INVOICE_SHARED_SECRET and request.headers.get("X-BA-CS-Key", "") != CS_INVOICE_SHARED_SECRET:
+        return Response(json.dumps({"ok": False, "error": "Forbidden"}),
+                        status=403, mimetype="application/json")
+    if not SENDGRID_API_KEY:
+        return Response(json.dumps({"ok": False, "error": "Email not configured"}),
+                        status=500, mimetype="application/json")
+    body = request.get_json(silent=True) or {}
+    order_number = (body.get("order_number") or "").strip()
+    subject      = (body.get("subject") or "").strip()
+    message      = (body.get("message") or "").strip()
+    to           = (body.get("to") or "").strip()
+    if "@" not in to:
+        return Response(json.dumps({"ok": False, "error": "Valid recipient email required"}),
+                        status=400, mimetype="application/json")
+    if not subject or not message:
+        return Response(json.dumps({"ok": False, "error": "Subject and message required"}),
+                        status=400, mimetype="application/json")
+    try:
+        import html as _html
+        actual_to = TEST_EMAIL_OVERRIDE or to
+        # Plain text composed by the ops app: escape it and keep the line
+        # breaks, so the address block stays a block.
+        safe = "<br>".join(_html.escape(message).splitlines())
+        html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f7fa;font-family:Arial,Helvetica,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f7fa;padding:32px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background:#1B2438;padding:24px 36px;">
+          <span style="font-family:Arial;font-size:20px;font-weight:800;color:#fff;letter-spacing:2px;">BLUE ALPHA</span>
+        </td></tr>
+        <tr><td style="padding:32px 36px;">
+          <p style="color:#6b7a8d;font-size:11px;letter-spacing:1px;margin:0 0 14px;">ORDER {_html.escape(order_number)}</p>
+          <p style="color:#1a2633;font-size:14px;line-height:1.7;margin:0;">{safe}</p>
+        </td></tr>
+        <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
+          <p style="color:#6b7a8d;font-size:11px;margin:0;">Blue Alpha &bull; 35 Andrew St, Newnan, GA 30263 &bull; info@bluealpha.us</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+        sr = req_lib.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "personalizations": [{"to": [{"email": actual_to}]}],
+                # info@ both ways: the whole point of the email is to get a
+                # reply with the corrected address, and CS watches that inbox.
+                "from": {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                "reply_to": {"email": CS_FROM_EMAIL, "name": "Blue Alpha"},
+                "subject": subject,
+                "content": [
+                    {"type": "text/plain", "value": message},
+                    {"type": "text/html", "value": html_body},
+                ],
+            },
+            timeout=20,
+        )
+        if sr.status_code not in (200, 202):
+            print(f"[send-rts] {order_number}: SendGrid {sr.status_code}: {sr.text[:200]}", flush=True)
+            return Response(json.dumps({"ok": False, "error": f"SendGrid {sr.status_code}: {sr.text[:200]}"}),
+                            status=500, mimetype="application/json")
+        print(f"[send-rts] {order_number} address check emailed to {actual_to}", flush=True)
+        return Response(json.dumps({"ok": True, "sentTo": to}),
+                        status=200, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        status=500, mimetype="application/json")
+
+
 @app.route("/api/resend-warranty-label/<record_id>", methods=["POST"])
 def resend_warranty_label(record_id):
     """Re-send the warranty return-label email (CS app button). Label PDFs are
