@@ -14750,6 +14750,150 @@ def admin_create_stripe_invoices(record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+def _void_stripe_pair(record_id, fields, write_token):
+    """Void whatever is still payable on an invoice's Stripe pair.
+
+    Shared by the void-stripe endpoint and the paid-links sweep below so the
+    two can never drift. Voids by the STORED Stripe invoice id, deletes drafts
+    (a draft cannot be voided), moves the two status fields to Void, and leaves
+    an already-PAID Stripe invoice strictly alone — that is a real payment and
+    voiding it would rewrite history. URLs and ids stay put so history reads.
+    """
+    ss_auth = (STRIPE_SECRET_KEY, "")
+    status_patch = {}
+    results = {}
+    for id_field, label in (("Stripe Invoice ID (CC)", "CC"), ("Stripe Invoice ID (ACH)", "ACH")):
+        stripe_id = (fields.get(id_field, "") or "").strip()
+        if not stripe_id:
+            results[label] = "no id on record"
+            continue
+        st = req_lib.get(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
+        status = st.json().get("status") if st.ok else None
+        if status == "open":
+            vr = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_id}/void",
+                              auth=ss_auth, timeout=15)
+            if vr.ok:
+                status_patch[f"Stripe Invoice Status ({label})"] = "Void"
+                results[label] = "voided"
+            else:
+                results[label] = f"void failed: {vr.status_code} {vr.text[:120]}"
+        elif status == "draft":
+            dr = req_lib.delete(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
+            results[label] = "draft deleted" if dr.ok else f"draft delete failed: {dr.status_code}"
+            if dr.ok:
+                status_patch[f"Stripe Invoice Status ({label})"] = "Void"
+        elif status == "paid":
+            results[label] = "already paid, left alone"
+        else:
+            results[label] = f"left alone (status {status})"
+
+    if status_patch:
+        req_lib.patch(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
+            headers={**at_headers(write_token), "Content-Type": "application/json"},
+            json={"fields": status_patch}, timeout=15,
+        )
+    return results
+
+
+def _run_paid_links_sweep():
+    """Disable the payment links on any invoice that is already paid in full.
+
+    Patty 2026-09-15: "any time an invoice is paid in full, the links should be
+    disabled." Every invoice carries TWO Stripe invoices (card + ACH), and
+    paying one never closed the other — 48 paid invoices were found still
+    carrying an open, payable twin worth $86,872.49.
+
+    Deliberately a sweep rather than a patch on each payment path. Money
+    arrives four ways (the card link, the ACH link, a check through the Ops
+    app, a check typed into Airtable) and only two of them told Stripe
+    anything. A sweep closes the rule over all of them, including paths nobody
+    has thought of yet.
+
+    Candidates are pre-filtered in Airtable so a normal run costs almost
+    nothing: paid, AND carrying a side that still reads Open or blank. A side
+    that was genuinely paid keeps the status "Paid" forever, so filtering on
+    "not Void" would re-check the same 64 records every run and never shrink.
+    Stripe is still the authority — the filter only decides what is worth
+    asking about, and _void_stripe_pair re-reads each invoice before touching
+    it, so a stale status costs a no-op rather than a wrong void.
+    """
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = RETURNS_WRITE_TOKEN
+    formula = (
+        'AND({Order Type}="Invoice",'
+        'OR({Invoice Paid}=TRUE(),{Check Date}!="",'
+        '{Stripe Invoice Status (CC)}="Paid",{Stripe Invoice Status (ACH)}="Paid"),'
+        'OR(AND({Stripe Invoice ID (CC)}!="",'
+        'OR({Stripe Invoice Status (CC)}="Open",{Stripe Invoice Status (CC)}="")),'
+        'AND({Stripe Invoice ID (ACH)}!="",'
+        'OR({Stripe Invoice Status (ACH)}="Open",{Stripe Invoice Status (ACH)}=""))))'
+    )
+    recs = at_get_all(
+        MANUAL_ORDERS_TABLE_ID, read_token,
+        fields=["Document ID", "Invoice Paid", "Check Date", "Check Payment Amount",
+                "Stripe Invoice ID (CC)", "Stripe Invoice ID (ACH)",
+                "Stripe Invoice Status (CC)", "Stripe Invoice Status (ACH)"],
+        formula=formula,
+    )
+    if not recs:
+        print("[paid-links] nothing to sweep", flush=True)
+        return 0
+    closed = 0
+    for rec in recs:
+        f = rec.get("fields", {})
+        try:
+            results = _void_stripe_pair(rec["id"], f, write_token)
+        except Exception as exc:
+            print(f"[paid-links] {f.get('Document ID', rec['id'])}: {exc}", flush=True)
+            continue
+        if any(v in ("voided", "draft deleted") for v in results.values()):
+            closed += 1
+            print(f"[paid-links] {f.get('Document ID', rec['id'])}: {results}", flush=True)
+    if closed:
+        _INVOICES_CACHE.clear()
+    print(f"[paid-links] swept {len(recs)} paid invoices, closed links on {closed}", flush=True)
+    return closed
+
+
+def _paid_links_worker():
+    """Every 20 minutes, close the links on anything already paid in full."""
+    import time as _t
+    _t.sleep(120)  # let the process settle; avoids re-firing on every deploy
+    while True:
+        try:
+            _lock_fh = open("/tmp/ba_paid_links_sweep.lock", "w")
+            try:
+                _fcntl_mod = __import__("fcntl")
+                _fcntl_mod.flock(_lock_fh, _fcntl_mod.LOCK_EX | _fcntl_mod.LOCK_NB)
+            except BlockingIOError:
+                _t.sleep(1200)
+                continue
+            _run_paid_links_sweep()
+        except Exception as exc:
+            print(f"[paid-links] worker error: {exc}", flush=True)
+        _t.sleep(1200)
+
+
+threading.Thread(target=_paid_links_worker, daemon=True).start()
+
+
+@app.route("/api/admin/invoices/sweep-paid-links", methods=["POST", "OPTIONS"])
+def admin_sweep_paid_links():
+    """Run the paid-links sweep on demand (same logic the worker runs)."""
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        closed = _run_paid_links_sweep()
+        return Response(json.dumps({"ok": True, "closed": closed}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
 @app.route("/api/admin/invoices/<record_id>/void-stripe", methods=["POST", "OPTIONS"])
 def admin_void_stripe_invoices(record_id):
     """Void an invoice's Stripe CC + ACH invoices so they can no longer be paid.
@@ -14785,41 +14929,7 @@ def admin_void_stripe_invoices(record_id):
         if fields.get("Order Type") != "Invoice":
             return Response(json.dumps({"error": "Not an invoice"}), status=400, headers=c, mimetype="application/json")
 
-        ss_auth = (STRIPE_SECRET_KEY, "")
-        status_patch = {}
-        results = {}
-        for id_field, label in (("Stripe Invoice ID (CC)", "CC"), ("Stripe Invoice ID (ACH)", "ACH")):
-            stripe_id = (fields.get(id_field, "") or "").strip()
-            if not stripe_id:
-                results[label] = "no id on record"
-                continue
-            st = req_lib.get(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
-            status = st.json().get("status") if st.ok else None
-            if status == "open":
-                vr = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_id}/void",
-                                  auth=ss_auth, timeout=15)
-                if vr.ok:
-                    status_patch[f"Stripe Invoice Status ({label})"] = "Void"
-                    results[label] = "voided"
-                else:
-                    results[label] = f"void failed: {vr.status_code} {vr.text[:120]}"
-            elif status == "draft":
-                dr = req_lib.delete(f"https://api.stripe.com/v1/invoices/{stripe_id}", auth=ss_auth, timeout=15)
-                results[label] = "draft deleted" if dr.ok else f"draft delete failed: {dr.status_code}"
-                if dr.ok:
-                    status_patch[f"Stripe Invoice Status ({label})"] = "Void"
-            elif status == "paid":
-                # Genuinely paid online — never touch it.
-                results[label] = "already paid, left alone"
-            else:
-                results[label] = f"left alone (status {status})"
-
-        if status_patch:
-            req_lib.patch(
-                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
-                headers={**at_headers(write_token), "Content-Type": "application/json"},
-                json={"fields": status_patch}, timeout=15,
-            )
+        results = _void_stripe_pair(record_id, fields, write_token)
         _INVOICES_CACHE.clear()
         print(f"[void-stripe] {fields.get('Document ID', record_id)}: {results}", flush=True)
         return Response(json.dumps({"ok": True, "results": results}), headers=c, mimetype="application/json")
