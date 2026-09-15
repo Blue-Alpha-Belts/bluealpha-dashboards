@@ -15503,6 +15503,288 @@ def admin_email_order(record_id):
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+def _invoice_email_bundle(record_id, fields, read_token):
+    """Everything one invoice needs to appear in an email: its lines, its
+    total, and its PDF. Shared by the single overdue notice and the batch
+    below so a chased amount and an attached invoice cannot disagree."""
+    def _first(lst):
+        return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
+    order_id   = str(fields.get("Order ID", "")).strip()
+    inv_number = fields.get("Document ID", f"IN-{order_id}")
+    to_name    = _first(fields.get("Bill-To Contact Name (from Customer)", []))
+    org_name   = _first(fields.get("Bill-To Org Name (from Customer)", [])) or \
+                 _first(fields.get("Snapshot Org", ""))
+
+    li_ids = fields.get("MO Line Items", [])
+    line_items = []
+    for li_id in li_ids:
+        lr = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MO_LINE_ITEMS_TABLE_ID}/{li_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if lr.ok:
+            lf = lr.json().get("fields", {})
+            qty   = lf.get("Qty.", 0)
+            price = float(lf.get("Confirmed Adj. Unit Price") or lf.get("Confirmed Unit Price") or 0)
+            pname = _first(lf.get("Product Name (from Product SKU)", [])) or \
+                    _first(lf.get("Name + Variations (from Product SKU)", [])) or "Item"
+            line_items.append({"name": pname, "qty": qty, "unit_price": price,
+                               "total": float(lf.get("Confirmed Line Item Total") or (qty * price))})
+    total = round(sum(li["total"] for li in line_items), 2)
+
+    pdf_bytes = None
+    try:
+        so_number = f"SO-{order_id}" if order_id else ""
+        tracking = ship_date = ""
+        tracking_recs = at_get_all(_SO_TRACKING_TABLE, _SO_TRACKING_TOKEN,
+                                    fields=["Order #", "Tracking #", "Ship Date"],
+                                    base_id=_SO_TRACKING_BASE,
+                                    formula=f'{{Order #}}="{so_number}"') if so_number else []
+        for tr in tracking_recs:
+            if tr.get("fields", {}).get("Order #", "").strip() == so_number:
+                tracking  = tr["fields"].get("Tracking #", "")
+                ship_date = tr["fields"].get("Ship Date", "")
+                break
+        if not tracking:
+            tracking = fields.get("Tracking #", "") or fields.get("Tracking", "")
+        ship_city  = _first(fields.get("Customer City (from Customer)", []))
+        ship_state = _first(fields.get("Customer State (from Customer)", []))
+        ship_zip   = _first(fields.get("Customer Zip Code (from Customer)", []))
+        ship_csz   = ", ".join(filter(None, [ship_city, f"{ship_state} {ship_zip}".strip()]))
+        pdf_bytes = _build_invoice_pdf_bytes({
+            "invNumber":    inv_number,
+            "soNumber":     so_number,
+            "date":         fields.get("Date", ""),
+            "poNumber":     fields.get("Purchase Order #", "") or "",
+            "orgName":      org_name,
+            "contact":      to_name,
+            "addr1":        _first(fields.get("Bill-To Address (Line 1) (from Customer)", [])),
+            "addr2":        _first(fields.get("Bill-To Address (Line 2) (from Customer)", [])),
+            "shipOrg":      _first(fields.get("Organization Name (from Customer)", [])),
+            "shipName":     _ship_contact_line(fields),
+            "shipAddr1":    _first(fields.get("Customer Address (Line 1) (from Customer)", [])),
+            "shipAddr2":    _first(fields.get("Customer Address (Line 2) (from Customer)", [])) or ship_csz,
+            "tracking":     tracking,
+            "shipDate":     ship_date,
+            "lineItems":    line_items,
+            "subtotal":     total,
+            "stripeCcUrl":  fields.get("Stripe Invoice URL (CC)", ""),
+            "stripeAchUrl": fields.get("Stripe Invoice URL (ACH)", ""),
+        })
+    except Exception as pdf_err:
+        print(f"[invoice-bundle] PDF build failed for {inv_number}: {pdf_err}", flush=True)
+
+    return {
+        "invNumber": inv_number, "date": fields.get("Date", ""),
+        "poNumber": fields.get("Purchase Order #", "") or "",
+        "dueDate": fields.get("Stripe Invoice Due Date", "") or "",
+        "total": total, "pdfBytes": pdf_bytes,
+        "orgName": org_name, "toName": to_name,
+        "toEmail": _first(fields.get("Bill-To Contact Email (from Customer)", [])),
+    }
+
+
+def _send_invoice_bundle_email(to_email, to_name, org_name, rows, attachments):
+    """One email carrying several invoices.
+
+    Patty 2026-09-15: "it would be great if we could create just one email with
+    all the invoices attached." The body is a SUMMARY TABLE only — payment
+    links stay inside each attached PDF, because a dozen card and ACH links in
+    one message is unreadable and easy to click wrong.
+    """
+    if not SENDGRID_API_KEY:
+        return False
+    if TEST_EMAIL_OVERRIDE:
+        to_list = [{"email": TEST_EMAIL_OVERRIDE, "name": to_name}]
+    else:
+        raw = [e.strip() for e in (to_email or "").replace(",", ";").split(";") if e.strip()]
+        to_list = [{"email": e, "name": to_name} for e in raw]
+    if not to_list:
+        return False
+
+    first_name = to_name.split()[0] if to_name else "there"
+    grand = round(sum(r["total"] for r in rows), 2)
+    n = len(rows)
+    subject = f"Blue Alpha — {n} invoice{'s' if n != 1 else ''} for {org_name}" if org_name \
+        else f"Blue Alpha — {n} invoice{'s' if n != 1 else ''}"
+
+    def _d(iso):
+        try:
+            from datetime import date as _date
+            return _date.fromisoformat(str(iso)[:10]).strftime("%b %d, %Y")
+        except Exception:
+            return str(iso or "")
+
+    body_rows = "".join(
+        f'<tr>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #e6e9ed;font-size:13px;color:#1a2633;font-weight:600;">{r["invNumber"]}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #e6e9ed;font-size:13px;color:#555;">{_d(r["date"])}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #e6e9ed;font-size:13px;color:#555;">{r["poNumber"] or "&mdash;"}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #e6e9ed;font-size:13px;color:#555;">{_d(r["dueDate"]) or "&mdash;"}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #e6e9ed;font-size:13px;color:#1a2633;text-align:right;font-weight:600;">${r["total"]:,.2f}</td>'
+        f'</tr>'
+        for r in rows
+    )
+    html = f"""<div style="font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;padding:24px;">
+  <p style="font-size:14px;color:#1a2633;">Hi {first_name},</p>
+  <p style="font-size:14px;color:#1a2633;">
+    Please find {'the invoice' if n == 1 else f'the {n} invoices'} below attached to this email.
+    Each attached invoice carries its own credit card and ACH payment links.
+  </p>
+  <table style="border-collapse:collapse;width:100%;margin:18px 0;">
+    <thead><tr style="background:#131721;">
+      <th style="padding:8px 12px;text-align:left;font-size:12px;color:#fff;">Invoice</th>
+      <th style="padding:8px 12px;text-align:left;font-size:12px;color:#fff;">Date</th>
+      <th style="padding:8px 12px;text-align:left;font-size:12px;color:#fff;">PO&nbsp;#</th>
+      <th style="padding:8px 12px;text-align:left;font-size:12px;color:#fff;">Due</th>
+      <th style="padding:8px 12px;text-align:right;font-size:12px;color:#fff;">Amount</th>
+    </tr></thead>
+    <tbody>{body_rows}</tbody>
+    <tfoot><tr>
+      <td colspan="4" style="padding:10px 12px;text-align:right;font-size:14px;color:#1a2633;font-weight:700;">Total</td>
+      <td style="padding:10px 12px;text-align:right;font-size:14px;color:#1a2633;font-weight:700;">${grand:,.2f}</td>
+    </tr></tfoot>
+  </table>
+  <p style="font-size:13px;color:#555;">
+    Credit card payments carry a 3% processing fee, which is shown on the payment page.
+    ACH bank transfer is at face value.
+  </p>
+  <p style="font-size:14px;color:#1a2633;">Thank you,<br>Blue Alpha</p>
+</div>"""
+
+    payload = {
+        "personalizations": [{"to": to_list}],
+        "from": {"email": SENDGRID_FROM_EMAIL, "name": "Blue Alpha"},
+        "subject": subject,
+        "content": [{"type": "text/html", "value": html}],
+    }
+    if attachments:
+        payload["attachments"] = [{
+            "content":     base64.b64encode(a["bytes"]).decode("utf-8"),
+            "type":        "application/pdf",
+            "filename":    a["filename"],
+            "disposition": "attachment",
+        } for a in attachments]
+
+    resp = req_lib.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={"Authorization": f"Bearer {SENDGRID_API_KEY}", "Content-Type": "application/json"},
+        json=payload, timeout=30,
+    )
+    if not resp.ok:
+        print(f"[invoice-batch] SendGrid {resp.status_code}: {resp.text[:200]}", flush=True)
+    return resp.ok
+
+
+@app.route("/api/admin/invoices/email-batch", methods=["POST", "OPTIONS"])
+def admin_email_invoice_batch():
+    """Email several invoices to one customer as a single message.
+
+    Guards, in order: every id must be an unpaid Invoice, and they must all
+    belong to the SAME customer — attaching one customer's invoice to another
+    customer's email is the obvious way this goes wrong, so a mixed selection
+    is refused rather than silently split. Nothing is stamped and no mail is
+    sent unless every invoice passes.
+    """
+    if request.method == "OPTIONS":
+        return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
+                                     "Access-Control-Allow-Methods": "POST"})
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+    try:
+        body = request.get_json(silent=True) or {}
+        record_ids = [str(x).strip() for x in (body.get("recordIds") or []) if str(x).strip()]
+        override_email = (body.get("email") or "").strip()
+        if not record_ids:
+            return Response(json.dumps({"error": "No invoices selected"}), status=400, headers=c, mimetype="application/json")
+        if len(record_ids) > 25:
+            return Response(json.dumps({"error": "25 invoices per email is the limit"}),
+                            status=400, headers=c, mimetype="application/json")
+
+        read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        write_token = RETURNS_WRITE_TOKEN
+
+        def _first(lst):
+            return lst[0] if isinstance(lst, list) and lst else (lst or "")
+
+        # ── Validate everything BEFORE sending or stamping anything ─────────
+        loaded = []
+        for rid in record_ids:
+            r = req_lib.get(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{rid}",
+                headers=at_headers(read_token), timeout=15,
+            )
+            if not r.ok:
+                return Response(json.dumps({"error": f"Invoice {rid} not found"}),
+                                status=404, headers=c, mimetype="application/json")
+            f = r.json().get("fields", {})
+            if f.get("Order Type") != "Invoice":
+                return Response(json.dumps({"error": f"{f.get('Document ID', rid)} is not an invoice"}),
+                                status=400, headers=c, mimetype="application/json")
+            if f.get("Invoice Paid") is True or (f.get("Check Date") or "").strip():
+                return Response(json.dumps({"error": f"{f.get('Document ID', rid)} is already paid"}),
+                                status=400, headers=c, mimetype="application/json")
+            loaded.append((rid, f))
+
+        customers = {tuple(sorted(f.get("Customer", []) or [])) or
+                     (_first(f.get("Bill-To Org Name (from Customer)", [])) or "",)
+                     for _, f in loaded}
+        if len(customers) > 1:
+            names = sorted({_first(f.get("Bill-To Org Name (from Customer)", [])) or
+                            _first(f.get("Snapshot Org", "")) or "?" for _, f in loaded})
+            return Response(json.dumps({"error": f"Those invoices belong to different customers ({', '.join(names)}). Send one customer at a time."}),
+                            status=400, headers=c, mimetype="application/json")
+
+        bundles = [_invoice_email_bundle(rid, f, read_token) for rid, f in loaded]
+        bundles.sort(key=lambda b: (str(b["date"]), str(b["invNumber"])))
+        missing_pdf = [b["invNumber"] for b in bundles if not b["pdfBytes"]]
+        if missing_pdf:
+            return Response(json.dumps({"error": f"Could not build the invoice PDF for {', '.join(missing_pdf)} — nothing was sent"}),
+                            status=500, headers=c, mimetype="application/json")
+
+        to_email = override_email or bundles[0]["toEmail"]
+        if not to_email:
+            return Response(json.dumps({"error": "No billing email on record"}),
+                            status=400, headers=c, mimetype="application/json")
+
+        sent = _send_invoice_bundle_email(
+            to_email=to_email, to_name=bundles[0]["toName"], org_name=bundles[0]["orgName"],
+            rows=bundles,
+            attachments=[{"bytes": b["pdfBytes"], "filename": f"{b['invNumber']}.pdf"} for b in bundles],
+        )
+        if not sent:
+            return Response(json.dumps({"error": "SendGrid refused the message — nothing was stamped"}),
+                            status=502, headers=c, mimetype="application/json")
+
+        # Stamp only after the mail is away (Patty: this counts as chasing).
+        today_iso = _today_utc().strftime("%Y-%m-%d")
+        stamped = []
+        for rid, f in loaded:
+            existing = (f.get("Overdue Notice Dates") or "").strip()
+            new_dates = (existing + "\n" + today_iso).strip() if existing else today_iso
+            pr = req_lib.patch(
+                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{rid}",
+                headers={**at_headers(write_token), "Content-Type": "application/json"},
+                json={"fields": {"Overdue Notice Dates": new_dates}}, timeout=15,
+            )
+            if pr.ok:
+                stamped.append(f.get("Document ID", rid))
+        _INVOICES_CACHE.clear()
+        print(f"[invoice-batch] sent {len(bundles)} invoices to {to_email}: "
+              f"{', '.join(b['invNumber'] for b in bundles)}", flush=True)
+        return Response(json.dumps({
+            "ok": True, "count": len(bundles), "to": to_email,
+            "invoices": [b["invNumber"] for b in bundles],
+            "total": round(sum(b["total"] for b in bundles), 2),
+            "stamped": len(stamped),
+        }), headers=c, mimetype="application/json")
+    except Exception as e:
+        print(f"[invoice-batch] error: {e}", flush=True)
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
 @app.route("/api/admin/invoices/<record_id>/overdue-notice", methods=["POST", "OPTIONS"])
 def admin_send_overdue_notice(record_id):
     """Send an overdue notice email and log the date to Airtable."""
