@@ -2946,18 +2946,25 @@ def create_return_label(order_id, customer_addr, customer_email="", order_number
     # Always use USPS Ground Advantage for return labels regardless of original shipment method
     carrier = "stamps_com"
     service = "usps_ground_advantage"
-    weight  = {"value": 16, "units": "ounces"}
-    # Still fetch original shipment to inherit weight only
-    sr = req_lib.get("https://ssapi.shipstation.com/shipments",
-                     params={"orderId": order_id},
-                     headers=ss_headers(), timeout=10)
-    ships = sr.json().get("shipments", [])
-    outbound = [s for s in ships if not s.get("isReturnLabel", False)]
-    for s in (outbound or ships):
-        w = s.get("weight") or {}
-        if w.get("value", 0) > 0:
-            weight = w
-        break
+    weight  = {"value": 15, "units": "ounces"}
+    # Fetch the original shipment only to inherit its weight. This lookup is
+    # optional: a slow ShipStation used to time out here and kill the whole
+    # label (9 returns stranded in Needs Review, 2026-07..09), so any failure
+    # now falls back to the 15 oz default and the label is still bought
+    # (Patty, 2026-09-21).
+    try:
+        sr = req_lib.get("https://ssapi.shipstation.com/shipments",
+                         params={"orderId": order_id},
+                         headers=ss_headers(), timeout=10)
+        ships = sr.json().get("shipments", [])
+        outbound = [s for s in ships if not s.get("isReturnLabel", False)]
+        for s in (outbound or ships):
+            w = s.get("weight") or {}
+            if w.get("value", 0) > 0:
+                weight = w
+            break
+    except Exception as weight_err:
+        print(f"[create_return_label] weight lookup failed for order {order_id}, using {weight}: {weight_err}")
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
