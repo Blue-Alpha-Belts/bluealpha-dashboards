@@ -335,6 +335,56 @@ def get_portal_user(req):
         return None
 
 
+# ── International-exchange ticket ──────────────────────────────────────────
+# The customer already proves who they are at /api/verify-international-exchange:
+# order number plus last name or email, checked against the real order in
+# ShipStation. Until 2026-09-22 the two submit endpoints at the end of that flow
+# never asked whether any of that had happened, so anything on the internet could
+# POST them directly. That is how the 2026-09-13 probe created seven exchanges
+# marked "Payment Confirmed" that nobody paid for.
+#
+# Verification now hands back a short-lived signed ticket naming the order it
+# checked. The submit endpoints refuse without one, and read the order number OUT
+# OF THE TICKET rather than trusting what the request asks for. Reading it from
+# the ticket is the part that matters: it also closes the stale-record sweep
+# (you can only ever clear exchanges for your own order, not one you guessed)
+# and the confirmation email (you can only reach it for an order you proved you
+# own, so the only person you can mail is yourself).
+#
+# Deliberately NOT a login: the customer does nothing new. The ticket rides along
+# invisibly on a check they already pass today.
+EXCHANGE_TICKET_MINUTES = 60
+
+
+def issue_exchange_ticket(order_number):
+    """Signed proof that this browser passed the identity check for this order."""
+    from datetime import datetime, timezone, timedelta
+    return pyjwt.encode(
+        {
+            "ord":   str(order_number),
+            "scope": "intl-exchange",
+            "exp":   datetime.now(timezone.utc) + timedelta(minutes=EXCHANGE_TICKET_MINUTES),
+        },
+        QUOTE_SECRET_KEY,
+        algorithm="HS256",
+    )
+
+
+def read_exchange_ticket(token):
+    """The order number a ticket vouches for, or None if it is missing, expired,
+    altered, or was issued for some other flow. Never raises — a bad ticket is
+    just an unverified caller."""
+    if not token:
+        return None
+    try:
+        claims = pyjwt.decode(token, QUOTE_SECRET_KEY, algorithms=["HS256"])
+    except Exception:
+        return None
+    if claims.get("scope") != "intl-exchange":
+        return None
+    return claims.get("ord") or None
+
+
 def portal_login_required(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
@@ -11693,6 +11743,9 @@ def verify_international_exchange():
             "customerEmail": order.get("customerEmail", ""),
             "eligibleUntil": eligible_until.strftime("%B %-d, %Y"),
             "isApo":         (country in ("US", "USA") and state in MILITARY_STATES),
+            # Proof, for the submit step, that the identity check above passed
+            # for THIS order. See issue_exchange_ticket().
+            "exchangeToken": issue_exchange_ticket(order_number),
             "shipTo": {
                 "name":       ship_to.get("name", ""),
                 "street1":    ship_to.get("street1", ""),
@@ -11770,6 +11823,14 @@ def create_international_checkout():
     c = cors()
     data = request.get_json() or {}
 
+    # Same ticket as the APO path. Stripe makes the money side honest here, but
+    # the stale-record sweep below still deletes by order number, so an
+    # unverified caller could clear someone else's pending exchange.
+    order_number = read_exchange_ticket(data.get("exchangeToken"))
+    if not order_number:
+        return Response(json.dumps({"error": "session_expired"}),
+                        status=401, headers=c, mimetype="application/json")
+
     if not STRIPE_SECRET_KEY:
         return Response(json.dumps({"error": "Stripe not configured"}),
                         status=500, headers=c, mimetype="application/json")
@@ -11780,7 +11841,7 @@ def create_international_checkout():
     # Store all exchange data keyed by ref_id (in-memory cache; Airtable is the source of truth)
     _intl_pending[ref_id] = {
         "orderId":       data.get("orderId"),
-        "orderNumber":   data.get("orderNumber", ""),
+        "orderNumber":   order_number,
         "customerName":  data.get("customerName", ""),
         "customerEmail": data.get("customerEmail", ""),
         "items":         data.get("items", []),        # list of {originalSku, selectedSku, selectedName, quantity, parentProductId}
@@ -11792,7 +11853,7 @@ def create_international_checkout():
 
     # Clean up any abandoned pending records for this order
     try:
-        order_num_int = int(data.get("orderNumber", ""))
+        order_num_int = int(order_number)
         read_token = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or RETURNS_WRITE_TOKEN
         write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
         search_resp = req_lib.get(
@@ -11856,7 +11917,7 @@ def create_international_checkout():
             "Payment Confirmed": False,
         }
         try:
-            at_fields["Order #"] = int(data.get("orderNumber", ""))
+            at_fields["Order #"] = int(order_number)
         except (ValueError, TypeError):
             pass
         write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
@@ -11914,18 +11975,27 @@ def create_international_checkout():
 @app.route("/api/submit-apo-exchange", methods=["POST", "OPTIONS"])
 def submit_apo_exchange():
     """APO/military exchange: same as international but no Stripe fee.
-    Payment Confirmed is set to True immediately."""
+    Payment Confirmed is set to True immediately — which is correct for a free
+    military exchange, but only once we know it really is that customer, hence
+    the ticket below."""
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "POST"})
     c = cors()
     data = request.get_json() or {}
+
+    # The order number comes from the signed ticket, never from the request —
+    # see issue_exchange_ticket(). No ticket, no exchange.
+    order_number = read_exchange_ticket(data.get("exchangeToken"))
+    if not order_number:
+        return Response(json.dumps({"success": False, "error": "session_expired"}),
+                        status=401, headers=c, mimetype="application/json")
 
     import uuid
     ref_id = str(uuid.uuid4())
 
     _intl_pending[ref_id] = {
         "orderId":         data.get("orderId"),
-        "orderNumber":     data.get("orderNumber", ""),
+        "orderNumber":     order_number,
         "customerName":    data.get("customerName", ""),
         "customerEmail":   data.get("customerEmail", ""),
         "items":           data.get("items", []),
@@ -11937,7 +12007,7 @@ def submit_apo_exchange():
 
     # Clean up stale unpaid Airtable records for this order
     try:
-        order_num_int = int(data.get("orderNumber", ""))
+        order_num_int = int(order_number)
         read_token  = AIRTABLE_OPS_TOKEN or AIRTABLE_BASE_TOKEN or RETURNS_WRITE_TOKEN
         write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
         search_resp = req_lib.get(
@@ -11998,7 +12068,7 @@ def submit_apo_exchange():
             "Date Submitted":    today_str,
         }
         try:
-            at_fields["Order #"] = int(data.get("orderNumber", ""))
+            at_fields["Order #"] = int(order_number)
         except (ValueError, TypeError):
             pass
         write_token = os.environ.get("AIRTABLE_WRITE_TOKEN_2", RETURNS_WRITE_TOKEN)
@@ -12026,7 +12096,6 @@ def submit_apo_exchange():
     try:
         customer_email = data.get("customerEmail", "")
         customer_name  = data.get("customerName", "")
-        order_number   = data.get("orderNumber", "")
         if SENDGRID_API_KEY and customer_email:
             first_name = customer_name.split()[0] if customer_name else "there"
             email_body = (

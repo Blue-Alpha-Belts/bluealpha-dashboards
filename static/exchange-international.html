@@ -544,6 +544,15 @@
       <strong>Something went wrong</strong>
       Could not create checkout session. Please try again or <a href="mailto:info@bluealpha.us">contact us</a>.
     </div>
+    <!-- The order lookup on step 1 is good for an hour. Someone who leaves the
+         page open longer than that gets asked to look their order up again,
+         which is a plain instruction rather than an error. -->
+    <div class="message message-error hidden" id="n-msg-session-expired">
+      <strong>Please look up your order again</strong>
+      This page has been open a while, so we need to re-check your order before
+      submitting. Nothing you entered has been sent — reload and start again, or
+      <a href="mailto:info@bluealpha.us">contact us</a> if you would rather we did it for you.
+    </div>
 
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="nGoBack(4)">Back</button>
@@ -949,6 +958,9 @@ async function startCheckout() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
+        // Proof we passed the order lookup on step 1. The server reads the
+        // order number out of this, not out of orderNumber below.
+        exchangeToken:   verifyData.exchangeToken,
         orderId:         verifyData.orderId,
         orderNumber:     verifyData.orderNumber,
         customerName:    verifyData.customerName,
@@ -962,6 +974,12 @@ async function startCheckout() {
     });
     const data = await res.json();
 
+    if (data.error === 'session_expired') {
+      showMsg('n-msg-session-expired');
+      btn.disabled = false;
+      btn.innerHTML = 'Pay $10 &amp; Submit →';
+      return;
+    }
     if (data.url) {
       window.location.href = data.url;
       return;
@@ -987,6 +1005,9 @@ async function submitApoExchange() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
+        // Proof we passed the order lookup on step 1. The server reads the
+        // order number out of this, not out of orderNumber below.
+        exchangeToken:   verifyData.exchangeToken,
         orderId:         verifyData.orderId,
         orderNumber:     verifyData.orderNumber,
         customerName:    verifyData.customerName,
@@ -999,6 +1020,12 @@ async function submitApoExchange() {
       }),
     });
     const data = await res.json();
+    if (data.error === 'session_expired') {
+      showMsg('n-msg-session-expired');
+      btn.disabled = false;
+      btn.textContent = 'Submit Exchange →';
+      return;
+    }
     if (data.success) {
       document.getElementById('screen-success').classList.remove('hidden');
       document.getElementById('new-progress').classList.add('hidden');
