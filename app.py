@@ -2788,10 +2788,14 @@ def submit_cancellation():
 
         # Cancel / update in ShipStation
         ss_success, ss_note = cancel_in_shipstation(order_id, items)
-        status_notes = ss_note if not ss_success else ""
 
+        # Status Notes holds the CS note Kelly refunds from. A successful cancel
+        # leaves it alone (Patty 2026-09-23: it used to be overwritten with
+        # "Cancelled in ShipStation", wiping the note); a failure is appended.
+        if ss_success:
+            return
         try:
-            patch_fields = {"Status Notes": (ss_note if not ss_success else "Cancelled in ShipStation")}
+            patch_fields = {"Status Notes": "\n".join(filter(None, [cs_notes, ss_note]))}
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
                 headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}",
