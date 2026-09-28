@@ -6900,7 +6900,25 @@ def quote_catalog():
                     headers={**cors()}, mimetype="application/json")
 
 
-def _reprice_items_or_error(items, read_token, pricing="standard"):
+# Customer-specific SKU prices that beat Sale Price, keyed customer record → SKU record.
+# Applied by /api/contract-catalog (display) and _reprice_items_or_error (authoritative).
+_NEOMAG_WIENERLOCK_THIGH_STRAP = [
+    "reccOGJ10DKriBe0M",  # BAG-3073 Black
+    "recZzW3gPqW3hNsMt",  # BAG-3074 Coyote Brown
+    "recQ8ecEhuYr2h9bQ",  # BAG-3078 Wolf Gray
+    "recBYvYtLhVaJcNXR",  # BAG-3079 Multicam Tropic
+    "recl8PDNFQiSiCzWI",  # BAG-3080 Multicam Arid
+    "recsKzY03HnftbgZW",  # BAG-3081 Multicam Black
+    "recuo0oXLcwO9eSTX",  # BAG-3082 Multicam
+    "rechbpeyHL5DpQz4z",  # BAG-3083 Woodland
+    "recUv2fTmNZgaMdgS",  # BAG-3084 Ranger Green
+]
+CUSTOMER_SKU_PRICE_OVERRIDES = {
+    "recZ2PLDOHFZDE3F7": {sid: 18.73 for sid in _NEOMAG_WIENERLOCK_THIGH_STRAP},  # NeoMag
+}
+
+
+def _reprice_items_or_error(items, read_token, pricing="standard", customer_id=""):
     """Server-side re-pricing: replace every item's unit price with the SKU's current
     price straight from Airtable. The browser's price is display-only — customers
     must not be able to set their own prices. Mutates items in place; returns an
@@ -6933,6 +6951,10 @@ def _reprice_items_or_error(items, read_token, pricing="standard"):
                 elif f.get("Category", "") == "Contract":
                     # Contract SKUs may legitimately have no Sale Price (ordered at $0)
                     price_map[r["id"]] = 0.0
+    if pricing == "standard":
+        for sid, p in CUSTOMER_SKU_PRICE_OVERRIDES.get(customer_id, {}).items():
+            if sid in price_map:
+                price_map[sid] = p
     for item, sid in zip(items, sku_ids):
         auth_price = price_map.get(sid)
         if auth_price is None:
@@ -7008,7 +7030,7 @@ def create_quote():
         # Server-side re-pricing for customer sessions (staff keep submitted prices).
         # Runs before any record is created so a bad item can't leave an orphan MO.
         if not _is_staff:
-            _reprice_err = _reprice_items_or_error(items, read_token)
+            _reprice_err = _reprice_items_or_error(items, read_token, customer_id=provided_cust_id)
             if _reprice_err:
                 return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
 
@@ -7273,7 +7295,7 @@ def update_quote(record_id):
         # Server-side re-pricing for customer sessions (staff keep submitted prices).
         # Runs BEFORE the delete below so a bad item can't wipe the quote's line items.
         if not _is_staff:
-            _reprice_err = _reprice_items_or_error(items, read_token)
+            _reprice_err = _reprice_items_or_error(items, read_token, customer_id=_pu.get("customer_id", ""))
             if _reprice_err:
                 return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
 
@@ -9815,6 +9837,7 @@ def contract_catalog(user):
             size_map    = {r["id"]: r["fields"].get("Name","") for r in fut_sizes.result()}
             fvar_map    = {r["id"]: r["fields"].get("Name","").strip() for r in fut_fvars.result()}
 
+        price_overrides = CUSTOMER_SKU_PRICE_OVERRIDES.get(customer_id, {})
         skus = []
         seen_parents = {}
         for r in sku_records:
@@ -9843,7 +9866,7 @@ def contract_catalog(user):
                 "recordId":       r["id"],
                 "sku":            f.get("SKU ID", ""),
                 "name":           f.get("Name + Variations", ""),
-                "price":          f.get("Sale Price", 0),
+                "price":          price_overrides.get(r["id"], f.get("Sale Price", 0)),
                 "parentId":       parent_id,
                 "parentName":     parent_name,
                 "colorId":        color_id,
