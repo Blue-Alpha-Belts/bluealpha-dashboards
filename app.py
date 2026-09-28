@@ -6916,6 +6916,8 @@ _NEOMAG_WIENERLOCK_THIGH_STRAP = [
 CUSTOMER_SKU_PRICE_OVERRIDES = {
     "recZ2PLDOHFZDE3F7": {sid: 18.73 for sid in _NEOMAG_WIENERLOCK_THIGH_STRAP},  # NeoMag
 }
+# Note shown above Unit price on /contract (and carried into the cart line name).
+CONTRACT_SKU_NOTES = {sid: "Wienerlock Buckle" for sid in _NEOMAG_WIENERLOCK_THIGH_STRAP}
 
 
 def _reprice_items_or_error(items, read_token, pricing="standard", customer_id=""):
@@ -9867,6 +9869,7 @@ def contract_catalog(user):
                 "sku":            f.get("SKU ID", ""),
                 "name":           f.get("Name + Variations", ""),
                 "price":          price_overrides.get(r["id"], f.get("Sale Price", 0)),
+                "note":           CONTRACT_SKU_NOTES.get(r["id"], ""),
                 "parentId":       parent_id,
                 "parentName":     parent_name,
                 "colorId":        color_id,

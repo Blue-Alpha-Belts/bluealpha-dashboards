@@ -378,6 +378,7 @@
       color: var(--muted);
     }
     .sku-price-row .sku-price-val { font-size: 1.05rem; font-weight: 700; color: var(--navy); }
+    .sku-note { margin: -4px 0 8px; font-size: 0.9rem; font-weight: 600; color: var(--navy); }
     /* ── Cart ────────────────────────────────────────────────────────────── */
     .cart-section-title {
       font-family: 'Montserrat', sans-serif;
@@ -1098,6 +1099,7 @@
           ${colorHtml}
           ${sizeHtml}
         </div>
+        <div class="sku-note" id="snote_${p.id}" style="display:none"></div>
         <div class="sku-price-row" id="spricerow_${p.id}" style="display:none">
           Unit price: <span class="sku-price-val" id="sprice_${p.id}"></span>
         </div>
@@ -1193,6 +1195,7 @@
     const sel   = document.getElementById('sc_' + parentId);
     const recId = sel ? sel.value : '';
     document.getElementById('spricerow_' + parentId).style.display = 'none';
+    document.getElementById('snote_' + parentId).style.display     = 'none';
     document.getElementById('sqrow_' + parentId).style.display     = 'none';
     document.getElementById('sb_' + parentId).disabled = true;
     if (!recId) return;
@@ -1212,6 +1215,7 @@
       if (szField) szField.style.display = 'none';
     }
     document.getElementById('spricerow_' + parentId).style.display = 'none';
+    document.getElementById('snote_' + parentId).style.display     = 'none';
     document.getElementById('sqrow_' + parentId).style.display     = 'none';
     document.getElementById('sb_' + parentId).disabled = true;
 
@@ -1263,6 +1267,7 @@
     const colorId = document.getElementById('sc_' + parentId)?.value || '';
     const sizeId  = document.getElementById('ss_' + parentId)?.value || '';
     document.getElementById('spricerow_' + parentId).style.display = 'none';
+    document.getElementById('snote_' + parentId).style.display     = 'none';
     document.getElementById('sqrow_' + parentId).style.display     = 'none';
     document.getElementById('sb_' + parentId).disabled = true;
     if (sizeId) _showPriceAndQty(parentId, colorId, sizeId);
@@ -1288,6 +1293,8 @@
     const qtyRow   = document.getElementById('sqrow_' + parentId);
     const addBtn   = document.getElementById('sb_' + parentId);
 
+    const noteEl = document.getElementById('snote_' + parentId);
+    if (noteEl) { noteEl.textContent = sku.note || ''; noteEl.style.display = sku.note ? '' : 'none'; }
     if (priceEl)  priceEl.textContent = sku.price != null ? money(sku.price) : 'Contact for price';
     if (priceRow) priceRow.style.display = '';
     if (qtyRow)   qtyRow.style.display   = '';
@@ -1315,6 +1322,7 @@
       : [sku.parentName || sku.name];
     if (!isProductSel && sku.colorName) parts.push(sku.colorName);
     if (!isProductSel && sku.sizeName)  parts.push(sku.sizeName);
+    if (sku.note) parts.push(sku.note);
 
     _cart.push({
       recordId:  sku.recordId,
@@ -1335,6 +1343,7 @@
     if (sizeSel)  sizeSel.innerHTML = '<option value="">Select a size\u2026</option>';
     if (szField)  szField.style.display = 'none';
     document.getElementById('spricerow_' + parentId).style.display = 'none';
+    document.getElementById('snote_' + parentId).style.display     = 'none';
     document.getElementById('sqrow_' + parentId).style.display     = 'none';
     document.getElementById('sb_' + parentId).disabled = true;
     const qtyEl = document.getElementById('sq_' + parentId);
