@@ -10558,12 +10558,13 @@ def _generate_portal_invite(record_id, write_token, expiry_hours=48):
     from datetime import datetime, timezone, timedelta
     token = secrets.token_urlsafe(32)
     expiry = (datetime.now(timezone.utc) + timedelta(hours=expiry_hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    req_lib.patch(
+    r = req_lib.patch(
         f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{record_id}",
         headers={**at_headers(write_token), "Content-Type": "application/json"},
         json={"fields": {"Magic Token": token, "Token Expiry": expiry}},
         timeout=10,
     )
+    r.raise_for_status()  # a link whose token never saved is a dead link
     return f"{QUOTE_BASE_URL}/setup-account/{token}"
 
 
@@ -11609,6 +11610,45 @@ def admin_send_portal_invite(record_id):
         _send_portal_invite_email(to_email, to_name, company_name, setup_link)
 
         return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+    except Exception as e:
+        return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
+
+
+@app.route("/api/admin/customers/<record_id>/setup-link", methods=["POST"])
+def admin_make_setup_link(record_id):
+    """Admin: generate a fresh portal setup link and RETURN it without emailing it.
+    For customers whose mail server filters our SendGrid mail (government gateways):
+    staff send the link from Gmail themselves, which those filters let through."""
+    c = cors()
+    if not check_admin_session(request):
+        return Response(json.dumps({"error": "Unauthorized"}), status=401, headers=c, mimetype="application/json")
+
+    read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+    write_token = APPLY_WRITE_TOKEN or RETURNS_WRITE_TOKEN
+    expiry_hours = 7 * 24  # a hand-sent link may sit unread for a few days
+
+    try:
+        r = req_lib.get(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{record_id}",
+            headers=at_headers(read_token), timeout=10,
+        )
+        if not r.ok:
+            return Response(json.dumps({"error": "Customer not found"}), status=404, headers=c, mimetype="application/json")
+        f = r.json().get("fields", {})
+        if f.get("Portal Hash") and (f.get("Portal Username") or "").strip():
+            return Response(json.dumps({"error": "This customer has already set up their login. "
+                                                 "They can reset it from the portal login page."}),
+                            status=400, headers=c, mimetype="application/json")
+
+        setup_link = _generate_portal_invite(record_id, write_token, expiry_hours=expiry_hours)
+        return Response(json.dumps({
+            "ok":        True,
+            "link":      setup_link,
+            "email":     f.get("Main Contact Email", ""),
+            "name":      f.get("Main Contact Name", ""),
+            "org":       f.get("Organization Name", ""),
+            "expiresIn": expiry_hours,
+        }), headers=c, mimetype="application/json")
     except Exception as e:
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
