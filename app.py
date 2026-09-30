@@ -1,5 +1,6 @@
 from flask import Flask, send_from_directory, abort, request, Response, redirect, make_response
 import os
+import math
 import re
 import functools
 import json
@@ -13176,6 +13177,20 @@ def portal_admin_shipped_orders():
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
 
 
+# Invoices may bill up to 5% over the sales order per item, across every invoice
+# for the order (Patty 2026-09-30, "when we're invoicing shipped orders, we need the
+# ability to add up to 5% of what was on the sales order"). Same tolerance as the
+# Ops app's bill/receiving rule (QTY_OVERAGE in src/cs/shop.ts): goods are shipped
+# by the roll, box or pound, so 208 against an order for 200 is the order filled.
+# Quantities are whole units here, so the ceiling rounds DOWN (7 -> 7, 20 -> 21).
+INVOICE_QTY_OVERAGE = 0.05
+
+
+def _qty_ceiling(ordered):
+    """Most that may be billed in total against an ordered quantity."""
+    return math.floor(float(ordered) * (1 + INVOICE_QTY_OVERAGE) + 1e-9)
+
+
 def _li_qty_key(lf):
     """Stable key for matching line items across SO/invoice copies: SKU string,
     falling back to Product SKU record id, then product name."""
@@ -13227,7 +13242,8 @@ def _invoiced_qty_by_key(base_order_id, read_token):
 
 def _partial_invoice_overbill_error(so_fields, base_order_id, selected_items, read_token):
     """Over-billing guard for convert-to-invoice: across ALL invoices for an order
-    (base + '-N' splits), no item may be billed beyond the SO's quantity. Returns an
+    (base + '-N' splits), no item may be billed beyond the SO's quantity plus the
+    INVOICE_QTY_OVERAGE tolerance (5%, rounded down to whole units). Returns an
     error string to reject the request, or None if OK. Runs BEFORE the invoice record
     is created, so any Airtable error here also blocks the conversion (fail closed) —
     double-billing a customer is worse than a retry (IN-0265-1/IN-0276-1, 2026-08-25)."""
@@ -13250,13 +13266,18 @@ def _partial_invoice_overbill_error(so_fields, base_order_id, selected_items, re
         return None
     invoiced = _invoiced_qty_by_key(base_order_id, read_token)
     over = []
+    pct = f"{round(INVOICE_QTY_OVERAGE * 100):g}%"
     for k, want in req.items():
-        remaining = max(0.0, so_total.get(k, 0) - invoiced.get(k, 0))
-        if want > remaining + 1e-9:
-            over.append(f"{names.get(k, k)} (requested {want:g}, un-invoiced {remaining:g})")
+        ordered = so_total.get(k, 0)
+        remaining = max(0.0, ordered - invoiced.get(k, 0))
+        ceiling = max(0.0, _qty_ceiling(ordered) - invoiced.get(k, 0))
+        if want > ceiling + 1e-9:
+            over.append(f"{names.get(k, k)} (requested {want:g}, ordered {ordered:g}, "
+                        f"un-invoiced {remaining:g}, up to {ceiling:g} with the {pct} tolerance)")
     if over:
-        return ("Blocked to prevent double-billing — already invoiced on this order: "
-                + "; ".join(over) + ". Adjust quantities to the un-invoiced remainder.")
+        return ("Blocked to prevent over-billing — more than the sales order allows: "
+                + "; ".join(over) + f". Quantities may run up to {pct} over the sales order, "
+                "across all of its invoices.")
     return None
 
 
@@ -13360,33 +13381,46 @@ def _fetch_so_line_items(record_id, split_order_number=None):
                         if li["sku"] in ss_items:
                             li["qty"] = ss_items[li["sku"]]
 
-    # Cap defaults at the un-invoiced remainder: qty so far = what shipped in THIS
+    # Cap defaults at what may still be billed: qty so far = what shipped in THIS
     # order (SS quantities, per the split/main logic above); now subtract what other
     # invoices for this order (base + splits) already billed, so the modal prompts
     # with only the shipped-and-not-yet-billed quantities. Items fully billed
     # elsewhere default to qty 0, unchecked. (IN-0265-1/IN-0276-1, 2026-08-25)
+    #
+    # The ceiling is the sales order plus the INVOICE_QTY_OVERAGE tolerance
+    # (2026-09-30): a split that shipped 208 against 200 prompts with 208. But the
+    # tolerance is room, never something owed — once the ordered quantity is fully
+    # invoiced the line defaults to 0 and unchecked, so a top-up never happens by
+    # accident. Every line also reports its `maxQty` for the form's input ceiling.
     try:
         base_order_id = str(so_fields.get("Order ID", "")).strip()
         invoiced = _invoiced_qty_by_key(base_order_id, read_token) if base_order_id else {}
     except Exception as _ge:
         print(f"[so-line-items] invoiced-qty lookup failed: {_ge}")
         invoiced = {}
-    if invoiced:
-        # Per key, an order may still bill (SO total - already invoiced); split that
-        # allowance across this SO's lines in order.
-        so_total = {}
-        for li in line_items:
-            so_total[li["_key"]] = so_total.get(li["_key"], 0) + float(li["_soQty"] or 0)
-        allowed = {k: max(0.0, t - float(invoiced.get(k, 0))) for k, t in so_total.items()}
-        for li in line_items:
-            k = li["_key"]
-            take = min(float(li["qty"] or 0), allowed.get(k, 0.0))
-            allowed[k] = allowed.get(k, 0.0) - take
-            if take != float(li["qty"] or 0):
-                li["qty"] = int(take) if take == int(take) else take
-                if take <= 0:
-                    li["defaultChecked"] = False
+    # Per key, an order may still bill (ceiling - already invoiced); split that
+    # allowance across this SO's lines in order.
+    so_total = {}
     for li in line_items:
+        so_total[li["_key"]] = so_total.get(li["_key"], 0) + float(li["_soQty"] or 0)
+    owed = {k: max(0.0, t - float(invoiced.get(k, 0))) for k, t in so_total.items()}
+    allowed = {k: max(0.0, _qty_ceiling(t) - float(invoiced.get(k, 0))) for k, t in so_total.items()}
+    for li in line_items:
+        k = li["_key"]
+        take = min(float(li["qty"] or 0), allowed.get(k, 0.0)) if owed.get(k, 0.0) > 0 else 0.0
+        allowed[k] = allowed.get(k, 0.0) - take
+        owed[k] = max(0.0, owed.get(k, 0.0) - take)
+        li["_take"] = take
+        if take != float(li["qty"] or 0):
+            li["qty"] = int(take) if take == int(take) else take
+            if take <= 0:
+                li["defaultChecked"] = False
+    for li in line_items:
+        # What this line's box may go up to: its default plus whatever of the
+        # key's allowance no line took. Two lines of one SKU both see the same
+        # leftover; the over-billing guard on convert is the authority.
+        mx = li.pop("_take", 0.0) + allowed.get(li["_key"], 0.0)
+        li["maxQty"] = int(mx) if mx == int(mx) else mx
         li.pop("_key", None)
         li.pop("_soQty", None)
 

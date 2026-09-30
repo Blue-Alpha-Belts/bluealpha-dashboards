@@ -1361,7 +1361,8 @@
                   <td style="padding:8px;text-align:center;">
                     <input type="number" class="inv-qty" data-idx="${i}" data-unit="${item.unit_price}"
                       data-id="${esc(item.lineItemId)}"
-                      value="${item.qty}" min="1" max="9999" step="1"
+                      value="${item.qty}" min="1" max="${item.maxQty != null ? item.maxQty : 9999}" step="1"
+                      title="${item.maxQty != null ? `Up to ${item.maxQty} (5% over the sales order, less what other invoices billed)` : ''}"
                       style="width:64px;text-align:center;padding:4px;border:1px solid #ccc;border-radius:4px;font-size:0.88rem;"
                       oninput="updateInvoiceRow(${i})">
                   </td>
