@@ -14328,8 +14328,17 @@ def admin_convert_to_invoice(record_id):
 
 # ── Stripe invoice creation ───────────────────────────────────────────────────
 
-def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email, billing_name, org_name, li_items):
-    """Create CC + ACH Stripe hosted invoices and patch back to the Airtable invoice record."""
+def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email, billing_name, org_name, li_items,
+                                       methods=("card", "us_bank_account"), waive_cc_fee=False, customer_id=""):
+    """Create CC + ACH Stripe hosted invoices and patch back to the Airtable invoice record.
+
+    methods=("card",) re-issues the card invoice alone and patches only the CC
+    fields, leaving the ACH link (and the Stripe Invoice Due Date, which the
+    past-due list reads) exactly as the customer already has them.
+    waive_cc_fee leaves off the 3% processing-fee line (Patty 2026-10-06,
+    first for IN-0513); the invoice carries metadata cc_fee_waived=true so the
+    choice is visible in Stripe. customer_id reuses the record's Stripe
+    customer instead of creating another one."""
     if not STRIPE_SECRET_KEY:
         raise Exception("STRIPE_SECRET_KEY not configured")
     if not billing_email:
@@ -14340,15 +14349,18 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
     # Stripe only accepts a single email — take the first if semicolon/comma-separated
     stripe_email = billing_email.replace(",", ";").split(";")[0].strip()
 
-    # 1. Create Stripe customer
-    cust_r = req_lib.post("https://api.stripe.com/v1/customers",
+    # 1. Create Stripe customer (or reuse the record's)
+    if customer_id:
+        print(f"[stripe] reusing customer {customer_id} for {billing_email}")
+    cust_r = None if customer_id else req_lib.post("https://api.stripe.com/v1/customers",
         data={"email": stripe_email, "name": org_name or billing_name or stripe_email,
               "description": billing_name or ""},
         auth=ss_auth, timeout=15)
-    if not cust_r.ok:
-        raise Exception(f"Stripe customer create failed: {cust_r.status_code} {cust_r.text[:300]}")
-    customer_id = cust_r.json()["id"]
-    print(f"[stripe] created customer {customer_id} for {billing_email}")
+    if cust_r is not None:
+        if not cust_r.ok:
+            raise Exception(f"Stripe customer create failed: {cust_r.status_code} {cust_r.text[:300]}")
+        customer_id = cust_r.json()["id"]
+        print(f"[stripe] created customer {customer_id} for {billing_email}")
 
     cc_id = cc_url = ach_id = ach_url = due_date_str = ""
 
@@ -14359,7 +14371,7 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
         for i in li_items
     )
 
-    for method in ["card", "us_bank_account"]:
+    for method in methods:
         # 2. Create draft invoice first
         inv_data = {
             "customer":          customer_id,
@@ -14367,6 +14379,8 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
             "days_until_due":    "30",
             "payment_settings[payment_method_types][0]": method,
         }
+        if method == "card" and waive_cc_fee:
+            inv_data["metadata[cc_fee_waived]"] = "true"
         inv_r = req_lib.post("https://api.stripe.com/v1/invoices",
             data=inv_data, auth=ss_auth, timeout=15)
         if not inv_r.ok:
@@ -14404,7 +14418,7 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
 
         # 3% processing fee on the card invoice only (the invoice email already
         # tells customers CC payments carry this fee; ACH stays at base price)
-        if method == "card" and _surcharge_subtotal > 0:
+        if method == "card" and _surcharge_subtotal > 0 and not waive_cc_fee:
             fee_cents = round(_surcharge_subtotal * 0.03 * 100)
             if fee_cents > 0:
                 fee_r = req_lib.post("https://api.stripe.com/v1/invoiceitems",
@@ -14438,16 +14452,22 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
         print(f"[stripe] {method} invoice {stripe_inv_id} finalized → {hosted_url[:60]}...")
 
     # 5. Patch Airtable invoice record with all Stripe data
-    patch_fields = {
-        "Stripe Customer ID":          customer_id,
-        "Stripe Invoice ID (CC)":      cc_id,
-        "Stripe Invoice URL (CC)":     cc_url,
-        "Stripe Invoice Status (CC)":  "Open",
-        "Stripe Invoice ID (ACH)":     ach_id,
-        "Stripe Invoice URL (ACH)":    ach_url,
-        "Stripe Invoice Status (ACH)": "Open",
-    }
-    if due_date_str:
+    patch_fields = {"Stripe Customer ID": customer_id}
+    if "card" in methods:
+        patch_fields.update({
+            "Stripe Invoice ID (CC)":      cc_id,
+            "Stripe Invoice URL (CC)":     cc_url,
+            "Stripe Invoice Status (CC)":  "Open",
+        })
+    if "us_bank_account" in methods:
+        patch_fields.update({
+            "Stripe Invoice ID (ACH)":     ach_id,
+            "Stripe Invoice URL (ACH)":    ach_url,
+            "Stripe Invoice Status (ACH)": "Open",
+        })
+    # A card-only re-issue keeps the original due date: moving it would drop
+    # the invoice off the past-due list while its ACH link is still the old one.
+    if due_date_str and "us_bank_account" in methods:
         patch_fields["Stripe Invoice Due Date"] = due_date_str
 
     patch_r = req_lib.patch(
@@ -14833,6 +14853,15 @@ def admin_create_stripe_invoices(record_id):
 
         body_json  = request.get_json(silent=True) or {}
         force_recreate = body_json.get("force", False)
+        # Waiving the 3% card fee re-issues the CARD link only (Patty
+        # 2026-10-06): the ACH link the customer has stays live and untouched.
+        waive_cc_fee = bool(body_json.get("waive_cc_fee", False))
+        if waive_cc_fee and not force_recreate:
+            return Response(json.dumps({"error": "Waiving the card fee re-issues an existing card link; send force=true."}),
+                            status=400, headers=c, mimetype="application/json")
+        pairs = ((("Stripe Invoice ID (CC)", "Stripe Invoice URL (CC)"),) if waive_cc_fee else
+                 (("Stripe Invoice ID (CC)", "Stripe Invoice URL (CC)"),
+                  ("Stripe Invoice ID (ACH)", "Stripe Invoice URL (ACH)")))
 
         def _first(lst):
             return lst[0] if isinstance(lst, list) and lst else (lst or "")
@@ -14860,8 +14889,7 @@ def admin_create_stripe_invoices(record_id):
         # corrected one went out (Patty 2026-09-11).
         if force_recreate and (existing_cc_url or existing_ach_url):
             ss_auth = (STRIPE_SECRET_KEY, "")
-            for id_field, url_field in (("Stripe Invoice ID (CC)", "Stripe Invoice URL (CC)"),
-                                        ("Stripe Invoice ID (ACH)", "Stripe Invoice URL (ACH)")):
+            for id_field, url_field in pairs:
                 stripe_id = (fields.get(id_field, "") or "").strip()
                 if not stripe_id and fields.get(url_field):
                     # Older records predate the stored id — fall back to the scan.
@@ -14895,8 +14923,7 @@ def admin_create_stripe_invoices(record_id):
             req_lib.patch(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}/{record_id}",
                 headers={**at_headers(write_token), "Content-Type": "application/json"},
-                json={"fields": {"Stripe Invoice URL (CC)": "", "Stripe Invoice URL (ACH)": "",
-                                 "Stripe Invoice ID (CC)": "", "Stripe Invoice ID (ACH)": ""}},
+                json={"fields": {f: "" for pair in pairs for f in pair}},
                 timeout=15,
             )
 
@@ -14923,7 +14950,12 @@ def admin_create_stripe_invoices(record_id):
                             status=400, headers=c, mimetype="application/json")
 
         # Run synchronously so any Stripe or Airtable errors surface to the caller
-        _create_stripe_invoices_for_record(write_token, record_id, billing_email, billing_name, org_name, li_items)
+        if waive_cc_fee:
+            _create_stripe_invoices_for_record(write_token, record_id, billing_email, billing_name, org_name, li_items,
+                                               methods=("card",), waive_cc_fee=True,
+                                               customer_id=(fields.get("Stripe Customer ID") or "").strip())
+        else:
+            _create_stripe_invoices_for_record(write_token, record_id, billing_email, billing_name, org_name, li_items)
 
         _INVOICES_CACHE.clear()
         return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
