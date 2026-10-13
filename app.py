@@ -5958,7 +5958,7 @@ def send_order_email(to_email, to_name, org_name, doc_number, is_order,
     actual_to  = TEST_EMAIL_OVERRIDE or to_email
     first_name = to_name.split()[0] if to_name else "there"
     doc_label  = "Sales Order" if is_order else "Quote"
-    subject    = f"Blue Alpha {doc_label} {doc_number}"
+    subject    = f"Your Blue Alpha {doc_label} – {doc_number}"
     intro      = (f"Your sales order is attached as a PDF. You'll get an email with tracking "
                   f"information as soon as it ships, and a separate email with your invoice."
                   if is_order else
@@ -6082,7 +6082,7 @@ def send_invoice_email(to_email, to_name, org_name, so_number, inv_number, line_
         return
     actual_to = to_list[0]["email"]  # kept for legacy references below
     first_name = to_name.split()[0] if to_name else "there"
-    subject = f"Blue Alpha {so_number} \u2014 Invoice {inv_number}"
+    subject = f"Your Blue Alpha Invoice \u2013 {inv_number}"
     from datetime import timedelta
     due_date = (_today_utc() + timedelta(days=30)).strftime("%B %d, %Y")
     today_str = _today_utc().strftime("%B %d, %Y")
@@ -7221,8 +7221,17 @@ def create_quote():
         if _send_email:
             try:
                 quote_data = _fetch_quote_data(mo_record_id)
-                send_quote_email(email, contact_name or org_name, org_name,
-                                 quote_number, mo_record_id, expiry_str, quote_data=quote_data)
+                if order_type == "Sales Order":
+                    # A sales order gets the SO-worded email and the SO PDF.
+                    # send_quote_email titled SO-0585 "Your Blue Alpha Quote"
+                    # (Patty 2026-10-13: the subject names the document type).
+                    send_order_email(email, contact_name or org_name, org_name,
+                                     quote_number, True,
+                                     float((quote_data or {}).get("total") or 0),
+                                     pdf_bytes=_build_quote_pdf_bytes(quote_data, doc_type="order"))
+                else:
+                    send_quote_email(email, contact_name or org_name, org_name,
+                                     quote_number, mo_record_id, expiry_str, quote_data=quote_data)
             except Exception as email_err:
                 print(f"[create_quote] email failed: {email_err}")
 
