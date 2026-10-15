@@ -6437,7 +6437,30 @@ _CATALOG_REFRESHING = False  # prevent duplicate background refreshes
 
 
 def _build_catalog():
-    """Fetch and assemble the quote catalog. Fetches all tables in parallel."""
+    """Fetch and assemble the quote catalog.
+
+    Since 2026-10-15 the list comes from cs.bluealphaops.com's Products (new)
+    tab (GET /api/catalog, same shape as below) whenever CS_CATALOG_URL is
+    set — what is on the portal is then the tab's Sell-on-portal switch, not
+    the hard-coded lists further down. Without the variable, or if the tab
+    cannot be reached, the old Airtable build runs so the portal never goes
+    empty.
+    """
+    cs_url = os.environ.get("CS_CATALOG_URL", "").rstrip("/")
+    if cs_url:
+        try:
+            r = req_lib.get(f"{cs_url}/api/catalog",
+                            headers={"X-Catalog-Key": os.environ.get("CS_CATALOG_KEY", "")},
+                            timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("parents") and data.get("skus"):
+                print(f"[catalog] from Products (new): {len(data['parents'])} parents, {len(data['skus'])} skus")
+                return {"parents": data["parents"], "skus": data["skus"], "addonSkus": data.get("addonSkus", {})}
+            print("[catalog] Products (new) answered empty; using the Airtable build")
+        except Exception as e:
+            print(f"[catalog] Products (new) unreachable ({e}); using the Airtable build")
+
     import concurrent.futures
     token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
 
