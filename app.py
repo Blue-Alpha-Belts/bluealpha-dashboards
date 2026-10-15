@@ -1770,9 +1770,19 @@ def cancel_in_shipstation(order_id, items_to_cancel):
                 headers={**ss_headers(), "Content-Type": "application/json"},
                 json=cancel_payload, timeout=20,
             )
-            if cancel_r.status_code in (200, 201):
-                return True, "Order cancelled in ShipStation"
-            return False, f"Cancel failed (HTTP {cancel_r.status_code}): {cancel_r.text[:200]}"
+            if cancel_r.status_code not in (200, 201):
+                return False, f"Cancel failed (HTTP {cancel_r.status_code}): {cancel_r.text[:200]}"
+            # A 200 is not proof (order 294247, 2026-10-14: refunded, never
+            # cancelled) — read it back before anyone is told it's cancelled.
+            chk = req_lib.get(
+                f"https://ssapi.shipstation.com/orders/{order_id}",
+                headers=ss_headers(), timeout=15,
+            )
+            now_status = chk.json().get("orderStatus", "") if chk.status_code == 200 else ""
+            if now_status != "cancelled":
+                return False, (f"ShipStation still shows the order as {now_status or 'unknown'} "
+                               f"after the cancel request")
+            return True, "Order cancelled in ShipStation"
         else:
             # Partial: update order with only the remaining items
             internal_note = (order.get("internalNotes") or "").strip()
@@ -2646,12 +2656,12 @@ def submit_cancellation():
 
     # Block cancellation only if order has shipped OR has a tracking number.
     # If the order is already cancelled in ShipStation, always allow through.
+    ss_status = ""
     try:
         ss_r = req_lib.get(
             f"https://ssapi.shipstation.com/orders/{order_id}",
             headers=ss_headers(), timeout=10,
         )
-        ss_status = ""
         if ss_r.status_code == 200:
             ss_status = ss_r.json().get("orderStatus", "")
 
@@ -2723,6 +2733,38 @@ def submit_cancellation():
     except Exception as e:
         print(f"[submit_cancellation] Duplicate check failed (non-fatal): {e}")
 
+    # ShipStation FIRST, and it must succeed before anything is recorded
+    # (Patty 2026-10-15). It used to run in a background thread after the
+    # Airtable record — order 294247 got a cancellation record and a refund
+    # while ShipStation never cancelled it, and nobody was told.
+    if ss_status == "cancelled":
+        ss_note = "Already cancelled in ShipStation"
+    else:
+        ss_ok, ss_note = cancel_in_shipstation(order_id, items)
+        if not ss_ok:
+            return Response(
+                json.dumps({
+                    "success": False,
+                    "error": f"ShipStation did not cancel it, so nothing was recorded — {ss_note}",
+                }),
+                status=502, headers=c, mimetype="application/json",
+            )
+    ss_partial = ss_note.startswith("Partial")
+
+    def record_failed(detail):
+        # ShipStation has already changed. A full cancel can be resubmitted
+        # (the order now reads as cancelled and is let straight through); a
+        # partial one can't — the items are gone and a resubmit would cut more.
+        tail = ("Do NOT resubmit — tell Patty so the record can be added by hand."
+                if ss_partial else "Submit the cancellation again to create the record.")
+        return Response(
+            json.dumps({
+                "success": False,
+                "error": f"{ss_note}, but the cancellation record could not be created ({detail}). {tail}",
+            }),
+            status=500, headers=c, mimetype="application/json",
+        )
+
     items_text = "\n".join(
         f"{i.get('quantity', 1)}x {i.get('sku', '')} — {i.get('name', '')}"
         for i in items
@@ -2757,15 +2799,13 @@ def submit_cancellation():
             timeout=10,
         )
         if r.status_code not in (200, 201):
-            return Response(json.dumps({"success": False, "error": r.text}),
-                            status=500, headers=c, mimetype="application/json")
+            return record_failed(f"Airtable HTTP {r.status_code}: {r.text[:200]}")
         record_id = r.json().get("id", "")
     except Exception as e:
-        return Response(json.dumps({"success": False, "error": str(e)}),
-                        status=500, headers=c, mimetype="application/json")
+        return record_failed(str(e))
 
-    # Handle Return Items creation + ShipStation cancellation in background
-    def process_cancellation(record_id, order_id, items):
+    # Return Items in the background (ShipStation is already done above)
+    def process_cancellation(record_id, items):
         # Create Return Items with Received auto-checked (items never shipped)
         for item in items:
             try:
@@ -2787,27 +2827,7 @@ def submit_cancellation():
             except Exception as e:
                 print(f"[submit_cancellation] Return Item creation failed: {e}")
 
-        # Cancel / update in ShipStation
-        ss_success, ss_note = cancel_in_shipstation(order_id, items)
-
-        # Status Notes holds the CS note Kelly refunds from. A successful cancel
-        # leaves it alone (Patty 2026-09-23: it used to be overwritten with
-        # "Cancelled in ShipStation", wiping the note); a failure is appended.
-        if ss_success:
-            return
-        try:
-            patch_fields = {"Status Notes": "\n".join(filter(None, [cs_notes, ss_note]))}
-            req_lib.patch(
-                f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}/{record_id}",
-                headers={"Authorization": f"Bearer {RETURNS_WRITE_TOKEN}",
-                         "Content-Type": "application/json"},
-                json={"fields": patch_fields},
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"[submit_cancellation] Airtable status update failed: {e}")
-
-    threading.Thread(target=process_cancellation, args=(record_id, order_id, items), daemon=True).start()
+    threading.Thread(target=process_cancellation, args=(record_id, items), daemon=True).start()
 
     # Customer notification
     customer_email = data.get("customerEmail", "").strip()

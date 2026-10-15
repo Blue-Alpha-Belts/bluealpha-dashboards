@@ -1662,7 +1662,7 @@ async function csSubmitCancellation() {
       const allItems  = orderData.items && selectedItems.length >= orderData.items.length;
       document.getElementById('cancel-success-msg').textContent =
         (allItems ? 'The full order' : itemCount + ' item(s)') +
-        ' will be cancelled in ShipStation. The manager will see this on the refund queue.';
+        ' has been cancelled in ShipStation. The manager will see this on the refund queue.';
       showSuccessState('cancel-success');
     } else {
       throw new Error(data.error || 'Unknown error');
