@@ -8204,6 +8204,15 @@ def _ship_contact_line(fields):
     return main_contact[0] if isinstance(main_contact, list) and main_contact else (main_contact or "")
 
 
+def _check_paid_pdf(fields):
+    """What checks have already paid on an invoice, for its PDF (Patty
+    2026-10-16). Check Payment Amount and Check # are stamped by the Ops app
+    from every check applied. Only a PART payment is shown: a covered invoice
+    is paid, and its PDF reads as it always did."""
+    paid = round(float(fields.get("Check Payment Amount") or 0), 2)
+    return {"paidByCheck": paid, "checkNumbers": str(fields.get("Check #") or "").strip()} if paid > 0 else {}
+
+
 def _build_invoice_pdf_bytes(inv):
     """Generate PDF bytes for an invoice matching the quote/SO PDF style."""
     import os, tempfile
@@ -8545,7 +8554,23 @@ def _build_invoice_pdf_bytes(inv):
     pdf.set_line_width(0.4)
     pdf.line(19 + W - 50, y_rule, 19 + W, y_rule)
     pdf.ln(1)
-    totals_row("Total Due", f"${subtotal:.2f}", bold=True)
+    # A part-paid invoice shows the total, what checks paid, and what is left —
+    # the same balance its Stripe links charge (Patty 2026-10-16).
+    paid_by_check = float(inv.get("paidByCheck") or 0)
+    if 0 < paid_by_check < subtotal - 0.005:
+        def wide_row(label, value, bold=False):
+            pdf.set_font("Helvetica", "B" if bold else "", 9)
+            pdf.cell(W - 85, 6, "", border=0)
+            pdf.set_text_color(*TEXT if bold else MUTED)
+            pdf.cell(60, 6, label, border=0, align="R")
+            pdf.set_text_color(*TEXT)
+            pdf.cell(25, 6, value, border=0, align="R", new_x="LMARGIN", new_y="NEXT")
+        nums = inv.get("checkNumbers", "")
+        wide_row("Invoice Total", f"${subtotal:.2f}")
+        wide_row(f"Paid by check #{nums}" if nums else "Paid by check", f"-${paid_by_check:.2f}")
+        wide_row("Balance Due", f"${subtotal - paid_by_check:.2f}", bold=True)
+    else:
+        totals_row("Total Due", f"${subtotal:.2f}", bold=True)
     pdf.ln(5)
 
     # ── Stripe Payment Links ──────────────────────────────────────────
@@ -8688,6 +8713,7 @@ def invoice_pdf(record_id):
             "subtotal":     round(sum(li["total"] for li in line_items), 2),
             "stripeCcUrl":  fields.get("Stripe Invoice URL (CC)", ""),
             "stripeAchUrl": fields.get("Stripe Invoice URL (ACH)", ""),
+            **_check_paid_pdf(fields),
         }
 
         pdf_bytes = _build_invoice_pdf_bytes(inv)
@@ -14381,7 +14407,8 @@ def admin_convert_to_invoice(record_id):
 # ── Stripe invoice creation ───────────────────────────────────────────────────
 
 def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email, billing_name, org_name, li_items,
-                                       methods=("card", "us_bank_account"), waive_cc_fee=False, customer_id=""):
+                                       methods=("card", "us_bank_account"), waive_cc_fee=False, customer_id="",
+                                       paid_by_check=0.0, check_numbers="", keep_due_date=""):
     """Create CC + ACH Stripe hosted invoices and patch back to the Airtable invoice record.
 
     methods=("card",) re-issues the card invoice alone and patches only the CC
@@ -14390,7 +14417,12 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
     waive_cc_fee leaves off the 3% processing-fee line (Patty 2026-10-06,
     first for IN-0513); the invoice carries metadata cc_fee_waived=true so the
     choice is visible in Stripe. customer_id reuses the record's Stripe
-    customer instead of creating another one."""
+    customer instead of creating another one.
+    paid_by_check (Patty 2026-10-16) re-issues a PART-paid invoice for its
+    balance: every line as billed plus one negative "Payment received" line,
+    the 3% card fee on the balance only. keep_due_date (YYYY-MM-DD) leaves the
+    Airtable due date alone so the invoice stays on Past due, and dates the
+    new Stripe invoices to it when that is still ahead."""
     if not STRIPE_SECRET_KEY:
         raise Exception("STRIPE_SECRET_KEY not configured")
     if not billing_email:
@@ -14423,14 +14455,33 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
         for i in li_items
     )
 
+    paid_by_check = round(float(paid_by_check or 0), 2)
+    if paid_by_check > 0:
+        _surcharge_subtotal = max(0.0, _surcharge_subtotal - paid_by_check)
+    _due_ts = None
+    if keep_due_date:
+        try:
+            import datetime as _dt_keep
+            _d = _dt_keep.datetime.strptime(keep_due_date[:10], "%Y-%m-%d").replace(
+                hour=23, minute=59, tzinfo=_dt_keep.timezone.utc)
+            if _d > _dt_keep.datetime.now(_dt_keep.timezone.utc) + _dt_keep.timedelta(hours=1):
+                _due_ts = int(_d.timestamp())
+        except Exception:
+            _due_ts = None
+
     for method in methods:
         # 2. Create draft invoice first
         inv_data = {
             "customer":          customer_id,
             "collection_method": "send_invoice",
-            "days_until_due":    "30",
             "payment_settings[payment_method_types][0]": method,
         }
+        if _due_ts:
+            inv_data["due_date"] = str(_due_ts)
+        else:
+            inv_data["days_until_due"] = "30"
+        if paid_by_check > 0:
+            inv_data["metadata[paid_by_check]"] = f"{paid_by_check:.2f}"
         if method == "card" and waive_cc_fee:
             inv_data["metadata[cc_fee_waived]"] = "true"
         inv_r = req_lib.post("https://api.stripe.com/v1/invoices",
@@ -14467,6 +14518,23 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
                 auth=ss_auth, timeout=15)
             if not ii_r.ok:
                 print(f"[stripe] invoice item warn ({method}): {ii_r.status_code} {ii_r.text[:200]}")
+
+        # What checks already paid, as one negative line (Patty 2026-10-16).
+        if paid_by_check > 0:
+            pr_r = req_lib.post("https://api.stripe.com/v1/invoiceitems",
+                data={
+                    "customer":    customer_id,
+                    "invoice":     stripe_inv_id,
+                    "amount":      str(-round(paid_by_check * 100)),
+                    "currency":    "usd",
+                    "description": f"Payment received - check #{check_numbers}" if check_numbers
+                                   else "Payment received by check",
+                },
+                auth=ss_auth, timeout=15)
+            if not pr_r.ok:
+                # Never finalize a link for the FULL amount on a part-paid invoice.
+                req_lib.delete(f"https://api.stripe.com/v1/invoices/{stripe_inv_id}", auth=ss_auth, timeout=15)
+                raise Exception(f"Stripe payment line failed ({method}): {pr_r.status_code} {pr_r.text[:300]}")
 
         # 3% processing fee on the card invoice only (the invoice email already
         # tells customers CC payments carry this fee; ACH stays at base price)
@@ -14519,7 +14587,7 @@ def _create_stripe_invoices_for_record(write_token, inv_record_id, billing_email
         })
     # A card-only re-issue keeps the original due date: moving it would drop
     # the invoice off the past-due list while its ACH link is still the old one.
-    if due_date_str and "us_bank_account" in methods:
+    if due_date_str and "us_bank_account" in methods and not keep_due_date:
         patch_fields["Stripe Invoice Due Date"] = due_date_str
 
     patch_r = req_lib.patch(
@@ -14908,6 +14976,15 @@ def admin_create_stripe_invoices(record_id):
         # Waiving the 3% card fee re-issues the CARD link only (Patty
         # 2026-10-06): the ACH link the customer has stays live and untouched.
         waive_cc_fee = bool(body_json.get("waive_cc_fee", False))
+        # balance=true (Patty 2026-10-16): re-issue BOTH links for what is
+        # still owed after the checks applied to it (Check Payment Amount,
+        # stamped by the Ops app), keeping the Airtable due date so the
+        # invoice stays on Past due. Sent by the Ops app after a check
+        # part-pays an invoice, or is deleted from one.
+        balance_mode = bool(body_json.get("balance", False))
+        if balance_mode and waive_cc_fee:
+            return Response(json.dumps({"error": "balance and waive_cc_fee are separate re-issues."}),
+                            status=400, headers=c, mimetype="application/json")
         if waive_cc_fee and not force_recreate:
             return Response(json.dumps({"error": "Waiving the card fee re-issues an existing card link; send force=true."}),
                             status=400, headers=c, mimetype="application/json")
@@ -14939,6 +15016,19 @@ def admin_create_stripe_invoices(record_id):
         # hosted_invoice_url, which silently found nothing for anything older
         # than a few days — the old link stayed live and payable while a second,
         # corrected one went out (Patty 2026-09-11).
+        cc_fee_was_waived = False
+        if balance_mode:
+            # Money that already arrived online on either side means a re-issue
+            # would bill twice — checked BEFORE anything is voided.
+            for id_field, _u in pairs:
+                sid = (fields.get(id_field, "") or "").strip()
+                if not sid:
+                    continue
+                pr = req_lib.get(f"https://api.stripe.com/v1/invoices/{sid}",
+                                 auth=(STRIPE_SECRET_KEY, ""), timeout=15)
+                if pr.ok and pr.json().get("status") == "paid":
+                    return Response(json.dumps({"error": f"{id_field} is already paid in Stripe - not re-issued."}),
+                                    status=409, headers=c, mimetype="application/json")
         if force_recreate and (existing_cc_url or existing_ach_url):
             ss_auth = (STRIPE_SECRET_KEY, "")
             for id_field, url_field in pairs:
@@ -14958,6 +15048,9 @@ def admin_create_stripe_invoices(record_id):
                 st_r = req_lib.get(f"https://api.stripe.com/v1/invoices/{stripe_id}",
                                    auth=ss_auth, timeout=15)
                 status = st_r.json().get("status") if st_r.ok else None
+                # A card fee that was waived stays waived on a balance re-issue.
+                if id_field == "Stripe Invoice ID (CC)" and st_r.ok and                         (st_r.json().get("metadata") or {}).get("cc_fee_waived") == "true":
+                    cc_fee_was_waived = True
                 if status == "open":
                     v = req_lib.post(f"https://api.stripe.com/v1/invoices/{stripe_id}/void",
                                      auth=ss_auth, timeout=15)
@@ -15001,16 +15094,34 @@ def admin_create_stripe_invoices(record_id):
             return Response(json.dumps({"error": "No line items found"}),
                             status=400, headers=c, mimetype="application/json")
 
-        # Run synchronously so any Stripe or Airtable errors surface to the caller
+        # Run synchronously so any Stripe or Airtable errors surface to the caller.
+        # Every re-issue of a PART-paid invoice bills only the balance (Patty
+        # 2026-10-16) — the balance re-issue the Ops app sends after a check, the
+        # Re-issue button, and the card-fee waiver alike.
+        total = round(sum(i["line_total"] for i in li_items), 2)
+        paid = max(0.0, round(float(fields.get("Check Payment Amount") or 0), 2))
+        partial = 0 < paid < total - 0.005
+        check_nos = str(fields.get("Check #") or "").strip()
+        if balance_mode and paid >= total - 0.005:
+            return Response(json.dumps({"error": "Checks cover this invoice - its links are voided, not re-issued."}),
+                            status=400, headers=c, mimetype="application/json")
+        customer_id = (fields.get("Stripe Customer ID") or "").strip()
         if waive_cc_fee:
             _create_stripe_invoices_for_record(write_token, record_id, billing_email, billing_name, org_name, li_items,
-                                               methods=("card",), waive_cc_fee=True,
-                                               customer_id=(fields.get("Stripe Customer ID") or "").strip())
+                                               methods=("card",), waive_cc_fee=True, customer_id=customer_id,
+                                               paid_by_check=paid if partial else 0.0, check_numbers=check_nos)
+        elif balance_mode or (force_recreate and partial):
+            _create_stripe_invoices_for_record(
+                write_token, record_id, billing_email, billing_name, org_name, li_items,
+                waive_cc_fee=cc_fee_was_waived, customer_id=customer_id,
+                paid_by_check=paid if partial else 0.0, check_numbers=check_nos,
+                keep_due_date=str(fields.get("Stripe Invoice Due Date") or "").strip())
         else:
             _create_stripe_invoices_for_record(write_token, record_id, billing_email, billing_name, org_name, li_items)
 
         _INVOICES_CACHE.clear()
-        return Response(json.dumps({"ok": True}), headers=c, mimetype="application/json")
+        return Response(json.dumps({"ok": True, "balance": round(total - (paid if partial else 0.0), 2)}),
+                        headers=c, mimetype="application/json")
     except Exception as e:
         print(f"[create-stripe] error for {record_id}: {e}")
         return Response(json.dumps({"error": str(e)}), status=500, headers=c, mimetype="application/json")
@@ -15707,6 +15818,7 @@ def admin_resend_invoice(record_id):
             "subtotal":     total,
             "stripeCcUrl":  fields.get("Stripe Invoice URL (CC)", ""),
             "stripeAchUrl": fields.get("Stripe Invoice URL (ACH)", ""),
+            **_check_paid_pdf(fields),
         }
         pdf_bytes = _build_invoice_pdf_bytes(inv_dict)
         send_invoice_email(to_email, to_name, org_name, so_number, inv_number,
@@ -15842,6 +15954,7 @@ def _invoice_email_bundle(record_id, fields, read_token):
             "subtotal":     total,
             "stripeCcUrl":  fields.get("Stripe Invoice URL (CC)", ""),
             "stripeAchUrl": fields.get("Stripe Invoice URL (ACH)", ""),
+            **_check_paid_pdf(fields),
         })
     except Exception as pdf_err:
         print(f"[invoice-bundle] PDF build failed for {inv_number}: {pdf_err}", flush=True)
@@ -16197,6 +16310,7 @@ def admin_send_overdue_notice(record_id):
                 "subtotal":     total,
                 "stripeCcUrl":  cc_url,
                 "stripeAchUrl": ach_url,
+                **_check_paid_pdf(fields),
             })
         except Exception as pdf_err:
             print(f"[overdue-notice] PDF build failed for {inv_number}: {pdf_err}")
