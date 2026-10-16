@@ -15086,9 +15086,14 @@ def _run_paid_links_sweep():
     """
     read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
     write_token = RETURNS_WRITE_TOKEN
+    # A check counts only when it COVERS the total (Patty 2026-10-16). This
+    # used to read {Check Date}!="" as paid, so a check that part-paid an
+    # invoice would have voided the links the customer needs for the rest.
+    # Half a cent of slack, as everywhere else that tests a check.
     formula = (
         'AND({Order Type}="Invoice",'
-        'OR({Invoice Paid}=TRUE(),{Check Date}!="",'
+        'OR({Invoice Paid}=TRUE(),'
+        'AND({Total Gross}>0,{Check Payment Amount}>={Total Gross}-0.005),'
         '{Stripe Invoice Status (CC)}="Paid",{Stripe Invoice Status (ACH)}="Paid"),'
         'OR(AND({Stripe Invoice ID (CC)}!="",'
         'OR({Stripe Invoice Status (CC)}="Open",{Stripe Invoice Status (CC)}="")),'
@@ -16129,6 +16134,13 @@ def admin_send_overdue_notice(record_id):
                 line_items.append({"name": pname, "qty": qty, "unit_price": price,
                                    "total": float(lf.get("Confirmed Line Item Total") or (qty * price))})
         total = round(sum(li["total"] for li in line_items), 2)
+        # What is still owed (Patty 2026-10-16): a check that part-paid the
+        # invoice comes off the Amount Due. Check Payment Amount is stamped by
+        # the Ops app from every check applied to the invoice.
+        paid_by_check = round(float(fields.get("Check Payment Amount") or 0), 2)
+        if not (0 < paid_by_check < total):
+            paid_by_check = 0.0
+        amount_due = round(total - paid_by_check, 2)
 
         # NO Stripe refresh here. This used to void the customer's card and
         # ACH invoices at 45 days past due and issue fresh ones, from a time
@@ -16193,8 +16205,8 @@ def admin_send_overdue_notice(record_id):
         _send_overdue_notice_email(
             to_email=to_email, to_name=to_name, org_name=org_name,
             inv_number=inv_number, po_number=po_number,
-            total=total, days_overdue=days_overdue, due_date_str=due_date_str,
-            cc_url=cc_url, ach_url=ach_url, pdf_bytes=pdf_bytes,
+            total=amount_due, days_overdue=days_overdue, due_date_str=due_date_str,
+            cc_url=cc_url, ach_url=ach_url, pdf_bytes=pdf_bytes, paid_by_check=paid_by_check,
         )
 
         # Append today's date to Overdue Notice Dates field
@@ -16218,7 +16230,7 @@ def admin_send_overdue_notice(record_id):
 
 def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_number,
                                 total, days_overdue, due_date_str, cc_url, ach_url,
-                                pdf_bytes=None):
+                                pdf_bytes=None, paid_by_check=0.0):
     """Send an overdue invoice notice email via SendGrid."""
     if not SENDGRID_API_KEY:
         return
@@ -16246,6 +16258,7 @@ def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_numbe
 
     po_row = f'<tr><td style="padding:6px 0;color:#555;font-size:13px;">PO Number</td><td style="padding:6px 0;color:#1a2633;font-size:13px;font-weight:600;">{po_number}</td></tr>' if po_number else ""
     due_row = f'<tr><td style="padding:6px 0;color:#555;font-size:13px;">Due Date</td><td style="padding:6px 0;color:#c0392b;font-size:13px;font-weight:600;">{due_display}</td></tr>' if due_display else ""
+    paid_row = f'<tr><td style="padding:6px 0;color:#555;font-size:13px;">Received by check</td><td style="padding:6px 0;color:#1a2633;font-size:13px;font-weight:600;">${paid_by_check:,.2f}</td></tr>' if paid_by_check > 0 else ""
 
     payment_buttons = ""
     if cc_url:
@@ -16274,6 +16287,7 @@ def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_numbe
             <tr><td style="padding:6px 0;color:#555;font-size:13px;">Invoice</td><td style="padding:6px 0;color:#1a2633;font-size:13px;font-weight:600;">{inv_number}</td></tr>
             {po_row}
             {due_row}
+            {paid_row}
             <tr><td style="padding:6px 0;color:#555;font-size:13px;">Amount Due</td><td style="padding:6px 0;color:#c0392b;font-size:15px;font-weight:700;">${total:,.2f}</td></tr>
           </table>
           {'<p style="margin:0 0 16px;font-size:14px;color:#333;">View your invoice and pay online using one of the links below:</p>' + '<div style="margin-bottom:24px;">' + payment_buttons + '</div>' if payment_buttons else ''}
@@ -16293,7 +16307,7 @@ def _send_overdue_notice_email(to_email, to_name, org_name, inv_number, po_numbe
 </body>
 </html>"""
 
-    plain = f"Hi {first_name},\n\nThis is a reminder that invoice {inv_number} is {overdue_phrase}.\n\nAmount Due: ${total:,.2f}\n" + (f"Due Date: {due_display}\n" if due_display else "") + (f"PO Number: {po_number}\n" if po_number else "") + ("\nPay by Credit Card: " + cc_url if cc_url else "") + ("\nPay by ACH: " + ach_url if ach_url else "") + "\n\nIf you have already submitted payment, please disregard this notice.\n\nThank you,\nBlue Alpha"
+    plain = f"Hi {first_name},\n\nThis is a reminder that invoice {inv_number} is {overdue_phrase}.\n\n" + (f"Received by check: ${paid_by_check:,.2f}\n" if paid_by_check > 0 else "") + f"Amount Due: ${total:,.2f}\n" + (f"Due Date: {due_display}\n" if due_display else "") + (f"PO Number: {po_number}\n" if po_number else "") + ("\nPay by Credit Card: " + cc_url if cc_url else "") + ("\nPay by ACH: " + ach_url if ach_url else "") + "\n\nIf you have already submitted payment, please disregard this notice.\n\nThank you,\nBlue Alpha"
 
     payload = {
         "personalizations": [{"to": to_list}],
