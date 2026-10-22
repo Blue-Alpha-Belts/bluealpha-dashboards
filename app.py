@@ -10632,11 +10632,38 @@ def _send_portal_invite_email(to_email, invitee_name, inviter_company, setup_lin
 
 
 def _generate_portal_invite(record_id, write_token, expiry_hours=48):
-    """Generate an invite token for a sub-user and store it in Airtable. Returns setup URL."""
+    """Generate an invite token for a sub-user and store it in Airtable. Returns setup URL.
+
+    A record that already holds a token and has not finished setup KEEPS its token and
+    only has its expiry pushed out, so every setup email it was ever sent stays one
+    working link. Minting a fresh token on each resend killed the earlier emails, and
+    customers who signed up twice clicked the dead one (tharvey@albanyga.gov, 2026-10-21).
+    The expiry never moves earlier: a 48h resend doesn't cut short a 7-day link."""
     import secrets
     from datetime import datetime, timezone, timedelta
-    token = secrets.token_urlsafe(32)
-    expiry = (datetime.now(timezone.utc) + timedelta(hours=expiry_hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    now    = datetime.now(timezone.utc)
+    new_dt = now + timedelta(hours=expiry_hours)
+    token  = None
+    try:
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        gr = req_lib.get(f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{record_id}",
+                         headers=at_headers(read_token), timeout=10)
+        if gr.ok:
+            gf = gr.json().get("fields", {})
+            set_up = bool(gf.get("Portal Hash")) and bool((gf.get("Portal Username") or "").strip())
+            if (gf.get("Magic Token") or "").strip() and not set_up:
+                token = gf["Magic Token"].strip()
+                try:
+                    old_dt = datetime.fromisoformat((gf.get("Token Expiry") or "").replace("Z", "+00:00"))
+                    if old_dt.tzinfo is None:
+                        old_dt = old_dt.replace(tzinfo=timezone.utc)
+                    new_dt = max(new_dt, old_dt)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[_generate_portal_invite] token lookup failed, minting a new one: {e}")
+    token  = token or secrets.token_urlsafe(32)
+    expiry = new_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
     r = req_lib.patch(
         f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}/{record_id}",
         headers={**at_headers(write_token), "Content-Type": "application/json"},
