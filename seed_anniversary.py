@@ -10,12 +10,18 @@ Or set the vars at the top of this file.
 import os, json, time, requests
 
 BASE_ID     = "app3xt0dghBWnHxdN"
-WRITE_TOKEN = os.environ.get("SO_TRACKING_WRITE_TOKEN",
-              "patZev0IyFFbdHS71.c6de9a99dbe535272dd14126b292fb4bfbc4fff7b5cb5ec5d0052e9b8e20da6c")
+# The token comes from the environment only (same Railway var app.py uses).
+# A live PAT used to sit here as the default and was committed to GitHub
+# (found in the 2026-10-22 Phase 0 audit); that token has to be revoked in
+# Airtable and never put back in this file.
+WRITE_TOKEN = os.environ.get("SO_TRACKING_WRITE_TOKEN", "")
 
 AWARDS_TABLE       = os.environ.get("ANNIVERSARY_AWARDS_TABLE_ID", "")
 PARTICIPANTS_TABLE = os.environ.get("ANNIVERSARY_PARTICIPANTS_TABLE_ID", "")
 
+if not WRITE_TOKEN:
+    print("ERROR: Set SO_TRACKING_WRITE_TOKEN (an Airtable PAT with write access to the Automated Data base).")
+    exit(1)
 if not AWARDS_TABLE or not PARTICIPANTS_TABLE:
     print("ERROR: Set ANNIVERSARY_AWARDS_TABLE_ID and ANNIVERSARY_PARTICIPANTS_TABLE_ID env vars.")
     exit(1)
