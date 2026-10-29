@@ -541,6 +541,13 @@ def portal_can(user, action):
 # Account-level status overlay: self-registered ("Registered") and under-review ("Pending")
 # accounts can log in and quote but cannot place orders until Approved.
 # Empty status = legacy/manually-created customer → treated as Approved.
+# Custom items: the ops app's Orders page makes a throwaway Product SKU per
+# custom line, SKU ID "CUSTOM-<n>" (Blue Alpha Project B, src/cs/custom-items.ts,
+# Patty 2026-10-29). They are never taxed; whether one ships is the ops app's
+# business (its sales-order sweep drops the ones that don't).
+def _is_custom_sku(sku_id) -> bool:
+    return str(sku_id or "").strip().upper().startswith("CUSTOM-")
+
 _ACCT_STATUS_CACHE: dict = {}   # customer_id -> {"ts": float, "status": str, "tax_exempt": bool}
 _ACCT_STATUS_TTL = 60           # seconds — short, so admin approval takes effect quickly
 
@@ -6378,7 +6385,10 @@ def _fetch_quote_data(record_id):
 
     subtotal   = sum(i["qty"] * i["unitPrice"] for i in line_items)
     _tax_rate  = float(customer.get("_taxRate", 0))
-    tax_amount = round(subtotal * _tax_rate, 2) if _tax_rate else 0
+    # Custom items (CUSTOM-n SKUs made by the ops app's Orders page) are never
+    # taxed (Patty 2026-10-29) — only the rest of the lines carry tax.
+    _taxable   = sum(i["qty"] * i["unitPrice"] for i in line_items if not _is_custom_sku(i.get("skuId", "")))
+    tax_amount = round(_taxable * _tax_rate, 2) if _tax_rate else 0
 
     # For Sales Orders: check if an invoice exists for this order_id
     inv_record_id = ""
@@ -13996,9 +14006,12 @@ def invoice_detail(record_id):
                 "qty":        qty,
                 "unit_price": unit_price,
                 "total":      li_total,
+                "_custom":    _is_custom_sku(_first(lf.get("SKU ID (from Product SKU)", []))),
             })
 
         subtotal = round(sum(li["total"] for li in line_items), 2)
+        # Custom items (CUSTOM-n SKUs) are never taxed (Patty 2026-10-29)
+        _taxable = round(sum(li["total"] for li in line_items if not li.get("_custom")), 2)
 
         # Fetch tax rate from linked customer record
         tax_amount = 0.0
@@ -14011,7 +14024,7 @@ def invoice_detail(record_id):
                 )
                 if cr.ok:
                     tax_rate = float(cr.json().get("fields", {}).get("Tax Rate") or 0)
-                    tax_amount = round(subtotal * tax_rate, 2) if tax_rate else 0.0
+                    tax_amount = round(_taxable * tax_rate, 2) if tax_rate else 0.0
         except Exception:
             pass
 
