@@ -6561,7 +6561,7 @@ def _build_catalog():
         parent_name = _clean_product_name(parent_map.get(parent_id, ""))
         if not parent_name:
             continue
-        if parent_name.lower() in _EXCLUDED_PARENTS:
+        if parent_name.lower() in _EXCLUDED_PARENTS and not _excluded_parent_lets_through(parent_name, f.get("SKU ID", "")):
             continue
 
         color_ids  = f.get("Color", [])
@@ -6712,6 +6712,19 @@ _EXCLUDED_PARENTS = {
     "medical pouch - top/bottom pull outer",
 }
 
+# Children that still sell from an otherwise-excluded parent, by SKU prefix
+# (lowercase). Adapter: the four Belt Adapters (ADA-…) are on the portal; the
+# pistol-mag pouch adapters, QD drop mounts and Wing Adapter under the same
+# parent stay off (Patty, 2026-11-02).
+_EXCLUDED_PARENT_SKU_EXCEPTIONS = {
+    "adapter": ("ada-",),
+}
+
+def _excluded_parent_lets_through(parent_name, sku_id):
+    prefixes = _EXCLUDED_PARENT_SKU_EXCEPTIONS.get(parent_name.lower(), ())
+    s = (sku_id or "").lower()
+    return any(s.startswith(p) for p in prefixes)
+
 # Feature variations to exclude globally (lowercase)
 _EXCLUDED_FEATURE_VARS_GLOBAL = {
     "base only (-onb)",
@@ -6748,6 +6761,7 @@ _EXCLUDED_COLORS_BY_PARENT = {
 
 # Display name overrides (post-clean lowercase → desired display name)
 _PARENT_NAME_OVERRIDES = {
+    "adapter": "Belt Adapter",  # only its Belt Adapter children sell (see _EXCLUDED_PARENT_SKU_EXCEPTIONS)
     "1.5\" lp inner only belt": "1.5\" Low Profile Inner Only Belt",
     "keepers": "Keepers (set of 4)",
     "1.75\" battle belt - aluminum cobra® buckle": "1.75\" MOLLE Battle Belt - Aluminum COBRA® Buckle",
