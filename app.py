@@ -12827,7 +12827,10 @@ def confirm_international_movement(record_id):
             "shippingAmount": 0.00,
             "carrierCode":    "stamps_com",
             "serviceCode":    "globalpost_economy",
-            "internalNotes":  f"International exchange for order #{order_number}. Customer ships belt(s) to us first.",
+            # No "customer ships first" line: this order only exists once CS has
+            # confirmed the return is moving, and the sentence confused the shipper
+            # (Patty 2026-11-02).
+            "internalNotes":  f"International exchange for order #{order_number}.",
             "advancedOptions": {
                 "storeId":      SIZING_EXCHANGE_STORE_ID,
                 "customField1": f"Intl exchange for order #{order_number}",
