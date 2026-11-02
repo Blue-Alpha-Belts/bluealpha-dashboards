@@ -12526,6 +12526,13 @@ def confirm_international_movement(record_id):
 
         airtable_read_token = AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
 
+        # Set before the record is read: Date Submitted falls back to today. Until
+        # 2026-11-02 these two lines sat ~90 lines further down, after their first
+        # use, so every call died with an UnboundLocalError and the nightly
+        # cron-intl-exchange job never created a single order (order 289897).
+        today     = datetime.now(timezone.utc)
+        today_iso = today.isoformat()
+
         # 1. Look up the AT record
         rec_resp = req_lib.get(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{INT_EXCHANGE_TABLE_ID}/{record_id}",
@@ -12638,9 +12645,6 @@ def confirm_international_movement(record_id):
             tag_id = 105813
         else:
             tag_id = 102014
-
-        today     = datetime.now(timezone.utc)
-        today_iso = today.isoformat()
 
         LP_COLOR_MAP = [
             (["mc black", "mc tropic", "woodland", "black"], "Black"),
