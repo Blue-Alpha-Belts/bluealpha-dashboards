@@ -100,6 +100,7 @@ Service ID: `c8521da4-abc9-47df-a665-ce1bdb26f02d`
 |------|--------|-----|
 | 2026-03-11 | Calendar cells increased from 90px → 130px on all dashboards | Maverick |
 | 2026-03-11 | CONTEXT.md created | Maverick |
+| 2026-11-10 | Holiday return/exchange window: orders placed 2026-11-19 12:00 ET through 2027-01-01 can be returned or exchanged through 2027-01-31 (`with_holiday_window` in app.py, applied in verify-return, verify-exchange and verify-international-exchange; the usual 37/45-day window is never shortened). Orders placed 2027-01-02 or later are back on 30 days. The three landing pages carry a `<span id="window-note">` that `_portal_page` rewrites by phase (standard / holiday / January tail), served no-store so the noon flip needs no deploy. | Patty's assistant |
 | 2026-07-29 | Quote portal three-tier access: guest quote building (print-only, nothing saved), self-serve registration (`/signup`, saves quotes, `Application Status="Registered"`), and approval-gated ordering (existing `/apply` doubles as the ordering-access upgrade for registered accounts). Quote/PDF/invoice APIs locked down to session + ownership (or staff admin session). Tax rate now required to approve non-exempt applicants. Airtable Customers table: added "Registered" select option + "Registered Date" field. | Patty's assistant |
 
 ---

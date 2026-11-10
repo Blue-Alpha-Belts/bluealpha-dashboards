@@ -34,6 +34,99 @@ def _today_utc():
     """Return today's date in UTC (avoids Railway timezone drift)."""
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).date()
+
+# ── Holiday return / exchange window (Patty 2026-11-10) ──────────────────────
+# Orders placed from 2026-11-19 12:00 ET through 2027-01-01 can be returned or
+# exchanged through 2027-01-31. Orders placed 2027-01-02 or later are back on
+# the usual timeline (37 days from shipment domestic / 45 international, i.e.
+# "30 days of delivery"). The usual window is never shortened: a holiday order
+# keeps whichever end date is later. ShipStation's orderDate carries no offset
+# and is in the account's Pacific time, so the placed-at gate parses it that way.
+from zoneinfo import ZoneInfo as _ZoneInfo
+_ET_TZ = _ZoneInfo("America/New_York")
+_SS_TZ = _ZoneInfo("America/Los_Angeles")
+
+def _holiday_dt(*parts):
+    from datetime import datetime
+    return datetime(*parts, tzinfo=_ET_TZ)
+
+HOLIDAY_WINDOW_FIRST_ORDER = _holiday_dt(2026, 11, 19, 12, 0)      # orders placed from here …
+HOLIDAY_WINDOW_LAST_ORDER  = _holiday_dt(2027, 1, 2, 0, 0)         # … up to (not including) here
+HOLIDAY_WINDOW_UNTIL       = _holiday_dt(2027, 1, 31, 23, 59, 59)  # can be returned/exchanged through here
+
+def _ss_order_placed_at(order):
+    """When a ShipStation order was placed, as an aware datetime (None if unknown)."""
+    from datetime import datetime, timezone
+    s = str((order or {}).get("orderDate") or "").strip()
+    if not s:
+        return None
+    try:
+        s = re.sub(r"(\.\d{6})\d+", r"\1", s.replace("Z", "+00:00"))  # trim 7-digit fractions
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_SS_TZ)
+    return dt.astimezone(timezone.utc)
+
+def holiday_window_until(order):
+    """HOLIDAY_WINDOW_UNTIL for an order placed inside the holiday window, else None."""
+    placed = _ss_order_placed_at(order)
+    if placed is None:
+        return None
+    if HOLIDAY_WINDOW_FIRST_ORDER <= placed < HOLIDAY_WINDOW_LAST_ORDER:
+        return HOLIDAY_WINDOW_UNTIL
+    return None
+
+def with_holiday_window(order, eligible_until):
+    """The usual end date, or the holiday one when that is later and the order qualifies."""
+    holiday = holiday_window_until(order)
+    if holiday is not None and holiday > eligible_until:
+        return holiday
+    return eligible_until
+
+def holiday_window_phase(now=None):
+    """'off' before 11/19 noon and after 1/31; 'open' while holiday orders are
+    still being placed (11/19 noon – 1/1); 'tail' 1/2 – 1/31, when new orders are
+    back on 30 days but the holiday orders are still returnable."""
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    if now < HOLIDAY_WINDOW_FIRST_ORDER or now > HOLIDAY_WINDOW_UNTIL:
+        return "off"
+    return "open" if now < HOLIDAY_WINDOW_LAST_ORDER else "tail"
+
+# The landing-page sentence per phase. Each page wraps its standard sentence in
+# <span id="window-note">…</span>; the route swaps the span's text by phase.
+HOLIDAY_WINDOW_NOTES = {
+    "returns.html": {
+        "open": "Holiday returns: orders placed November 19 through January 1 can be returned through January 31, 2027.",
+        "tail": "Returns are accepted within 30 days of delivery date. Holiday orders placed November 19 through January 1 can be returned through January 31, 2027.",
+    },
+    "exchange.html": {
+        "open": "Holiday exchanges: orders placed November 19 through January 1 can be exchanged through January 31, 2027.",
+        "tail": "Exchanges are accepted within 30 days of delivery. Holiday orders placed November 19 through January 1 can be exchanged through January 31, 2027.",
+    },
+    "exchange-international.html": {
+        "open": "Holiday exchanges: orders placed November 19 through January 1 can be exchanged through January 31, 2027.",
+        "tail": "Exchanges are accepted within 30 days of delivery. Holiday orders placed November 19 through January 1 can be exchanged through January 31, 2027.",
+    },
+}
+
+def _portal_page(filename, now=None):
+    """Serve a customer landing page with the window sentence for the current
+    phase, uncached so the 11/19 noon flip shows without a redeploy."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", filename)
+    with open(path, encoding="utf-8") as f:
+        html = f.read()
+    note = HOLIDAY_WINDOW_NOTES.get(filename, {}).get(holiday_window_phase(now))
+    if note:
+        html = re.sub(r'(<span id="window-note">)(.*?)(</span>)',
+                      lambda m: m.group(1) + note + m.group(3), html, count=1, flags=re.S)
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 FLASK_BASE_URL          = os.environ.get("FLASK_BASE_URL", "https://bluealpha-dashboards-production.up.railway.app")
 AIRTABLE_BASE_ID        = "appA13jo4b3TIn4yT"
 RETURNS_TABLE_ID        = os.environ.get("RETURNS_TABLE_ID", "tblxwbeaVHBzXcAen")
@@ -220,7 +313,7 @@ def index():
     if host == "exchange":
         return redirect("/exchange")
     if host == "return":
-        return send_from_directory("static", "returns.html")
+        return _portal_page("returns.html")
     if host in DASHBOARDS:
         return dashboard(host)
     if host == "quote":
@@ -1198,6 +1291,7 @@ def verify_order():
         # International orders get a longer window (transit runs longer both
         # ways); domestic stays at 37 days after shipment.
         eligible_until = ship_date + timedelta(days=45 if is_international else 37)
+        eligible_until = with_holiday_window(order, eligible_until)  # 11/19 – 1/1 orders: through 1/31
         if datetime.now(timezone.utc) > eligible_until:
             return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
 
@@ -5210,10 +5304,7 @@ def budget_parent_page():
 
 @app.route("/exchange")
 def exchange_portal():
-    resp = send_from_directory("static", "exchange.html")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+    return _portal_page("exchange.html")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Budget Cloud Sync API
@@ -5351,6 +5442,7 @@ def verify_exchange():
             ship_date = parse_dt(od) if od else datetime.now(timezone.utc)
 
         eligible_until = ship_date + timedelta(days=37)
+        eligible_until = with_holiday_window(order, eligible_until)  # 11/19 – 1/1 orders: through 1/31
         if datetime.now(timezone.utc) > eligible_until:
             return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
 
@@ -11994,7 +12086,7 @@ def admin_make_setup_link(record_id):
 
 @app.route("/exchange/international")
 def international_exchange_portal():
-    return send_from_directory("static", "exchange-international.html")
+    return _portal_page("exchange-international.html")
 
 
 @app.route("/api/verify-international-exchange", methods=["POST", "OPTIONS"])
@@ -12061,6 +12153,7 @@ def verify_international_exchange():
             ship_date = parse_dt(od) if od else datetime.now(timezone.utc)
 
         eligible_until = ship_date + timedelta(days=45)
+        eligible_until = with_holiday_window(order, eligible_until)  # 11/19 – 1/1 orders: through 1/31
         if datetime.now(timezone.utc) > eligible_until:
             return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
 
