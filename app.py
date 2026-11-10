@@ -589,6 +589,146 @@ def account_can_order(customer_id):
     return status in ("", "Approved")
 
 
+# ── Portal Type: which page a company's logins get, and what they may order ──
+# Patty 2026-11-10: only Newnan PD on /department, only the contract companies
+# on /contract (and only the SKUs designated for them), everyone else on the
+# quote portal. Until then every page and every order endpoint below asked only
+# "is somebody logged in": any login could open /department, read Newnan
+# pricing and place an order that approved itself, and the /contract redirect
+# was re-derived from SKU links on every visit and fell through to the quote
+# portal whenever that read failed.
+#
+# The answer is the single-select "Portal Type" on the Customers COMPANY record
+# (blank or Quote / Contract / Department). Nothing is hard-coded here: a new
+# contract company is a change in Airtable, not a deploy. Sub-users need no
+# value of their own — a session's customer_id is already the parent company.
+#
+# One read lists the handful of companies that are NOT plain quote accounts;
+# everyone absent from it is a quote account. It is kept two minutes, and a
+# refresh that fails keeps serving the last good list, so an Airtable blip
+# never moves a customer onto the wrong page. Only a cold start with Airtable
+# unreachable has no answer at all (None); callers then say "try again" rather
+# than guess in either direction.
+_PORTAL_TYPE_TTL   = 120
+_PORTAL_TYPE_CACHE = {"ts": 0.0, "map": None, "failed": 0.0}
+_PORTAL_TYPE_LOCK  = threading.Lock()
+_PORTAL_HOME       = {"quote": "/portal", "contract": "/contract", "department": "/department"}
+
+
+def _portal_type_map():
+    """{company record id: 'contract' | 'department'}, or None when it has never
+    loaded and Airtable cannot be reached."""
+    import time as _t
+    cached = _PORTAL_TYPE_CACHE["map"]
+    now = _t.time()
+    if cached is not None and (now - _PORTAL_TYPE_CACHE["ts"]) < _PORTAL_TYPE_TTL:
+        return cached
+    # No list yet and the last attempt just failed: don't make every request wait on Airtable.
+    if cached is None and (now - _PORTAL_TYPE_CACHE["failed"]) < 15:
+        return None
+    # With a stale list in hand, only one thread refreshes; the rest keep serving it.
+    if not _PORTAL_TYPE_LOCK.acquire(blocking=(cached is None)):
+        return cached
+    try:
+        cached = _PORTAL_TYPE_CACHE["map"]
+        now = _t.time()
+        if cached is not None and (now - _PORTAL_TYPE_CACHE["ts"]) < _PORTAL_TYPE_TTL:
+            return cached
+        read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
+        for attempt in (1, 2):
+            try:
+                fresh, offset = {}, None
+                while True:
+                    params = {"pageSize": 100, "fields[0]": "Portal Type",
+                              "filterByFormula": "OR({Portal Type}='Contract',{Portal Type}='Department')"}
+                    if offset:
+                        params["offset"] = offset
+                    r = req_lib.get(
+                        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE_ID}",
+                        headers=at_headers(read_token), params=params, timeout=10,
+                    )
+                    # at_get_all would read an error body as "no records" — here that
+                    # would turn every contract and department company into a quote
+                    # account, so a bad answer has to be a failure, not an empty list.
+                    if r.status_code != 200:
+                        raise RuntimeError(f"AT {r.status_code} {r.text[:200]}")
+                    body = r.json()
+                    for rec in body.get("records", []):
+                        kind = (rec.get("fields", {}).get("Portal Type") or "").strip().lower()
+                        if kind in ("contract", "department"):
+                            fresh[rec["id"]] = kind
+                    offset = body.get("offset")
+                    if not offset:
+                        break
+                if fresh != cached:
+                    # Said once at boot and again whenever somebody changes a company's type.
+                    print(f"[portal_type] loaded: {sum(1 for v in fresh.values() if v == 'contract')} contract, "
+                          f"{sum(1 for v in fresh.values() if v == 'department')} department companies", flush=True)
+                _PORTAL_TYPE_CACHE.update({"ts": _t.time(), "map": fresh})
+                return fresh
+            except Exception as e:
+                print(f"[portal_type] attempt {attempt} failed: {e}")
+        _PORTAL_TYPE_CACHE["failed"] = _t.time()
+        if cached is not None:
+            # Keep the last good list and look again in 30 seconds.
+            _PORTAL_TYPE_CACHE["ts"] = _t.time() - _PORTAL_TYPE_TTL + 30
+        return cached
+    finally:
+        _PORTAL_TYPE_LOCK.release()
+
+
+# Read the list at boot so the first customer after a deploy never waits on it.
+threading.Thread(target=_portal_type_map, daemon=True).start()
+
+
+def portal_type(user):
+    """'quote' | 'contract' | 'department' for a portal session, or None when it
+    cannot be known right now."""
+    kinds = _portal_type_map()
+    if kinds is None:
+        return None
+    return kinds.get((user or {}).get("customer_id", "") or "", "quote")
+
+
+def portal_home(user):
+    """The one page this login belongs on, or None when it cannot be known right now.
+    Invoices-only logins always get the invoices view on /portal, whatever their
+    company's type — it is the only thing they can see and it carries no catalog."""
+    if ((user or {}).get("role") or "").lower() == "invoices":
+        return "/portal"
+    kind = portal_type(user)
+    return _PORTAL_HOME[kind] if kind else None
+
+
+def _portal_wait_page():
+    """Shown instead of a guess when the Portal Type cannot be read. Retries itself."""
+    html = ('<!doctype html><html><head><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="4">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Blue Alpha</title></head>'
+            '<body style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f6f9;'
+            'color:#1c2b3a;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">'
+            '<div style="text-align:center;max-width:26rem;padding:1.5rem">'
+            '<h1 style="font-size:1.15rem;margin:0 0 .5rem">One moment</h1>'
+            '<p style="margin:0;color:#5b6b7d">We are loading your account. '
+            'This page will try again on its own in a few seconds.</p></div></body></html>')
+    return Response(html, status=503, mimetype="text/html",
+                    headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Retry-After": "4"})
+
+
+def _portal_type_refusal(user, allowed, c):
+    """For API routes. None when this login's company is one of the `allowed`
+    types; otherwise the JSON response to return."""
+    kind = portal_type(user)
+    if kind is None:
+        return Response(json.dumps({"error": "We could not confirm your account just now. Please try again in a moment."}),
+                        status=503, headers=c, mimetype="application/json")
+    if kind not in allowed:
+        return Response(json.dumps({"error": "This is not available for your account.", "home": _PORTAL_HOME[kind]}),
+                        status=403, headers=c, mimetype="application/json")
+    return None
+
+
 def check_admin_session(req):
     token = req.cookies.get("ba_admin_session")
     if not token:
@@ -5776,6 +5916,12 @@ def submit_exchange():
 
 @app.route("/quote-builder")
 def quote_builder_page():
+    # Contract and department logins have their own ordering page; the quote
+    # builder is not theirs (Portal Type). Staff and visitors are untouched.
+    _pu = get_portal_user(request)
+    if _pu is not None and not check_admin_session(request):
+        if portal_type(_pu) in ("contract", "department"):
+            return redirect(portal_home(_pu) or "/portal")
     resp = send_from_directory("static", "quote.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
@@ -5787,7 +5933,8 @@ def quote_gate_page():
     """Gate page — redirect to portal if logged in, else show apply/login page."""
     user = get_portal_user(request)
     if user:
-        return redirect("/portal")
+        # /portal sorts out anyone whose home cannot be read right now.
+        return redirect(portal_home(user) or "/portal")
     resp = send_from_directory("static", "portal-gate.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
@@ -6988,7 +7135,7 @@ CUSTOMER_SKU_PRICE_OVERRIDES = {
 CONTRACT_SKU_NOTES = {sid: "Wienerlock Buckle" for sid in _NEOMAG_WIENERLOCK_THIGH_STRAP}
 
 
-def _reprice_items_or_error(items, read_token, pricing="standard", customer_id=""):
+def _reprice_items_or_error(items, read_token, pricing="standard", customer_id="", designated_only=False):
     """Server-side re-pricing: replace every item's unit price with the SKU's current
     price straight from Airtable. The browser's price is display-only — customers
     must not be able to set their own prices. Mutates items in place; returns an
@@ -6996,7 +7143,12 @@ def _reprice_items_or_error(items, read_token, pricing="standard", customer_id="
     to a price, None on success.
     pricing="standard"   → Sale Price; Contract-category SKUs may be $0.
     pricing="department" → Newnan PD Price, falling back to Sale Price, else $0
-                           (mirrors /api/department/catalog)."""
+                           (mirrors /api/department/catalog).
+    designated_only=True → every SKU must also be one that login's own page offers:
+                           a Newnan PD Discount above zero for pricing="department"
+                           (the /api/department/catalog rule), otherwise customer_id
+                           in the SKU's Customers link (the /api/contract-catalog
+                           rule). Without it the browser could post any SKU id."""
     sku_ids = []
     for item in items:
         sid = (item.get("skuRecordId") or item.get("recordId") or item.get("sku_record_id") or "").strip()
@@ -7004,14 +7156,24 @@ def _reprice_items_or_error(items, read_token, pricing="standard", customer_id="
             return f"Item '{item.get('name', '?')}' has no product reference — please rebuild it from the catalog."
         sku_ids.append(sid)
     price_map = {}
+    designated = set()
     uniq = list({s for s in sku_ids})
     for i in range(0, len(uniq), 50):
         batch = uniq[i:i+50]
         formula = "OR(" + ",".join(f"RECORD_ID()='{sid}'" for sid in batch) + ")"
         recs = at_get_all(PRODUCT_SKUS_TABLE_ID, read_token,
-                          fields=["Sale Price", "Newnan PD Price", "Category"], formula=formula)
+                          fields=["Sale Price", "Newnan PD Price", "Category",
+                                  "Newnan PD Discount", "Customers"], formula=formula)
         for r in recs:
             f = r.get("fields", {})
+            if pricing == "department":
+                try:
+                    if float(f.get("Newnan PD Discount") or 0) > 0:
+                        designated.add(r["id"])
+                except (TypeError, ValueError):
+                    pass
+            elif customer_id and customer_id in (f.get("Customers") or []):
+                designated.add(r["id"])
             if pricing == "department":
                 price_map[r["id"]] = float(f.get("Newnan PD Price") or f.get("Sale Price") or 0)
             else:
@@ -7029,6 +7191,9 @@ def _reprice_items_or_error(items, read_token, pricing="standard", customer_id="
         auth_price = price_map.get(sid)
         if auth_price is None:
             return f"Item '{item.get('name', '?')}' is no longer available — please remove it and re-add it from the catalog."
+        if designated_only and sid not in designated:
+            print(f"[reprice] SKU {sid} is not designated for customer {customer_id or '(department)'} — refused")
+            return f"Item '{item.get('name', '?')}' is not available on your account — please remove it and re-add it from the catalog."
         try:
             client_price = float(item.get("unitPrice") or item.get("unit_price") or 0)
         except (TypeError, ValueError):
@@ -7067,6 +7232,14 @@ def create_quote():
     if order_type not in ("Quote", "Sales Order"):
         order_type = "Quote"
 
+    # Portal Type: a direct Sales Order is the contract page's order and only a
+    # contract company may place one; saving a quote belongs to quote accounts.
+    # (Staff sessions — the Orders page in the staff app — are untouched.)
+    if _pu is not None and not _is_staff:
+        _type_refusal = _portal_type_refusal(_pu, ("contract",) if order_type == "Sales Order" else ("quote",), c)
+        if _type_refusal:
+            return _type_refusal
+
     # Direct Sales Order creation (contract portal) requires an ordering-approved account
     if order_type == "Sales Order" and _pu is not None and not _is_staff:
         if not account_can_order(_pu.get("customer_id", "")):
@@ -7100,7 +7273,9 @@ def create_quote():
         # Server-side re-pricing for customer sessions (staff keep submitted prices).
         # Runs before any record is created so a bad item can't leave an orphan MO.
         if not _is_staff:
-            _reprice_err = _reprice_items_or_error(items, read_token, customer_id=provided_cust_id)
+            # A contract order may only carry SKUs linked to that company.
+            _reprice_err = _reprice_items_or_error(items, read_token, customer_id=provided_cust_id,
+                                                   designated_only=(order_type == "Sales Order"))
             if _reprice_err:
                 return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
 
@@ -7348,6 +7523,10 @@ def update_quote(record_id):
         return Response(json.dumps({"error": "Unauthorized"}), status=403, headers=c, mimetype="application/json")
     if _pu is not None and not portal_can(_pu, "create_quote"):
         return Response(json.dumps({"error": "Insufficient permissions"}), status=403, headers=c, mimetype="application/json")
+    if _pu is not None and not _is_staff:
+        _type_refusal = _portal_type_refusal(_pu, ("quote",), c)   # quote building is for quote accounts
+        if _type_refusal:
+            return _type_refusal
     write_token = RETURNS_WRITE_TOKEN
     # Use broadest available read token for verification (write token may lack read scope)
     read_token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -9666,20 +9845,14 @@ def portal_page(user):
         resp = send_from_directory("static", "portal.html")
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return resp
-    # If this customer is linked to any SKU (any Category), redirect them to the contract portal
-    customer_id = user.get("customer_id", "")
-    if customer_id:
-        try:
-            token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
-            # ARRAYJOIN returns display names not IDs, so filter in Python
-            all_linked = at_get_all(PRODUCT_SKUS_TABLE_ID, token,
-                                    fields=["SKU ID", "Customers"],
-                                    formula='{Customers}!=""')
-            if any(customer_id in r.get("fields", {}).get("Customers", [])
-                   for r in all_linked):
-                return redirect("/contract")
-        except Exception:
-            pass
+    # Contract and department companies have their own page (Portal Type on the
+    # company record). This used to be worked out from SKU links on every visit,
+    # and a failed read dropped a contract customer onto the quote portal.
+    home = portal_home(user)
+    if home is None:
+        return _portal_wait_page()
+    if home != "/portal":
+        return redirect(home)
     resp = send_from_directory("static", "portal.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
@@ -9688,7 +9861,26 @@ def portal_page(user):
 @app.route("/contract")
 @portal_login_required
 def contract_portal_page(user):
+    """Contract companies only (Portal Type = Contract). Any role of theirs may
+    open it — the page hides what a role cannot use, as it always has."""
+    kind = portal_type(user)
+    if kind is None:
+        return _portal_wait_page()
+    if kind != "contract":
+        return redirect(portal_home(user) or "/portal")
     resp = send_from_directory("static", "contract-portal.html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    return resp
+
+
+def _department_portal_response(user):
+    """Department companies only (Portal Type = Department — Newnan PD)."""
+    home = portal_home(user)
+    if home is None:
+        return _portal_wait_page()
+    if home != "/department":
+        return redirect(home)
+    resp = send_from_directory("static", "pd-portal.html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     return resp
 
@@ -9697,9 +9889,7 @@ def contract_portal_page(user):
 @portal_login_required
 def department_portal_page(user):
     """Dedicated portal for law enforcement / department accounts (Newnan PD etc.)."""
-    resp = send_from_directory("static", "pd-portal.html")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-    return resp
+    return _department_portal_response(user)
 
 
 @app.route("/api/department/catalog", methods=["GET", "OPTIONS"])
@@ -9709,6 +9899,9 @@ def department_catalog(user):
     if request.method == "OPTIONS":
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Allow-Methods": "GET"})
     c = cors()
+    _type_refusal = _portal_type_refusal(user, ("department",), c)   # Newnan pricing is Newnan's alone
+    if _type_refusal:
+        return _type_refusal
     try:
         token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
         # Fetch all SKUs where Newnan PD Discount > 0 (percent field stored as decimal e.g. 0.1 = 10%)
@@ -9809,6 +10002,11 @@ def department_order_create(user):
         return Response("", headers={**cors(), "Access-Control-Allow-Headers": "Content-Type",
                                      "Access-Control-Allow-Methods": "POST"})
     c = cors()
+    # This order approves itself, so it must only ever be a department company's
+    # (Portal Type). Before 2026-11-10 any portal login could post here.
+    _type_refusal = _portal_type_refusal(user, ("department",), c)
+    if _type_refusal:
+        return _type_refusal
     if user.get("role") == "invoices":
         return Response(json.dumps({"error": "Your account does not have permission to create orders."}),
                         status=403, headers=c, mimetype="application/json")
@@ -9825,7 +10023,8 @@ def department_order_create(user):
     write_token = RETURNS_WRITE_TOKEN
 
     # Server-side re-pricing (department price list) — browser prices are display-only
-    _reprice_err = _reprice_items_or_error(line_items, read_token, pricing="department")
+    # ...and only the SKUs the department catalog offers (a Newnan PD Discount above zero).
+    _reprice_err = _reprice_items_or_error(line_items, read_token, pricing="department", designated_only=True)
     if _reprice_err:
         return Response(json.dumps({"error": _reprice_err}), status=400, headers=c, mimetype="application/json")
 
@@ -9917,6 +10116,9 @@ def contract_catalog(user):
     customer_id = user.get("customer_id", "")
     if not customer_id:
         return Response(json.dumps({"error": "No customer"}), status=403, headers=c, mimetype="application/json")
+    _type_refusal = _portal_type_refusal(user, ("contract",), c)   # contract companies only
+    if _type_refusal:
+        return _type_refusal
     try:
         token = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
         # A SKU is visible to every customer linked in its Customers field, whatever its
@@ -11095,6 +11297,9 @@ def portal_duplicate_quote(user, record_id):
     if not portal_can(user, "create_quote"):
         return Response(json.dumps({"error": "Insufficient permissions"}),
                         status=403, headers=c, mimetype="application/json")
+    _type_refusal = _portal_type_refusal(user, ("quote",), c)   # quote building is for quote accounts
+    if _type_refusal:
+        return _type_refusal
     customer_id = user.get("customer_id", "")
     from datetime import date as dt_date, timedelta
     token      = RETURNS_WRITE_TOKEN
@@ -17909,7 +18114,7 @@ def pd_portal_page():
     user = get_portal_user(request)
     if not user:
         return redirect("/quote")
-    return app.send_static_file("pd-portal.html")
+    return _department_portal_response(user)   # same page as /department, same gate
 
 
 # ── Admin API ─────────────────────────────────────────────────────────────────
