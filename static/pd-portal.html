@@ -632,9 +632,12 @@ async function doLogin(e) {
   }
 }
 
-async function doLogout() {
-  try { await fetch('/api/portal/logout', { method: 'POST', credentials: 'include' }); } catch(e) {}
-  window.location.reload();
+function doLogout() {
+  // /logout clears the session cookie and lands on the sign-in gate, the same
+  // route the quote and contract pages use. This used to POST to
+  // /api/portal/logout, which does not exist, so the button only reloaded the
+  // page with the session still in place.
+  window.location = '/logout';
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
