@@ -354,7 +354,15 @@
     </div>
     <div class="message message-warning" id="msg-outside-window">
       <strong>Outside Exchange Window</strong>
-      This order is outside the 30-day exchange window. If you have questions, please reach out at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
+      This order is outside the 30-day exchange window.<span id="msg-outside-window-detail"></span> If you have questions, please reach out at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
+    </div>
+    <div class="message message-warning" id="msg-not-shipped">
+      <strong>Order Not Yet Shipped</strong>
+      This order hasn't shipped yet. Exchanges open once your order has shipped — to change it before then, contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
+    </div>
+    <div class="message message-error" id="msg-lookup-unavailable">
+      <strong>Order lookup is temporarily unavailable</strong>
+      We couldn't reach our order system just now. Please wait a minute and try again. If it keeps happening, contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
     </div>
     <div class="message message-warning" id="msg-international">
       <strong>International Order</strong>
@@ -499,7 +507,12 @@ async function verifyExchange() {
     } else if (data.status === 'already_exchanged') {
       showMsg('msg-already-exchanged');
     } else if (data.status === 'outside_window') {
+      windowDetail('msg-outside-window-detail', data, 'exchanged');
       showMsg('msg-outside-window');
+    } else if (data.status === 'not_shipped') {
+      showMsg('msg-not-shipped');
+    } else if (data.status === 'lookup_unavailable') {
+      showMsg('msg-lookup-unavailable');
     } else if (data.status === 'international') {
       showMsg('msg-international');
     } else if (data.status === 'no_eligible_items') {
@@ -521,6 +534,19 @@ function showMsg(id) {
   if (!el) return;
   el.classList.add('show');
   el.classList.remove('hidden');
+}
+
+// "It shipped on October 30, 2026 and could be exchanged through December 6, 2026."
+function longDate(iso) {
+  const p = String(iso || '').slice(0, 10).split('-');
+  if (p.length !== 3) return '';
+  return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+function windowDetail(id, data, verb) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const shipped = longDate(data.shipDate), until = longDate(data.eligibleUntil);
+  el.textContent = (shipped && until) ? ' It shipped on ' + shipped + ' and could be ' + verb + ' through ' + until + '.' : '';
 }
 
 document.getElementById('order-number').addEventListener('keydown',   e => { if (e.key === 'Enter') verifyExchange(); });

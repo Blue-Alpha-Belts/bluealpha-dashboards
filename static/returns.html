@@ -340,7 +340,11 @@
     </div>
     <div class="message message-warning" id="msg-outside-window">
       <strong>Outside Return Window</strong>
-      Your order is outside our 30-day return window. If you have questions, please reach out at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
+      Your order is outside our 30-day return window.<span id="msg-outside-window-detail"></span> If you have questions, please reach out at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
+    </div>
+    <div class="message message-error" id="msg-lookup-unavailable">
+      <strong>Order lookup is temporarily unavailable</strong>
+      We couldn't reach our order system just now. Please wait a minute and try again. If it keeps happening, contact us at <a href="mailto:info@bluealpha.us">info@bluealpha.us</a> or <a href="tel:6789613304">(678) 961-3304</a>.
     </div>
     <div class="message message-error" id="msg-error">
       <strong>Something went wrong</strong>
@@ -505,6 +509,19 @@ function hideAllMessages(parent) {
   parent.querySelectorAll('.message').forEach(m => m.classList.remove('show'));
 }
 
+// "It shipped on October 30, 2026 and could be returned through December 6, 2026."
+function longDate(iso) {
+  const p = String(iso || '').slice(0, 10).split('-');
+  if (p.length !== 3) return '';
+  return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+function windowDetail(id, data, verb) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const shipped = longDate(data.shipDate), until = longDate(data.eligibleUntil);
+  el.textContent = (shipped && until) ? ' It shipped on ' + shipped + ' and could be ' + verb + ' through ' + until + '.' : '';
+}
+
 // ── Step 1: Verify ──
 async function verifyOrder() {
   const btn = document.getElementById('btn-verify');
@@ -541,7 +558,10 @@ async function verifyOrder() {
     } else if (data.status === 'not_shipped') {
       document.getElementById('msg-not-shipped').classList.add('show');
     } else if (data.status === 'outside_window') {
+      windowDetail('msg-outside-window-detail', data, 'returned');
       document.getElementById('msg-outside-window').classList.add('show');
+    } else if (data.status === 'lookup_unavailable') {
+      document.getElementById('msg-lookup-unavailable').classList.add('show');
     } else {
       document.getElementById('msg-error').classList.add('show');
     }

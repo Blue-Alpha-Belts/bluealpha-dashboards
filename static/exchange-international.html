@@ -367,7 +367,11 @@
     </div>
     <div class="message message-warning" id="n-msg-outside-window">
       <strong>Outside Exchange Window</strong>
-      This order is outside the 45-day exchange window. <a href="mailto:info@bluealpha.us">Contact us</a> if you have questions.
+      This order is outside the 45-day exchange window.<span id="n-msg-outside-window-detail"></span> <a href="mailto:info@bluealpha.us">Contact us</a> if you have questions.
+    </div>
+    <div class="message message-error" id="n-msg-lookup-unavailable">
+      <strong>Order lookup is temporarily unavailable</strong>
+      We couldn't reach our order system just now. Please wait a minute and try again, or <a href="mailto:info@bluealpha.us">contact us</a> if it keeps happening.
     </div>
     <div class="message message-warning" id="n-msg-already-exchanged">
       <strong>Exchange Already Submitted</strong>
@@ -672,6 +676,19 @@ function hideMsg(id) {
   el.classList.remove('show');
 }
 
+// "It shipped on October 30, 2026 and could be exchanged through December 14, 2026."
+function longDate(iso) {
+  const p = String(iso || '').slice(0, 10).split('-');
+  if (p.length !== 3) return '';
+  return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+function windowDetail(id, data, verb) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const shipped = longDate(data.shipDate), until = longDate(data.eligibleUntil);
+  el.textContent = (shipped && until) ? ' It shipped on ' + shipped + ' and could be ' + verb + ' through ' + until + '.' : '';
+}
+
 // ── Step 1: Verify order ──────────────────────────────────────────────────────
 async function verifyIntlExchange() {
   const btn       = document.getElementById('n-btn-verify');
@@ -684,6 +701,7 @@ async function verifyIntlExchange() {
   hideMsg('n-msg-outside-window');
   hideMsg('n-msg-already-exchanged');
   hideMsg('n-msg-no-eligible-items');
+  hideMsg('n-msg-lookup-unavailable');
   hideMsg('n-msg-error-1');
   hideMsg('n-msg-checking');
 
@@ -714,9 +732,10 @@ async function verifyIntlExchange() {
       setNewStep(2);
     } else if (data.status === 'not_found')       { showMsg('n-msg-not-found'); }
     else if  (data.status === 'domestic')          { showMsg('n-msg-domestic'); }
-    else if (data.status === 'outside_window')    { showMsg('n-msg-outside-window'); }
+    else if (data.status === 'outside_window')    { windowDetail('n-msg-outside-window-detail', data, 'exchanged'); showMsg('n-msg-outside-window'); }
     else if (data.status === 'already_exchanged') { showMsg('n-msg-already-exchanged'); }
     else if (data.status === 'no_eligible_items') { showMsg('n-msg-no-eligible-items'); }
+    else if (data.status === 'lookup_unavailable') { showMsg('n-msg-lookup-unavailable'); }
     else                                          { showMsg('n-msg-error-1'); }
 
   } catch(e) {

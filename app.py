@@ -85,6 +85,40 @@ def with_holiday_window(order, eligible_until):
         return holiday
     return eligible_until
 
+# ── customer-portal lookups: one answer helper, one ShipStation reader ────────
+# Request 106 (2026-11-11): a customer "couldn't" exchange a 13-day-old order
+# and nothing recorded why — the eligibility routes logged only the happy
+# path, and a ShipStation timeout came back as the page's generic "Something
+# went wrong". Every outcome is now logged on one line, a ShipStation outage
+# answers lookup_unavailable (the pages say so, and to try again shortly),
+# and outside_window carries the ship date and the last eligible day.
+class _LookupUnavailable(Exception):
+    """ShipStation did not answer a customer eligibility lookup (timeout,
+    connection error, 5xx/429, or a non-JSON body)."""
+
+def _ss_lookup(path, params):
+    """GET a ShipStation list for the customer eligibility checks; raises
+    _LookupUnavailable instead of surfacing a transport error as a 500."""
+    try:
+        r = req_lib.get("https://ssapi.shipstation.com" + path, params=params,
+                        headers=ss_headers(), timeout=10)
+    except req_lib.exceptions.RequestException as e:
+        raise _LookupUnavailable(f"{path}: {e}")
+    if r.status_code == 429 or r.status_code >= 500:
+        raise _LookupUnavailable(f"{path}: HTTP {r.status_code}")
+    try:
+        return r.json()
+    except ValueError as e:
+        raise _LookupUnavailable(f"{path}: non-JSON answer ({e})")
+
+def _answer(route, order_number, status, c, **extra):
+    """The eligibility routes' one exit: logs the outcome, answers JSON."""
+    detail = extra.pop("detail", None)
+    tail = " ".join(f"{k}={v}" for k, v in extra.items())
+    print(f"[{route}] {order_number} -> {status}" + (f" {tail}" if tail else "") + (f" ({detail})" if detail else ""))
+    return Response(json.dumps({"status": status, **extra}), headers=c, mimetype="application/json")
+
+
 def holiday_window_phase(now=None):
     """'off' before 11/19 noon and after 1/31; 'open' while holiday orders are
     still being placed (11/19 noon – 1/1); 'tail' 1/2 – 1/31, when new orders are
@@ -1224,19 +1258,16 @@ def verify_order():
     email_input  = data.get("email", "").strip().lower()
 
     if not order_number or (not last_name and not email_input):
-        return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+        return _answer("verify-order", order_number, "not_found", c)
 
     try:
         from datetime import datetime, timezone, timedelta
 
         # Look up order in ShipStation
-        r = req_lib.get("https://ssapi.shipstation.com/orders",
-                         params={"orderNumber": order_number},
-                         headers=ss_headers(), timeout=10)
-        orders = r.json().get("orders", [])
+        orders = _ss_lookup("/orders", {"orderNumber": order_number}).get("orders", [])
 
         if not orders:
-            return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+            return _answer("verify-order", order_number, "not_found", c)
 
         order = orders[0]
 
@@ -1247,7 +1278,7 @@ def verify_order():
         name_match  = last_name and last_name == order_last
         email_match = email_input and email_input == order_email
         if not name_match and not email_match:
-            return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+            return _answer("verify-order", order_number, "not_found", c)
 
         # Check international — includes military overseas (APO/FPO/DPO) which
         # use state codes AA, AE, AP. These orders can't get a prepaid label;
@@ -1261,18 +1292,15 @@ def verify_order():
         order_status = order.get("orderStatus", "")
         UNSHIPPED_STATUSES = {"awaiting_shipment", "awaiting_payment", "on_hold"}
         if order_status in UNSHIPPED_STATUSES:
-            return Response(json.dumps({"status": "not_shipped"}), headers=c, mimetype="application/json")
+            return _answer("verify-order", order_number, "not_shipped", c)
 
         # Get ship date from shipments
-        sr = req_lib.get("https://ssapi.shipstation.com/shipments",
-                          params={"orderNumber": order_number},
-                          headers=ss_headers(), timeout=10)
-        shipments = sr.json().get("shipments", [])
+        shipments = _ss_lookup("/shipments", {"orderNumber": order_number}).get("shipments", [])
         ship_date_str = shipments[0].get("shipDate", "") if shipments else ""
 
         # Also block if orderStatus isn't clearly shipped and there are no shipments
         if not ship_date_str and order_status != "shipped":
-            return Response(json.dumps({"status": "not_shipped"}), headers=c, mimetype="application/json")
+            return _answer("verify-order", order_number, "not_shipped", c)
 
         def parse_dt(s):
             """Parse ISO date/datetime string, always return UTC-aware datetime."""
@@ -1293,7 +1321,9 @@ def verify_order():
         eligible_until = ship_date + timedelta(days=45 if is_international else 37)
         eligible_until = with_holiday_window(order, eligible_until)  # 11/19 – 1/1 orders: through 1/31
         if datetime.now(timezone.utc) > eligible_until:
-            return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
+            return _answer("verify-order", order_number, "outside_window", c,
+                           shipDate=ship_date.astimezone(_ET_TZ).date().isoformat(),
+                           eligibleUntil=eligible_until.astimezone(_ET_TZ).date().isoformat())
 
         # Build items list — exclude empty SKUs and discount/fee line items
         def is_returnable_item(i):
@@ -1362,6 +1392,8 @@ def verify_order():
             "alreadyReturnedQtys": already_returned_qtys,
         }), headers=c, mimetype="application/json")
 
+    except _LookupUnavailable as e:
+        return _answer("verify-order", order_number, "lookup_unavailable", c, detail=str(e))
     except Exception as e:
         return Response(json.dumps({"status": "error", "error": str(e)}),
                         status=500, headers=c, mimetype="application/json")
@@ -5386,18 +5418,15 @@ def verify_exchange():
     last_name_input = data.get("lastName", "").strip().lower()
 
     if not order_number or (not email_input and not last_name_input):
-        return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+        return _answer("verify-exchange", order_number, "not_found", c)
 
     try:
         from datetime import datetime, timezone, timedelta
 
-        r = req_lib.get("https://ssapi.shipstation.com/orders",
-                         params={"orderNumber": order_number},
-                         headers=ss_headers(), timeout=10)
-        orders = r.json().get("orders", [])
+        orders = _ss_lookup("/orders", {"orderNumber": order_number}).get("orders", [])
 
         if not orders:
-            return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "not_found", c)
 
         order = orders[0]
 
@@ -5408,32 +5437,29 @@ def verify_exchange():
         name_match  = last_name_input and last_name_input == order_last
         email_match = email_input and email_input == order_email
         if not name_match and not email_match:
-            return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "not_found", c)
 
         # Block international and military overseas orders
         MILITARY_STATES = {"AA", "AE", "AP"}
         country = order.get("shipTo", {}).get("country", "US")
         state   = order.get("shipTo", {}).get("state", "").upper()
         if country not in ("US", "USA") or state in MILITARY_STATES:
-            return Response(json.dumps({"status": "international"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "international", c)
 
         # Block exchanges on unshipped orders
         order_status = order.get("orderStatus", "")
         UNSHIPPED_STATUSES = {"awaiting_shipment", "awaiting_payment", "on_hold"}
         if order_status in UNSHIPPED_STATUSES:
-            return Response(json.dumps({"status": "not_shipped"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "not_shipped", c)
 
         # Check ship date within 37 days
-        sr = req_lib.get("https://ssapi.shipstation.com/shipments",
-                          params={"orderNumber": order_number},
-                          headers=ss_headers(), timeout=10)
-        shipments = sr.json().get("shipments", [])
+        shipments = _ss_lookup("/shipments", {"orderNumber": order_number}).get("shipments", [])
         active_shipments = [s for s in shipments if not s.get("voided", False)]
         ship_date_str = active_shipments[0].get("shipDate", "") if active_shipments else ""
 
         # Also block if no shipments and order status isn't clearly shipped
         if not ship_date_str and order_status != "shipped":
-            return Response(json.dumps({"status": "not_shipped"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "not_shipped", c)
 
         def parse_dt(s):
             s = s.replace("Z", "+00:00")
@@ -5451,7 +5477,9 @@ def verify_exchange():
         eligible_until = ship_date + timedelta(days=37)
         eligible_until = with_holiday_window(order, eligible_until)  # 11/19 – 1/1 orders: through 1/31
         if datetime.now(timezone.utc) > eligible_until:
-            return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "outside_window", c,
+                           shipDate=ship_date.astimezone(_ET_TZ).date().isoformat(),
+                           eligibleUntil=eligible_until.astimezone(_ET_TZ).date().isoformat())
 
         # Find exchange-eligible items via Airtable
         # "Can Exchange = TRUE" marks exchange *targets* (options), not the customer's item.
@@ -5524,7 +5552,7 @@ def verify_exchange():
             })
 
         if not eligible_items:
-            return Response(json.dumps({"status": "no_eligible_items"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "no_eligible_items", c)
 
         # Check for existing exchange orders (-E, -E2, -E3, ...) and collect already-exchanged SKUs
         # Original SKU is stored in customField3 of each exchange order
@@ -5559,7 +5587,7 @@ def verify_exchange():
         eligible_items = [i for i in eligible_items if i["sku"] not in already_exchanged_skus]
 
         if not eligible_items:
-            return Response(json.dumps({"status": "already_exchanged"}), headers=c, mimetype="application/json")
+            return _answer("verify-exchange", order_number, "already_exchanged", c)
 
         ship_to = order.get("shipTo", {})
         return Response(json.dumps({
@@ -5581,6 +5609,8 @@ def verify_exchange():
             "nextSuffix":    next_suffix,
         }), headers=c, mimetype="application/json")
 
+    except _LookupUnavailable as e:
+        return _answer("verify-exchange", order_number, "lookup_unavailable", c, detail=str(e))
     except Exception as e:
         import traceback
         print(f"[verify-exchange] ERROR: {e}\n{traceback.format_exc()}")
@@ -12108,18 +12138,15 @@ def verify_international_exchange():
     last_name_input = data.get("lastName", "").strip().lower()
 
     if not order_number or (not email_input and not last_name_input):
-        return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+        return _answer("verify-international-exchange", order_number, "not_found", c)
 
     try:
         from datetime import datetime, timezone, timedelta
 
-        r = req_lib.get("https://ssapi.shipstation.com/orders",
-                        params={"orderNumber": order_number},
-                        headers=ss_headers(), timeout=10)
-        orders = r.json().get("orders", [])
+        orders = _ss_lookup("/orders", {"orderNumber": order_number}).get("orders", [])
 
         if not orders:
-            return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+            return _answer("verify-international-exchange", order_number, "not_found", c)
 
         order = orders[0]
 
@@ -12130,20 +12157,17 @@ def verify_international_exchange():
         name_match  = last_name_input and last_name_input == order_last
         email_match = email_input and email_input == order_email
         if not name_match and not email_match:
-            return Response(json.dumps({"status": "not_found"}), headers=c, mimetype="application/json")
+            return _answer("verify-international-exchange", order_number, "not_found", c)
 
         # Block US domestic orders — they should use the domestic exchange form
         MILITARY_STATES = {"AA", "AE", "AP"}
         country = order.get("shipTo", {}).get("country", "").strip().upper()
         state   = order.get("shipTo", {}).get("state", "").strip().upper()
         if country in ("US", "USA") and state not in MILITARY_STATES:
-            return Response(json.dumps({"status": "domestic"}), headers=c, mimetype="application/json")
+            return _answer("verify-international-exchange", order_number, "domestic", c)
 
         # Check ship date within 45 days
-        sr = req_lib.get("https://ssapi.shipstation.com/shipments",
-                         params={"orderNumber": order_number},
-                         headers=ss_headers(), timeout=10)
-        shipments = sr.json().get("shipments", [])
+        shipments = _ss_lookup("/shipments", {"orderNumber": order_number}).get("shipments", [])
         ship_date_str = shipments[0].get("shipDate", "") if shipments else ""
 
         def parse_dt(s):
@@ -12162,7 +12186,9 @@ def verify_international_exchange():
         eligible_until = ship_date + timedelta(days=45)
         eligible_until = with_holiday_window(order, eligible_until)  # 11/19 – 1/1 orders: through 1/31
         if datetime.now(timezone.utc) > eligible_until:
-            return Response(json.dumps({"status": "outside_window"}), headers=c, mimetype="application/json")
+            return _answer("verify-international-exchange", order_number, "outside_window", c,
+                           shipDate=ship_date.astimezone(_ET_TZ).date().isoformat(),
+                           eligibleUntil=eligible_until.astimezone(_ET_TZ).date().isoformat())
 
         # Find exchange-eligible items via Airtable
         airtable_read_token = AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN
@@ -12207,7 +12233,7 @@ def verify_international_exchange():
             })
 
         if not eligible_items:
-            return Response(json.dumps({"status": "no_eligible_items"}), headers=c, mimetype="application/json")
+            return _answer("verify-international-exchange", order_number, "no_eligible_items", c)
 
         # Check for existing exchange orders
         already_exchanged_skus = set()
@@ -12239,7 +12265,7 @@ def verify_international_exchange():
         eligible_items = [i for i in eligible_items if i["sku"] not in already_exchanged_skus]
 
         if not eligible_items:
-            return Response(json.dumps({"status": "already_exchanged"}), headers=c, mimetype="application/json")
+            return _answer("verify-international-exchange", order_number, "already_exchanged", c)
 
         ship_to = order.get("shipTo", {})
         return Response(json.dumps({
@@ -12266,6 +12292,8 @@ def verify_international_exchange():
             "nextSuffix":    next_suffix,
         }), headers=c, mimetype="application/json")
 
+    except _LookupUnavailable as e:
+        return _answer("verify-international-exchange", order_number, "lookup_unavailable", c, detail=str(e))
     except Exception as e:
         import traceback
         print(f"[verify-international-exchange] ERROR: {e}\n{traceback.format_exc()}")
