@@ -2917,7 +2917,12 @@ def submit_cancellation():
                 status=400, headers=c, mimetype="application/json",
             )
         else:
-            # Check for tracking numbers on any non-voided shipment
+            # Check for tracking numbers on any non-voided OUTBOUND shipment.
+            # A return label (isReturnLabel) is the customer's prepaid mailer
+            # back to us, not the order going out, so it must not block the
+            # cancel: a size exchange carries one from the day it is created,
+            # and 296129-E could not be cancelled even after its outbound label
+            # was voided (Patty 2026-11-11, request #101).
             ship_r = req_lib.get(
                 "https://ssapi.shipstation.com/shipments",
                 params={"orderId": order_id},
@@ -2926,6 +2931,8 @@ def submit_cancellation():
             if ship_r.status_code == 200:
                 for s in ship_r.json().get("shipments", []):
                     tracking = (s.get("trackingNumber") or "").strip()
+                    if s.get("isReturnLabel", False):
+                        continue
                     if tracking and not s.get("voided", False):
                         return Response(
                             json.dumps({
