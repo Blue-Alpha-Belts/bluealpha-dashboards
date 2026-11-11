@@ -4654,11 +4654,22 @@ def send_po():
         return Response(json.dumps({"ok": False, "error": "Email not configured"}),
                         status=500, mimetype="application/json")
     body = request.get_json(silent=True) or {}
+    # kind 'statement' (Blue Alpha Ops, change request #77, 2026-11-11): the
+    # same relay carries a customer's account statement — then it goes from
+    # orders@ like the invoices do, headed ACCOUNT STATEMENT, and po_number
+    # carries the customer's name for the log line.
+    kind      = "statement" if (body.get("kind") or "") == "statement" else "po"
     po_number = (body.get("po_number") or "").strip()
     subject   = (body.get("subject") or "").strip()
     message   = (body.get("message") or "").strip()
     pdf_b64   = (body.get("pdf_b64") or "").strip()
     filename  = (body.get("filename") or "purchase-order.pdf").strip()
+    if kind == "statement":
+        sender_email, sender_name = "orders@bluealpha.us", "Blue Alpha"
+        heading = "ACCOUNT STATEMENT"
+    else:
+        sender_email, sender_name = "purchasing@bluealpha.us", "Blue Alpha Purchasing"
+        heading = f"PURCHASE ORDER {po_number}"
     raw_to    = body.get("to") or []
     if isinstance(raw_to, str):
         raw_to = [raw_to]
@@ -4693,11 +4704,11 @@ def send_po():
           <span style="font-family:Arial;font-size:20px;font-weight:800;color:#fff;letter-spacing:2px;">BLUE ALPHA</span>
         </td></tr>
         <tr><td style="padding:32px 36px;">
-          <p style="color:#6b7a8d;font-size:11px;letter-spacing:1px;margin:0 0 14px;">PURCHASE ORDER {_html.escape(po_number)}</p>
+          <p style="color:#6b7a8d;font-size:11px;letter-spacing:1px;margin:0 0 14px;">{_html.escape(heading)}</p>
           <p style="color:#1a2633;font-size:14px;line-height:1.7;margin:0;">{safe}</p>
         </td></tr>
         <tr><td style="background:#f5f7fa;border-top:1px solid #dde3ea;padding:16px 36px;text-align:center;">
-          <p style="color:#6b7a8d;font-size:11px;margin:0;">Blue Alpha &bull; 35 Andrew St, Newnan, GA 30263 &bull; purchasing@bluealpha.us</p>
+          <p style="color:#6b7a8d;font-size:11px;margin:0;">Blue Alpha &bull; 35 Andrew St, Newnan, GA 30263 &bull; {sender_email}</p>
         </td></tr>
       </table>
     </td></tr>
@@ -4712,8 +4723,8 @@ def send_po():
                 # replies — confirmations, lead times, invoices — land in the
                 # purchasing inbox. Same authenticated domain as the info@ and
                 # orders@ senders, so SendGrid needs no extra setup.
-                "from": {"email": "purchasing@bluealpha.us", "name": "Blue Alpha Purchasing"},
-                "reply_to": {"email": "purchasing@bluealpha.us", "name": "Blue Alpha Purchasing"},
+                "from": {"email": sender_email, "name": sender_name},
+                "reply_to": {"email": sender_email, "name": sender_name},
                 "subject": subject,
                 "content": [
                     {"type": "text/plain", "value": message},
@@ -4729,10 +4740,10 @@ def send_po():
             timeout=20,
         )
         if sr.status_code not in (200, 202):
-            print(f"[send-po] {po_number}: SendGrid {sr.status_code}: {sr.text[:200]}", flush=True)
+            print(f"[send-{kind}] {po_number}: SendGrid {sr.status_code}: {sr.text[:200]}", flush=True)
             return Response(json.dumps({"ok": False, "error": f"SendGrid {sr.status_code}: {sr.text[:200]}"}),
                             status=500, mimetype="application/json")
-        print(f"[send-po] {po_number} emailed to {', '.join(actual_to)}", flush=True)
+        print(f"[send-{kind}] {po_number} emailed to {', '.join(actual_to)}", flush=True)
         return Response(json.dumps({"ok": True, "sentTo": recipients}),
                         status=200, mimetype="application/json")
     except Exception as e:
