@@ -6723,6 +6723,10 @@ def _fetch_quote_data(record_id):
         # Quote vs Sales Order — added 2026-09-09 so /api/admin/email-order can
         # word itself correctly without re-reading the record.
         "orderType":     order_type,
+        # Department orders (Newnan PD): "Officer - Badge N" replaces the customer
+        # contact on the SO PDF's Ship To block, as it already does on the invoice
+        # (Patty 2026-11-12: officer + badge must show on sales orders and invoices).
+        "officerLine":   _ship_contact_line(fields) if fields.get("Officer Name") else "",
         # Internal: linked Customer record IDs, used by callers for ownership checks
         "_customerIds":  customer_ids,
     }
@@ -8217,7 +8221,7 @@ def _build_quote_pdf_bytes(quote, doc_type="quote"):
     ship_org_display = cust.get("shipToOrg") or cust.get("orgName", "")
     ship_lines = [
         ship_org_display,
-        cust.get("contactName", ""),
+        quote.get("officerLine") or cust.get("contactName", ""),
         addr1,
         ", ".join(filter(None, [city, f"{state_v} {zip_v}".strip()])),
     ]
@@ -8539,7 +8543,12 @@ def _ship_contact_line(fields):
     officer = str(fields.get("Officer Name") or "").strip()
     if officer:
         badge = str(fields.get("Badge Number") or fields.get("Badge #") or "").strip()
-        line = f"{officer} - Badge {badge}" if badge else officer
+        # "Joe Smith - #624" (Patty 2026-11-12); a word in the badge box ("Cadet")
+        # is shown as typed, "Joe Smith - Cadet".
+        if badge:
+            line = f"{officer} - #{badge.lstrip('#')}" if badge.lstrip('#').isdigit() else f"{officer} - {badge}"
+        else:
+            line = officer
         # Core Helvetica in fpdf2 is latin-1 only — free-typed officer names with
         # smart quotes/dashes would crash the PDF render, so degrade them safely.
         return line.encode("latin-1", "replace").decode("latin-1")
