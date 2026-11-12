@@ -10155,8 +10155,10 @@ def department_order_create(user):
     badge_num    = data.get("badge_num", "").strip()
     line_items   = data.get("line_items", [])
 
-    if not officer_name or not line_items:
-        return Response(json.dumps({"error": "officer_name and line_items are required"}),
+    # Officer name AND badge # are both required on department orders (Patty 2026-11-12):
+    # they print on the Ship To line of the SO/invoice and identify who the gear is for.
+    if not officer_name or not badge_num or not line_items:
+        return Response(json.dumps({"error": "Officer name, badge # and at least one item are required"}),
                         status=400, headers=c, mimetype="application/json")
 
     read_token  = AIRTABLE_BASE_TOKEN or AIRTABLE_OPS_TOKEN or RETURNS_WRITE_TOKEN

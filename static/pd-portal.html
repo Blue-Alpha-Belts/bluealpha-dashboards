@@ -464,8 +464,8 @@
               <input type="text" id="officerName" placeholder="Full name" oninput="validateOrder()">
             </div>
             <div class="field-group">
-              <label>Badge #</label>
-              <input type="text" id="badgeNum" placeholder="e.g. 1042">
+              <label>Badge # *</label>
+              <input type="text" id="badgeNum" placeholder="e.g. 1042" oninput="validateOrder()">
             </div>
 
             <div style="margin-bottom: 12px;">
@@ -1483,7 +1483,8 @@ function removeItem(idx) {
 function validateOrder() {
   const btn     = document.getElementById('placeOrderBtn');
   const officer = document.getElementById('officerName').value.trim();
-  btn.disabled  = !(officer && lineItems.length > 0);
+  const badge   = document.getElementById('badgeNum').value.trim();
+  btn.disabled  = !(officer && badge && lineItems.length > 0);
 }
 
 // ── Place Order ───────────────────────────────────────────────────────────────
