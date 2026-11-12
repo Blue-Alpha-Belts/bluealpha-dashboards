@@ -1247,6 +1247,29 @@ def capture_raw_material_cost():
                         status=500, headers=c, mimetype="application/json")
 
 
+# A return that never got its label must not block a retry. The label is
+# bought on a background thread after the record is created at Status "New";
+# if that thread dies (process restart mid-run — order 296333, 2026-11-07,
+# change request 107) nothing ever moves the record on, and every later
+# attempt — the customer's on the portal, CS's from the order page — was
+# refused as "already submitted". submit-return's reuse path is built to take
+# such a record over and finish the job, so the three active-return counts
+# below skip it. Under STALLED_RETURN_MINUTES old it is still in flight and
+# counts as usual (keeps a double-click from buying two labels).
+STALLED_RETURN_MINUTES = 10
+
+def _stalled_new_return(rec):
+    f = rec.get("fields", {})
+    if f.get("Status") != "New" or f.get("Return Tracking #"):
+        return False
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        created = _dt.fromisoformat(rec.get("createdTime", "").replace("Z", "+00:00"))
+        return (_dt.now(_tz.utc) - created).total_seconds() > STALLED_RETURN_MINUTES * 60
+    except Exception:
+        return False
+
+
 @app.route("/api/verify-order", methods=["POST", "OPTIONS"])
 def verify_order():
     if request.method == "OPTIONS":
@@ -1349,12 +1372,14 @@ def verify_order():
                                  f"{{Status}}='Refunded'))")
                 ar = req_lib.get(
                     f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}",
-                    params={"filterByFormula": filter_formula, "fields[]": ["Items to Return", "Status"]},
+                    params={"filterByFormula": filter_formula, "fields[]": ["Items to Return", "Status", "Return Tracking #"]},
                     headers={"Authorization": f"Bearer {airtable_read_token}"},
                     timeout=10,
                 )
                 import re as re_lib
                 for rec in ar.json().get("records", []):
+                    if _stalled_new_return(rec):
+                        continue
                     items_text = rec.get("fields", {}).get("Items to Return", "")
                     for line in items_text.split("\n"):
                         # Format: "1x SKU-123 — Item Name"
@@ -1615,11 +1640,13 @@ def cs_lookup_order():
                                       f"{{Status}}='Refunded'),{{Type}}='Return')")
                     _cs_ar_resp = req_lib.get(
                         f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}",
-                        params={"filterByFormula": _cs_ar_formula, "fields[]": ["Items to Return"], "maxRecords": 20},
+                        params={"filterByFormula": _cs_ar_formula, "fields[]": ["Items to Return", "Status", "Return Tracking #"], "maxRecords": 20},
                         headers={"Authorization": f"Bearer {_cs_read_token}"},
                         timeout=10,
                     )
                     for _rec in _cs_ar_resp.json().get("records", []):
+                        if _stalled_new_return(_rec):
+                            continue
                         for _line in _rec.get("fields", {}).get("Items to Return", "").split("\n"):
                             _m = re.match(r'(\d+)x\s+(\S+)\s+[—\-]', _line.strip())
                             if _m:
@@ -3258,7 +3285,7 @@ def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64
                 base = datetime.fromisoformat(str(label_date)[:10]).replace(tzinfo=timezone.utc)
             except ValueError:
                 pass
-        expire_date = _friendly_date(base + timedelta(days=26))
+        expire_date = _friendly_date(base + timedelta(days=24))
         first_name = customer_name.split()[0] if customer_name else "there"
         payload = {
             "personalizations": [{"to": [{"email": TEST_EMAIL_OVERRIDE or to_email}]}],
@@ -3463,12 +3490,14 @@ def submit_return():
                            f"{{Status}}='Refunded'),{{Type}}='Return')")
             _ar_resp = req_lib.get(
                 f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{RETURNS_TABLE_ID}",
-                params={"filterByFormula": _ar_formula, "fields[]": ["Items to Return"], "maxRecords": 20},
+                params={"filterByFormula": _ar_formula, "fields[]": ["Items to Return", "Status", "Return Tracking #"], "maxRecords": 20},
                 headers={"Authorization": f"Bearer {read_token}"},
                 timeout=10,
             )
             _already = {}
             for _rec in _ar_resp.json().get("records", []):
+                if _stalled_new_return(_rec):
+                    continue
                 for _line in _rec.get("fields", {}).get("Items to Return", "").split("\n"):
                     _m = _re_ret.match(r'(\d+)x\s+(\S+)\s+[—\-]', _line.strip())
                     if _m:
@@ -17294,7 +17323,7 @@ def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_dat
             ship_by_base = datetime.fromisoformat(str(label_date)[:10]).replace(tzinfo=timezone.utc)
         except ValueError:
             pass
-    ship_by = _friendly_date(ship_by_base + timedelta(days=26))
+    ship_by = _friendly_date(ship_by_base + timedelta(days=24))
     actual_to = TEST_EMAIL_OVERRIDE or to_email
     html_body = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8"></head>
@@ -17465,7 +17494,7 @@ def _send_warranty_replace_email(to_email, first_name, replacement_item, label_p
         # email is only ever sent right after the label is created, so
         # today+26 is the label's real deadline.
         from datetime import datetime, timezone, timedelta
-        ship_by = _friendly_date(datetime.now(timezone.utc) + timedelta(days=26))
+        ship_by = _friendly_date(datetime.now(timezone.utc) + timedelta(days=24))
         return_label_line = f"""<p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
             Attached is a prepaid return label for your original item. Please print it, attach it to your package, and drop it off at any USPS location.
           </p>
