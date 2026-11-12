@@ -3272,8 +3272,8 @@ def send_return_label_email(to_email, customer_name, order_number, label_pdf_b64
     """Send return label PDF to customer via SendGrid. Returns (success, error_message).
 
     label_date: ISO date the label was created (pass on RE-sends so the
-    deadline stays true to the original label). Defaults to today. The +26
-    matches the CS app's day-27 auto-void — the customer's date is always one
+    deadline stays true to the original label). Defaults to today. The +24
+    matches the CS app's day-25 auto-void — the customer's date is always one
     day inside the void."""
     if not SENDGRID_API_KEY:
         return False, "SendGrid not configured"
@@ -17311,8 +17311,8 @@ def _send_warranty_approval_email(to_email, first_name, label_pdf_b64, label_dat
     Returns (success, error_message).
 
     label_date: ISO date the label was created (pass on RE-sends). Defaults to
-    today. +26 keeps the customer's deadline one day inside the CS app's
-    day-27 auto-void."""
+    today. +24 keeps the customer's deadline one day inside the CS app's
+    day-25 auto-void."""
     if not SENDGRID_API_KEY:
         print("[warranty_email] SendGrid not configured")
         return False, "SendGrid not configured"
@@ -17490,9 +17490,9 @@ def _send_warranty_replace_email(to_email, first_name, replacement_item, label_p
     actual_to = TEST_EMAIL_OVERRIDE or to_email
     if label_pdf_b64:
         # Same expiration warning as the repair email (added 2026-08-17 per
-        # Patty — Replace labels auto-void on day 27 just the same). This
+        # Patty — Replace labels auto-void on day 25 just the same). This
         # email is only ever sent right after the label is created, so
-        # today+26 is the label's real deadline.
+        # today+24 is the label's real deadline.
         from datetime import datetime, timezone, timedelta
         ship_by = _friendly_date(datetime.now(timezone.utc) + timedelta(days=24))
         return_label_line = f"""<p style="color:#4a5568;font-size:14px;line-height:1.7;margin:0 0 16px;">
