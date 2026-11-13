@@ -19255,6 +19255,7 @@ def _wps_compute(month_str, force=False):
         returns_total = round(returns_total + credit, 2)
         returns_rows.append({"order": str(c.get("order") or ""), "kind": str(c.get("kind") or "return"),
                              "belt": WPS_FUL_BUCKET_LABELS.get(bucket, bucket or "?"), "qty": qty,
+                             "sku": str(c.get("sku") or ""),
                              "condition": str(c.get("condition") or ""),
                              "received_on": str(c.get("received_on") or ""),
                              "received_by": str(c.get("received_by") or ""),
@@ -19350,7 +19351,7 @@ def _wps_create_draft(month_str):
         notes += f" WARNING: {len(comp['unknown'])} unmapped items NOT billed — review detail."
     for rr in comp["returns_rows"]:
         kind = "EXCHANGE-RETURN" if rr["kind"] == "exchange" else "RETURN"
-        notes += (f"\n{kind}: {rr['order']} | {rr['qty']}x {rr['belt']} | {rr['condition']} | "
+        notes += (f"\n{kind}: {rr['order']} | {rr['qty']}x {rr['belt']}{' (' + rr['sku'] + ')' if rr.get('sku') else ''} | {rr['condition']} | "
                   f"checked in {rr['received_on']} by {rr['received_by']} | credit ${rr['credit']:.2f}")
     # Exchange belts: the $100 service line covers the service only — the replacement
     # belt is billed as product once an admin assigns which parent product was sent.
