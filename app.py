@@ -19061,6 +19061,29 @@ def _wps_checkins(month_str):
     return r.json().get("checkins") or []
 
 
+def _wps_v1_get(path, params=None):
+    """GET against ShipStation v1 with the WPS account's key/secret."""
+    if not _wps_configured():
+        raise RuntimeError("SHIPSTATION_WPS_KEY/SECRET not configured")
+    import base64 as _b64
+    auth = _b64.b64encode(f"{WPS_SHIPSTATION_KEY}:{WPS_SHIPSTATION_SECRET}".encode()).decode()
+    last_exc = None
+    for attempt in range(3):
+        try:
+            r = req_lib.get(f"https://ssapi.shipstation.com/{path.lstrip('/')}",
+                            headers={"Authorization": f"Basic {auth}"},
+                            params=params or {}, timeout=30)
+            if r.status_code == 429:
+                import time as _t; _t.sleep(30)
+                continue
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last_exc = e
+            import time as _t; _t.sleep(2)
+    raise RuntimeError(f"ShipStation v1 GET {path} failed: {last_exc}")
+
+
 def _wps_month_bounds(month_str):
     """'2026-07' -> (date 2026-07-01, date 2026-08-01)."""
     from datetime import date as _date
