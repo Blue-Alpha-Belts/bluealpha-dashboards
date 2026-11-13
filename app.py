@@ -19172,6 +19172,18 @@ def _wps_classify(sku, name):
     return "unknown"
 
 
+def _wps_exchange_bucket(note):
+    """Which belt family a size exchange's replacement was, when the exchange
+    order's internal note names it ("Warrior Poet-Low Profile EDC Belt-Black-34").
+    None when it doesn't — that one stays pending for a person to assign."""
+    n = (note or "").lower()
+    if "d-ring" in n or "dring" in n: return "dring"
+    if "cobra" in n: return "cobra"
+    if "inner" in n: return "lp_inner"
+    if "low profile" in n or "low-profile" in n or "lowpro" in n: return "low_profile"
+    return None
+
+
 def _wps_base_order(shipment):
     """'#347738-8393337143592' -> '#347738'; 'WPS-SP-825...' is already one order."""
     num = shipment.get("order_number") or ""
@@ -19361,11 +19373,33 @@ def _wps_create_draft(month_str):
     def _clean_note(n):
         flat = " / ".join(x.strip() for x in (n or "").splitlines() if x.strip())
         return flat.replace("|", "/").replace("->", "-")
+    # The replacement belt is billed when it ships, whether or not the old one
+    # ever comes back (Patty 2026-11-13: "they need charged for replacement
+    # belts whether or not we get the other ones back"). When the exchange
+    # order's note names the belt family, it is assigned here — a unit on that
+    # product line — so nobody has to click Assign; a note that doesn't name
+    # it stays pending for a person.
+    lines = [dict(l) for l in comp["lines"]]
     for ex in comp["exchanges"]:
-        line = f"\nEXCHANGE-PENDING: {ex['order']} | {ex['name']}"
         note = _clean_note(ex.get("note"))
-        if note:
-            line += f" | SS-NOTE: {note}"
+        bucket = _wps_exchange_bucket(note)
+        if bucket:
+            line = f"\nEXCHANGE-ASSIGNED: {ex['order']} | {ex['name']}"
+            if note:
+                line += f" | SS-NOTE: {note}"
+            line += f" -> {WPS_FUL_BUCKET_LABELS[bucket]}"
+            target = next((l for l in lines if l["bucket"] == bucket), None)
+            if target:
+                target["qty"] = int(target["qty"]) + 1
+                target["amount"] = round(target["qty"] * target["unit_price"], 2)
+            else:
+                idx = next((i for i, l in enumerate(lines) if l["bucket"] == "order_fee"), len(lines))
+                lines.insert(idx, {"bucket": bucket, "label": WPS_FUL_BUCKET_LABELS[bucket], "qty": 1,
+                                   "unit_price": WPS_FUL_PRICES[bucket], "amount": WPS_FUL_PRICES[bucket]})
+        else:
+            line = f"\nEXCHANGE-PENDING: {ex['order']} | {ex['name']}"
+            if note:
+                line += f" | SS-NOTE: {note}"
         notes += line
     mo_resp = req_lib.post(
         f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{MANUAL_ORDERS_TABLE_ID}",
@@ -19379,7 +19413,7 @@ def _wps_create_draft(month_str):
     mo_resp.raise_for_status()
     mo_id = mo_resp.json()["id"]
     li_records = []
-    for ln in comp["lines"]:
+    for ln in lines:
         li_records.append({"fields": {
             "Manual Order": [mo_id], "Product SKU": [sku_ids[ln["bucket"]]],
             "Qty.": int(ln["qty"]), "Confirmed Unit Price": float(ln["unit_price"]),
