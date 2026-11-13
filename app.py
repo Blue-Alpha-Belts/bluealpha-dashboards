@@ -19251,12 +19251,14 @@ def _wps_compute(month_str, force=False):
         bucket = str(c.get("belt_type") or "")
         qty = int(c.get("qty") or 0)
         price = WPS_FUL_PRICES[bucket] if bucket in WPS_FUL_BUCKET_LABELS else 0.0
-        credit = round(price * qty, 2)
+        # Checked in as not new ("Damaged") = no credit (Patty 2026-11-13).
+        not_new = str(c.get("condition") or "") == "Damaged"
+        credit = 0.0 if not_new else round(price * qty, 2)
         returns_total = round(returns_total + credit, 2)
         returns_rows.append({"order": str(c.get("order") or ""), "kind": str(c.get("kind") or "return"),
                              "belt": WPS_FUL_BUCKET_LABELS.get(bucket, bucket or "?"), "qty": qty,
                              "sku": str(c.get("sku") or ""),
-                             "condition": str(c.get("condition") or ""),
+                             "condition": "not new — no credit" if not_new else "new",
                              "received_on": str(c.get("received_on") or ""),
                              "received_by": str(c.get("received_by") or ""),
                              "tracking": str(c.get("tracking") or ""), "credit": credit})
