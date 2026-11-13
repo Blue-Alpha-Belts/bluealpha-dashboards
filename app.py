@@ -173,8 +173,10 @@ SIZING_EXCHANGE_STORE_ID = 185018
 
 SHIPSTATION_KEY      = os.environ.get("SHIPSTATION_KEY", "")
 SHIPSTATION_SECRET   = os.environ.get("SHIPSTATION_SECRET", "")
-# WPS (Warrior Poet Society) ShipStation v2 API key — monthly fulfillment invoicing
-WPS_SHIPSTATION_V2_KEY = os.environ.get("WPS_SHIPSTATION_V2_KEY", "")
+# WPS (Warrior Poet Society) ShipStation account, v1 key/secret — monthly fulfillment
+# invoicing. The same pair the CS app holds as SHIPSTATION_WPS_KEY/_SECRET.
+WPS_SHIPSTATION_KEY    = os.environ.get("SHIPSTATION_WPS_KEY", "")
+WPS_SHIPSTATION_SECRET = os.environ.get("SHIPSTATION_WPS_SECRET", "")
 # FATTAC ShipStation v1 API key/secret — monthly fulfillment invoicing
 FATTAC_SHIPSTATION_KEY    = os.environ.get("FATTAC_SHIPSTATION_KEY", "")
 FATTAC_SHIPSTATION_SECRET = os.environ.get("FATTAC_SHIPSTATION_SECRET", "")
@@ -18973,24 +18975,41 @@ def pd_portal_order_detail(record_id):
 # ═════════════════════════════════════════════════════════════════════════════
 # WPS (Warrior Poet Society) monthly fulfillment invoicing
 #
-# Bills WPS for dropship orders Blue Alpha fulfills out of WPS's own ShipStation
+# Bills WPS for dropship orders Blue Alpha fulfills out of the WPS ShipStation
 # account, on a SHIPPED-date basis (cutover: invoiced through orders placed
 # 4/30/26 under the old placed-basis process; ships from 5/1/26 onward billed
 # here, May excludes shipments whose orders were placed on/before 4/30).
 #
 # A background worker creates a Draft + Hidden invoice in Manual Orders on the
-# 1st of each month for the prior month; Patty reviews it in /admin (Invoices
-# tab), enters the Returns Credit, and clicks Approve & Send — which flips
+# 1st of each month for the prior month; Patty reviews it (the CS app's
+# Fulfillment drafts page), checks the credits, and approves — which flips
 # Invoice Status to Approved (the Airtable automation then generates the Stripe
 # invoices) and unhides it in the customer portal. The worker also repopulates
 # the "WPS Orders" stats table in the Automated Data base.
+#
+# 2026-11-13 (Patty: "fix all of that"): the pull moved from the ShipStation v2
+# API to v1 with the account's key/secret (SHIPSTATION_WPS_KEY/_SECRET, the
+# pair the CS app already uses). The v2 key had been stored under a different
+# name than the one read here AND had expired, so the worker skipped WPS every
+# month from the day it was written — August, September and October 2026 were
+# never billed. Two credits changed with it:
+#   • Incorrect-item credit: ACTUAL label costs from the "Incorrect Item Sent"
+#     store only (199349) — no doubling. It used to read store 215071, which
+#     ShipStation names "Warranty".
+#   • Returns Credit: no longer typed by hand. A return label made in the WPS
+#     Nexus store against the customer's original order IS the return; every
+#     belt on a return label created in the month is credited at its
+#     fulfillment price. Size-exchange return labels (sku belt-size-exchange)
+#     are listed but NOT credited — that is unchanged, pending Patty's call.
+#     The line stays editable on the drafts page.
 # ═════════════════════════════════════════════════════════════════════════════
 
-WPS_FUL_STORE_ID        = "se-243481"   # WPS Shopify dropship store (billable)
-WPS_RESTOCK_STORE_ID    = "se-143792"   # Warrior Poet Society restock/portal shipments (never billed)
-WPS_INCORRECT_STORE_ID  = "se-215071"   # incorrect-item store (label costs credited back)
+WPS_FUL_STORE_ID        = 243481    # "WPS Nexus" — the Shopify dropship store (billable)
+WPS_RESTOCK_STORE_ID    = 143792    # "Warrior Poet Society" — restock/portal shipments (never billed)
+WPS_INCORRECT_STORE_ID  = 199349    # "Incorrect Item Sent" — its label costs are credited back
 WPS_CUSTOMER_RECORD_ID  = "recoiW57of2qTtNAg"
 WPS_FUL_CUTOVER_ISO     = "2026-05-01"  # first fulfillment-basis month; placed<=4/30 excluded in May
+WPS_EXCHANGE_SKU        = "belt-size-exchange"
 
 AUTOMATED_DATA_BASE_ID     = "app3xt0dghBWnHxdN"
 WPS_ORDERS_STATS_TABLE_ID  = "tblmBSqmAW7ZSvkFI"
@@ -19020,24 +19039,31 @@ _wps_ful_sku_ids = {}        # bucket key -> Product SKU record id
 _WPS_FUL_CACHE_TTL = 6 * 3600
 
 
-def _wps_v2_get(path, params=None):
-    """GET against ShipStation v2 with the WPS account key."""
-    if not WPS_SHIPSTATION_V2_KEY:
-        raise RuntimeError("WPS_SHIPSTATION_V2_KEY not configured")
+def _wps_configured():
+    return bool(WPS_SHIPSTATION_KEY and WPS_SHIPSTATION_SECRET)
+
+
+def _wps_v1_get(path, params=None):
+    """GET against ShipStation v1 with the WPS account's key/secret."""
+    if not _wps_configured():
+        raise RuntimeError("SHIPSTATION_WPS_KEY/SECRET not configured")
+    import base64 as _b64
+    auth = _b64.b64encode(f"{WPS_SHIPSTATION_KEY}:{WPS_SHIPSTATION_SECRET}".encode()).decode()
     last_exc = None
     for attempt in range(3):
         try:
-            r = req_lib.get(f"https://api.shipstation.com/v2/{path.lstrip('/')}",
-                            headers={"API-Key": WPS_SHIPSTATION_V2_KEY},
+            r = req_lib.get(f"https://ssapi.shipstation.com/{path.lstrip('/')}",
+                            headers={"Authorization": f"Basic {auth}"},
                             params=params or {}, timeout=30)
             if r.status_code == 429:
-                import time as _t; _t.sleep(3 * (attempt + 1)); continue
+                import time as _t; _t.sleep(30)
+                continue
             r.raise_for_status()
             return r.json()
         except Exception as e:
             last_exc = e
             import time as _t; _t.sleep(2)
-    raise RuntimeError(f"ShipStation v2 GET {path} failed: {last_exc}")
+    raise RuntimeError(f"ShipStation v1 GET {path} failed: {last_exc}")
 
 
 def _wps_month_bounds(month_str):
@@ -19049,41 +19075,63 @@ def _wps_month_bounds(month_str):
     return start, end
 
 
+def _wps_shipment_row(s):
+    return {
+        "shipment_id":  s.get("shipmentId"),
+        "order_id":     s.get("orderId"),
+        "order_number": str(s.get("orderNumber") or ""),
+        "ship_date":    (s.get("shipDate") or "")[:10],
+        "created_at":   (s.get("createDate") or "")[:10],
+        "store_id":     (s.get("advancedOptions") or {}).get("storeId"),
+        "ship_to_name": (s.get("shipTo") or {}).get("name") or "",
+        "cost":         float(s.get("shipmentCost") or 0),
+        "tracking":     s.get("trackingNumber") or "",
+        "is_return":    bool(s.get("isReturnLabel")),
+        "voided":       bool(s.get("voided")),
+        "items": [{"sku": it.get("sku") or "", "name": it.get("name") or "",
+                   "qty": int(it.get("quantity") or 0)}
+                  for it in (s.get("shipmentItems") or [])],
+    }
+
+
 def _wps_pull_shipments(month_str):
-    """All WPS-account shipments with ship_date in the month. v2 ignores
-    ship_date_start/end filters, so pull a buffered created_at window and
-    filter ship_date locally. created_at ~= order placed time (import lag <1h)."""
-    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    """Two v1 pulls for the month: outbound labels by SHIP date, return labels by
+    CREATE date (a return label's ship date is meaningless — the customer mails
+    it whenever). Voided labels are dropped in both."""
+    from datetime import timedelta as _td
     start, end = _wps_month_bounds(month_str)
-    ca_start = (start - _td(days=21)).isoformat() + "T00:00:00Z"
-    ca_end   = (end + _td(days=7)).isoformat() + "T00:00:00Z"
-    out, page, pages = [], 1, 1
-    while page <= pages:
-        data = _wps_v2_get("shipments", {
-            "created_at_start": ca_start, "created_at_end": ca_end,
-            "page_size": 200, "page": page,
-        })
-        pages = int(data.get("pages") or 1)
-        for s in data.get("shipments", []):
-            sd = (s.get("ship_date") or "")[:10]
-            if not sd or not (start.isoformat() <= sd < end.isoformat()):
-                continue
-            out.append({
-                "shipment_id":     s.get("shipment_id"),
-                "shipment_number": s.get("shipment_number") or "",
-                "external_id":     s.get("external_shipment_id") or "",
-                "ship_date":       sd,
-                "created_at":      (s.get("created_at") or "")[:10],
-                "status":          s.get("shipment_status") or "",
-                "store_id":        s.get("store_id") or "",
-                "ship_to_name":    (s.get("ship_to") or {}).get("name") or "",
-                "internal_notes":  s.get("internal_notes") or "",
-                "items": [{"sku": it.get("sku") or "", "name": it.get("name") or "",
-                           "qty": int(it.get("quantity") or 0)}
-                          for it in (s.get("items") or [])],
-            })
-        page += 1
-    return out
+    last_day = (end - _td(days=1)).isoformat()   # v1 date filters are inclusive
+    outbound, returns = [], []
+    for params, dest, want_return in (
+        ({"shipDateStart": start.isoformat(), "shipDateEnd": last_day}, outbound, False),
+        ({"createDateStart": start.isoformat(), "createDateEnd": last_day + " 23:59:59"}, returns, True),
+    ):
+        page, pages = 1, 1
+        while page <= pages:
+            data = _wps_v1_get("shipments", {**params, "includeShipmentItems": "true",
+                                             "pageSize": 500, "page": page})
+            pages = max(1, int(data.get("pages") or 1))
+            for s in data.get("shipments") or []:
+                row = _wps_shipment_row(s)
+                if row["voided"] or row["is_return"] != want_return:
+                    continue
+                if not want_return and not (start.isoformat() <= row["ship_date"] < end.isoformat()):
+                    continue
+                dest.append(row)
+            page += 1
+    return outbound, returns
+
+
+def _wps_order_internal_notes(order_id):
+    """The order's internal note (what belt went out on an exchange) — one call
+    per exchange shipment, a handful a month."""
+    if not order_id:
+        return ""
+    try:
+        return (_wps_v1_get(f"orders/{order_id}") or {}).get("internalNotes") or ""
+    except Exception as e:
+        print(f"[wps-ful] order {order_id} notes fetch failed: {e}")
+        return ""
 
 
 def _wps_classify(sku, name):
@@ -19097,7 +19145,7 @@ def _wps_classify(sku, name):
         return "unknown"
     if _re.match(r"^WPS-MDBR-\d+-\w+-LO-ST$", sku or ""): return "cobra"
     if _re.match(r"^WPS-MDBR-\d+-\w+-LO-DR$", sku or ""): return "dring"
-    if sku == "belt-size-exchange": return "exchange"
+    if sku == WPS_EXCHANGE_SKU: return "exchange"
     # Pre-May-2026 bare SKUs (e.g. WPS-MDBR-42): classify by item name
     if _re.match(r"^WPS-MDBR-\d+$", sku or ""):
         if "D-ring" in (name or ""): return "dring"
@@ -19107,8 +19155,8 @@ def _wps_classify(sku, name):
 
 def _wps_base_order(shipment):
     """'#347738-8393337143592' -> '#347738'; 'WPS-SP-825...' is already one order."""
-    eid = shipment.get("external_id") or shipment.get("shipment_number") or ""
-    return eid.split("-")[0] if eid.startswith("#") else eid
+    num = shipment.get("order_number") or ""
+    return num.split("-")[0] if num.startswith("#") else num
 
 
 def _wps_compute(month_str, force=False):
@@ -19118,10 +19166,12 @@ def _wps_compute(month_str, force=False):
     if cached and not force and _time.time() - cached[0] < _WPS_FUL_CACHE_TTL:
         return cached[1]
 
-    shipments = _wps_pull_shipments(month_str)
-    ful = [s for s in shipments if s["store_id"] == WPS_FUL_STORE_ID]
-    restock = [s for s in shipments if s["store_id"] == WPS_RESTOCK_STORE_ID]
-    incorrect = [s for s in shipments if s["store_id"] == WPS_INCORRECT_STORE_ID]
+    outbound, return_labels = _wps_pull_shipments(month_str)
+    ful = [s for s in outbound if s["store_id"] == WPS_FUL_STORE_ID]
+    restock = [s for s in outbound if s["store_id"] == WPS_RESTOCK_STORE_ID]
+    incorrect = [s for s in outbound if s["store_id"] == WPS_INCORRECT_STORE_ID]
+    incorrect_returns = [s for s in return_labels if s["store_id"] == WPS_INCORRECT_STORE_ID]
+    ful_returns = [s for s in return_labels if s["store_id"] == WPS_FUL_STORE_ID]
 
     # May 2026 cutover: exclude orders placed on/before 4/30 (already invoiced)
     excluded = []
@@ -19143,7 +19193,7 @@ def _wps_compute(month_str, force=False):
             row_items.append({"sku": it["sku"], "name": it["name"], "qty": it["qty"], "bucket": bucket})
             if bucket == "exchange":
                 exchanges.append({"order": base, "name": it["name"],
-                                  "note": s.get("internal_notes", "")})
+                                  "note": _wps_order_internal_notes(s.get("order_id"))})
                 if base not in order_nums["exchange"]: order_nums["exchange"].append(base)
             elif bucket == "unknown":
                 unknown.append({"order": base, "sku": it["sku"], "name": it["name"], "qty": it["qty"]})
@@ -19157,33 +19207,43 @@ def _wps_compute(month_str, force=False):
         order_rows.append({"order": base, "ship_date": s["ship_date"],
                            "customer": s["ship_to_name"], "items": row_items})
 
-    # Incorrect-item store: label costs credited. Group by order; single
-    # return-label-only orders are doubled (outbound cost isn't visible).
+    # Incorrect-item store: every non-voided label's ACTUAL cost, outbound labels
+    # shipped this month plus return labels created this month. Grouped by order.
     inc_orders = {}
-    for s in incorrect:
-        base = _wps_base_order(s) or s["shipment_number"]
+    for s in incorrect + incorrect_returns:
+        base = _wps_base_order(s) or str(s["shipment_id"])
         inc_orders.setdefault(base, {"order": base, "customer": s["ship_to_name"], "labels": []})
-        try:
-            data = _wps_v2_get("labels", {"shipment_id": s["shipment_id"]})
-            for lb in data.get("labels", []):
-                if lb.get("voided"):
-                    continue
-                inc_orders[base]["labels"].append({
-                    "cost": float((lb.get("shipment_cost") or {}).get("amount") or 0),
-                    "is_return": bool(lb.get("is_return_label")),
-                    "status": lb.get("status") or "",
-                })
-        except Exception as e:
-            print(f"[wps-ful] labels fetch failed for {s['shipment_id']}: {e}")
+        inc_orders[base]["labels"].append({"cost": round(s["cost"], 2), "is_return": s["is_return"],
+                                           "date": s["created_at"] if s["is_return"] else s["ship_date"],
+                                           "tracking": s["tracking"]})
     incorrect_rows, incorrect_total = [], 0.0
     for row in inc_orders.values():
-        labels = row["labels"]
-        cost = round(sum(l["cost"] for l in labels), 2)
-        doubled = len(labels) == 1 and labels[0]["is_return"]
-        credit = round(cost * 2, 2) if doubled else cost
+        credit = round(sum(l["cost"] for l in row["labels"]), 2)
         incorrect_total = round(incorrect_total + credit, 2)
         incorrect_rows.append({"order": row["order"], "customer": row["customer"],
-                               "labels": labels, "doubled": doubled, "credit": credit})
+                               "labels": row["labels"], "credit": credit})
+
+    # Returns: a return label in the fulfillment store, made against the original
+    # order, credits every belt on it at its fulfillment price. An exchange's
+    # return label (the wrong-size belt coming back) is listed, not credited.
+    returns_rows, returns_total, exchange_returns = [], 0.0, []
+    for s in sorted(ful_returns, key=lambda x: x["created_at"]):
+        base = _wps_base_order(s)
+        if any(it["sku"] == WPS_EXCHANGE_SKU for it in s["items"]):
+            exchange_returns.append({"order": base, "created": s["created_at"],
+                                     "customer": s["ship_to_name"], "tracking": s["tracking"]})
+            continue
+        credit, items = 0.0, []
+        for it in s["items"]:
+            bucket = _wps_classify(it["sku"], it["name"])
+            price = WPS_FUL_PRICES[bucket] if bucket in WPS_FUL_BUCKET_LABELS else 0.0
+            amt = round(price * it["qty"], 2)
+            credit = round(credit + amt, 2)
+            items.append({"sku": it["sku"], "name": it["name"], "qty": it["qty"],
+                          "bucket": bucket, "credit": amt})
+        returns_total = round(returns_total + credit, 2)
+        returns_rows.append({"order": base, "created": s["created_at"], "customer": s["ship_to_name"],
+                             "tracking": s["tracking"], "items": items, "credit": credit})
 
     # Invoice lines (product lines skipped when qty 0; service lines always present)
     lines, subtotal = [], 0.0
@@ -19200,24 +19260,27 @@ def _wps_compute(month_str, force=False):
                   "qty": 1, "unit_price": WPS_FUL_PRICES["exchange"], "amount": WPS_FUL_PRICES["exchange"]})
     lines.append({"bucket": "incorrect", "label": "Incorrect Item Store Shipping Credit",
                   "qty": 1, "unit_price": -incorrect_total, "amount": -incorrect_total})
-    lines.append({"bucket": "returns", "label": "Returns Credit (entered manually)",
-                  "qty": 1, "unit_price": 0.0, "amount": 0.0})
-    total = round(subtotal + fee + WPS_FUL_PRICES["exchange"] - incorrect_total, 2)
+    lines.append({"bucket": "returns", "label": "Returns Credit (from return labels)",
+                  "qty": 1, "unit_price": -returns_total, "amount": -returns_total})
+    total_before_returns = round(subtotal + fee + WPS_FUL_PRICES["exchange"] - incorrect_total, 2)
+    total = round(total_before_returns - returns_total, 2)
 
     comp = {
-        "month": month_str, "lines": lines, "total_before_returns": total,
+        "month": month_str, "lines": lines, "total": total,
+        "total_before_returns": total_before_returns,
         "order_count": len(orders), "unit_count": sum(units.values()),
         "units": units, "stats_units": stats_units, "order_nums": order_nums,
         "order_rows": order_rows, "exchanges": exchanges, "unknown": unknown,
         "excluded": [{"order": _wps_base_order(s), "placed": s["created_at"], "shipped": s["ship_date"],
                       "items": s["items"]} for s in excluded],
         "incorrect_rows": incorrect_rows, "incorrect_total": incorrect_total,
-        "restock": [{"shipment": s["shipment_number"], "shipped": s["ship_date"],
+        "returns_rows": returns_rows, "returns_total": returns_total,
+        "exchange_returns": exchange_returns,
+        "restock": [{"shipment": s["order_number"], "shipped": s["ship_date"],
                      "to": s["ship_to_name"]} for s in restock],
     }
     _wps_ful_cache[month_str] = (_time.time(), comp)
     return comp
-
 
 def _wps_service_sku_ids():
     """Resolve the fulfillment service SKUs to Product SKU record ids (cached)."""
@@ -19264,12 +19327,18 @@ def _wps_create_draft(month_str):
     order_id = _next_order_id(read_token)
     from datetime import datetime as _dt, timezone as _tz
     today = _dt.now(_tz.utc).date().isoformat()
-    notes = (f"WPS monthly fulfillment invoice — orders SHIPPED {month_str} from store "
-             f"{WPS_FUL_STORE_ID} ({comp['order_count']} orders, {comp['unit_count']} units). "
-             f"Incorrect-item credit ${comp['incorrect_total']:.2f}. Returns Credit entered "
-             f"manually before approval. Auto-generated {today}.")
+    notes = (f"WPS monthly fulfillment invoice — orders SHIPPED {month_str} from the WPS Nexus store "
+             f"({comp['order_count']} orders, {comp['unit_count']} units). "
+             f"Incorrect-item credit ${comp['incorrect_total']:.2f} (actual label costs, Incorrect Item Sent store). "
+             f"Returns Credit ${comp['returns_total']:.2f} from {len(comp['returns_rows'])} return label(s) "
+             f"made in the WPS Nexus store this month — editable before approval. Auto-generated {today}.")
     if comp["unknown"]:
         notes += f" WARNING: {len(comp['unknown'])} unmapped items NOT billed — review detail."
+    for rr in comp["returns_rows"]:
+        what = ", ".join(f"{it['qty']}x {it['sku']}" for it in rr["items"]) or "no items on label"
+        notes += f"\nRETURN: {rr['order']} | {what} | credit ${rr['credit']:.2f} | label {rr['created']}"
+    for xr in comp["exchange_returns"]:
+        notes += f"\nEXCHANGE-RETURN (not credited): {xr['order']} | label {xr['created']}"
     # Exchange belts: the $100 service line covers the service only — the replacement
     # belt is billed as product once an admin assigns which parent product was sent.
     # The ShipStation internal note usually says which belt shipped — carry it along.
@@ -19306,9 +19375,9 @@ def _wps_create_draft(month_str):
             headers={**at_headers(write_token), "Content-Type": "application/json"},
             json={"records": li_records[i:i + 10]}, timeout=20)
         r.raise_for_status()
-    print(f"[wps-ful] created IN-{order_id} for {month_str}: ${comp['total_before_returns']:.2f}")
+    print(f"[wps-ful] created IN-{order_id} for {month_str}: ${comp['total']:.2f}")
     return {"created": True, "record_id": mo_id, "inv_number": f"IN-{order_id}",
-            "total": comp["total_before_returns"]}
+            "total": comp["total"]}
 
 
 def _wps_update_stats(month_str):
@@ -19657,7 +19726,7 @@ def admin_fulfillment_drafts():
                 "internal_notes": notes_text,
                 "exchanges": exchanges,
                 "lines": lines, "total": total,
-                "wps_configured": bool(WPS_SHIPSTATION_V2_KEY),
+                "wps_configured": _wps_configured(),
             })
         drafts.sort(key=lambda d: d.get("po_number", ""))
         return Response(json.dumps({"drafts": drafts}), headers=c, mimetype="application/json")
@@ -19878,8 +19947,17 @@ def _wps_monthly_worker():
             # and never before the fulfillment-basis cutover.
             if due and prior >= "2026-08":
                 _last_run_day = now_et.date()
+                # ── Inter-worker file lock: only ONE gunicorn worker builds the drafts ──
+                try:
+                    import fcntl as _fcntl
+                    _lock_fh = open("/tmp/wps_monthly.lock", "w")
+                    _fcntl.flock(_lock_fh, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                except BlockingIOError:
+                    print("[wps-ful] another worker is building this month's drafts — skipping", flush=True)
+                    _lock_fh = None
+                    continue
                 partners = [
-                    ("wps", bool(WPS_SHIPSTATION_V2_KEY), _wps_find_draft, _wps_create_draft, _wps_update_stats),
+                    ("wps", _wps_configured(), _wps_find_draft, _wps_create_draft, _wps_update_stats),
                     ("fattac", bool(FATTAC_SHIPSTATION_KEY and FATTAC_SHIPSTATION_SECRET),
                      _fattac_find_draft, _fattac_create_draft, _fattac_update_stats),
                 ]
@@ -19897,6 +19975,10 @@ def _wps_monthly_worker():
                                 print(f"[{name}-ful] stats update failed for {prior}: {se}")
                     except Exception as pe:
                         print(f"[{name}-ful] worker error: {pe}")
+                try:
+                    _fcntl.flock(_lock_fh, _fcntl.LOCK_UN); _lock_fh.close()
+                except Exception:
+                    pass
         except Exception as exc:
             print(f"[wps-ful] worker error: {exc}")
         try:
